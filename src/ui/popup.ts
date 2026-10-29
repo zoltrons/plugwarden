@@ -4,6 +4,7 @@ import type { Request, State } from "../shared/messages.ts";
 import { normalizeServerUrl, originPattern } from "../shared/url.ts";
 import { applyTheme, type Child, h, inPanel, savedTheme, send, t, THEMES, withChevron } from "./dom.ts";
 import { icon, type IconName } from "./icons.ts";
+import { createBiometricCredential, getBiometricPrf, platformAuthenticatorAvailable } from "./biometric.ts";
 import { passkeyRequestId, passkeyScreen } from "./passkey.ts";
 import { resetSend, sendScreen } from "./send.ts";
 import { type Ctx, generatorScreen, iconButton, refreshPageMatches, resetVault, setIconBase, toastEl, uriMatchLabel, vaultRouteKey, vaultScreen } from "./vault.ts";
@@ -375,6 +376,43 @@ function twoFactorView(s: State): HTMLElement {
   );
 }
 
+async function setupBiometric(): Promise<void> {
+  const email = state?.email;
+  if (!email) return;
+  Object.assign(ui, { busy: true, busyLabel: t("busyBiometric"), error: undefined, info: undefined });
+  render();
+  try {
+    const credential = await createBiometricCredential(email);
+    if (await act({ type: "setBiometric", ...credential })) {
+      ui.info = t("biometricEnabled");
+      render();
+    }
+  } catch (e) {
+    Object.assign(ui, { busy: false, busyLabel: undefined, error: (e as Error).message });
+    render();
+  }
+}
+
+async function disableBiometric(): Promise<void> {
+  if (await act({ type: "removeBiometric" })) {
+    ui.info = t("biometricRemoved");
+    render();
+  }
+}
+
+/** Locked screen: biometric assertion, then the PRF-wrapped user key in the crypto worker. */
+async function unlockBiometric(bio: { credentialId: string; prfSalt: string }): Promise<void> {
+  Object.assign(ui, { busy: true, busyLabel: t("busyVerifying"), error: undefined, info: undefined });
+  render();
+  try {
+    const prf = await getBiometricPrf(bio.credentialId, bio.prfSalt);
+    await act({ type: "unlockBiometric", prf });
+  } catch (e) {
+    Object.assign(ui, { busy: false, busyLabel: undefined, error: (e as Error).message });
+    render();
+  }
+}
+
 function lockedView(s: State): HTMLElement {
   const withPin = !!s.pinUnlock && !ui.usePassword;
   const onsubmit = (e: Event) => {
@@ -399,6 +437,21 @@ function lockedView(s: State): HTMLElement {
       h("p", {}, s.email ?? ""),
       h("p", {}, host(s.serverUrl)),
     ),
+    s.biometric
+      ? h(
+          "div",
+          { class: "actions" },
+          h(
+            "button",
+            { type: "button", class: "btn tonal wide", disabled: ui.busy, onclick: () => void unlockBiometric(s.biometric!) },
+            icon("fingerprint"),
+            t("unlockWithBiometrics"),
+          ),
+          !inPanel && !inTab
+            ? h("button", { type: "button", class: "btn text", disabled: ui.busy, onclick: () => void chrome.tabs.create({ url: location.href }) }, t("openInTab"))
+            : null,
+        )
+      : null,
     withPin ? pinField() : passwordField("current-password"),
     errorBox(),
     busyBar(),
@@ -636,6 +689,12 @@ function settingsTab(s: State): HTMLElement {
         t("unlockWithPinHint"),
         toggle(t("unlockWithPin"), !!s.pinSet || !!ui.pinSetup, (b) => (b.checked ? ((ui.pinSetup = true), render()) : void act({ type: "setPin" }))),
       ),
+      row(
+        "fingerprint",
+        t("biometricUnlock"),
+        t("biometricUnlockHint"),
+        toggle(t("biometricUnlock"), !!s.biometric, (b) => void (b.checked ? setupBiometric() : disableBiometric())),
+      ),
       ui.pinSetup && !s.pinSet
         ? h(
             "form",
@@ -709,6 +768,10 @@ function settingsTab(s: State): HTMLElement {
             // sidePanel.open needs the user gesture, so no await before it.
             onclick: () => void chrome.sidePanel.open({ windowId: windowId! }).then(() => window.close(), (e: unknown) => ((ui.error = String(e)), render())),
           }, "button"),
+      // The OS biometric prompt can close the action popup; setup and unlock also work in a tab.
+      !inPanel && !inTab
+        ? row("external", t("openInTab"), t("openInTabHint"), null, { type: "button", onclick: () => void chrome.tabs.create({ url: location.href }) }, "button")
+        : null,
       row("lock", t("lockNow"), undefined, null, { type: "button", onclick: () => void act({ type: "lock" }) }, "button"),
       row("logout", t("logOut"), undefined, null, { type: "button", class: "row danger", onclick: () => void act({ type: "logout" }) }, "button"),
     ),
@@ -824,9 +887,20 @@ function render(): void {
   }
 }
 
+// Test-only hook for tools/smoke-biometric.mjs (no Vaultwarden needed); compiled out of releases.
+declare const E2E: boolean;
+if (typeof E2E !== "undefined" && E2E) Object.assign(globalThis, { plugwardenBiometric: { createBiometricCredential, getBiometricPrf, platformAuthenticatorAvailable } });
+
 // Fetched up front so the side panel button can call sidePanel.open synchronously in its click.
 let windowId: number | undefined;
 if (!inPanel) void chrome.windows.getCurrent().then((w) => (windowId = w.id));
+// `getCurrent()` is undefined in the action popup: only there can the system prompt close the window.
+let inTab = true;
+if (!inPanel)
+  void chrome.tabs.getCurrent().then((tab) => {
+    inTab = !!tab;
+    render();
+  });
 
 void send<State>({ type: "getState" }).then((res) => {
   if (res.ok) state = res.data;
@@ -845,4 +919,22 @@ void send<State>({ type: "getState" }).then((res) => {
   draft.email = state.email ?? "";
   ui.error ??= state.ssoError;
   render();
+});
+
+/**
+ * The worker owns the session (auto-lock, a lock from another window): follow it. Without this an open
+ * side panel would keep showing decrypted item names after the vault locked.
+ */
+let refreshing = false;
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "session" || !changes.session || !state || refreshing) return;
+  const next = changes.session.newValue as { unlocked?: unknown } | undefined;
+  if (typeof next?.unlocked !== "boolean" || next.unlocked === (state.phase === "unlocked")) return;
+  refreshing = true;
+  void send<State>({ type: "getState" }).then((r) => {
+    refreshing = false;
+    if (!r.ok) return;
+    state = r.data;
+    render();
+  });
 });

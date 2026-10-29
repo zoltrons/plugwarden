@@ -4,10 +4,29 @@ import { getSettings, updateSession } from "./store.ts";
 
 export const AUTOLOCK_ALARM = "autolock";
 
+/**
+ * The inline menu and the save bar are extension frames inside web pages, showing decrypted item names
+ * and usernames. Locking must tear them down, or a page could keep them on screen after the lock.
+ */
+async function closeInPageUi(): Promise<void> {
+  const tabs = await chrome.tabs.query({}).catch(() => []);
+  await Promise.allSettled(
+    tabs.flatMap((t) =>
+      t.id === undefined || !/^https?:/.test(t.url ?? "")
+        ? []
+        : [
+            chrome.tabs.sendMessage(t.id, { type: "inlineClose" }).catch(() => undefined),
+            chrome.tabs.sendMessage(t.id, { type: "barHide" }).catch(() => undefined),
+          ],
+    ),
+  );
+}
+
 export async function lockNow(): Promise<void> {
   await updateSession({ unlocked: false, pending: undefined });
   await chrome.alarms.clear(AUTOLOCK_ALARM);
   await coreShutdown();
+  await closeInPageUi();
 }
 
 /** Called on unlock and on every popup interaction while unlocked. */

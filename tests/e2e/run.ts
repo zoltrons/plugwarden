@@ -1113,6 +1113,20 @@ try {
     assert.equal(c?.login.password, "bar-pass-3");
   });
 
+  await step("inline menu: a menu frame without the page's nonce is refused", async () => {
+    const s = await apiSession(vaultUser);
+    const github = (await s.ciphers()).find((x) => x.name === "GitHub")!;
+    s.done();
+    await loginPage.goto(`${SITE}/login`);
+    await loginPage.click("#u");
+    const menu = await frameOf(loginPage, "menu.html");
+    // A copy of menu.html framed by the page has no fragment: the worker refuses it before matching.
+    const r = await menu.evaluate((id) => chrome.runtime.sendMessage({ type: "inlineFill", id, nonce: "not-the-nonce" }), github.id);
+    assert.equal(r.ok, false);
+    assert.match(r.error, /not the one opened/);
+    assert.deepEqual(await fieldValues(), ["", ""]);
+  });
+
   await step("inline menu: a fill for an item not offered for this field is refused", async () => {
     const s = await apiSession(vaultUser);
     const github = (await s.ciphers()).find((x) => x.name === "GitHub")!; // saved for github.com, not this site
@@ -1120,7 +1134,7 @@ try {
     await loginPage.goto(`${SITE}/login`);
     await loginPage.click("#u");
     const menu = await frameOf(loginPage, "menu.html");
-    const r = await menu.evaluate((id) => chrome.runtime.sendMessage({ type: "inlineFill", id }), github.id);
+    const r = await menu.evaluate((id) => chrome.runtime.sendMessage({ type: "inlineFill", id, nonce: location.hash.slice(1) }), github.id);
     assert.deepEqual([r.ok, r.error], [false, "item not available here"]);
     assert.deepEqual(await fieldValues(), ["", ""]);
   });

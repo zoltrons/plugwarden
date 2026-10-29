@@ -6,6 +6,7 @@
 // The SDK at the pinned rev has no WebAuthn authenticator (the official browser extension
 // implements WebAuthn in TypeScript as well), so ES256 lives here: ECDSA P-256 via WebCrypto, and the
 // private key never leaves the worker.
+import { isLoopback } from "../shared/url.ts";
 import { ci } from "../shared/validate.ts";
 
 type Json = Record<string, unknown>;
@@ -27,9 +28,12 @@ export function checkRpId(rpId: string, origin: string, isPublicSuffix: (d: stri
   const u = new URL(origin);
   const host = u.hostname.toLowerCase();
   // WebAuthn treats loopback as a secure context (dev servers on http).
-  const secure = u.protocol === "https:" || host === "localhost" || host === "127.0.0.1" || host === "[::1]";
+  const secure = u.protocol === "https:" || isLoopback(host);
   const id = rpId.toLowerCase();
-  if (!secure || !(host === id || host.endsWith(`.${id}`)) || (id !== host && isPublicSuffix(id)))
+  // A public suffix ("com", "co.uk", "github.io") is never a registrable domain, so nothing may be
+  // scoped to it - not even when it is the page's own host. Loopback names are the exception: they are
+  // their own host and no rule lists them.
+  if (!secure || !(host === id || host.endsWith(`.${id}`)) || (isPublicSuffix(id) && !isLoopback(id)))
     throw new Error("SecurityError: the relying party id is not valid for this origin");
 }
 

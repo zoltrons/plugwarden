@@ -14,6 +14,8 @@ export interface InlineContext {
   frameId: number;
   url: string;
   kind: FieldKind;
+  /** The opening document's secret, echoed by the menu frame (see PageRequest.inlineFocus). */
+  nonce: string;
 }
 
 export interface PendingSave {
@@ -22,6 +24,8 @@ export interface PendingSave {
   username: string;
   password: string;
   itemId?: string;
+  /** Secret handed to the bar frame, so a bar the page frames itself cannot save (see showBar). */
+  token: string;
   /** epoch ms */
   expiresAt: number;
 }
@@ -46,23 +50,43 @@ async function items(kind: FieldKind, url: string): Promise<MenuItem[]> {
 }
 
 
+/**
+ * Page-originated work is cheap for a page to request and expensive to run (vault scan, PSL, storage
+ * writes). One at a time per tab: a page submitting a form in a loop cannot queue unbounded work.
+ */
+const inFlight = new Set<string>();
+
+const oncePerTab = async <T>(key: string, tabId: number, fn: () => Promise<T>, busy: T): Promise<T> => {
+  const k = `${key}:${tabId}`;
+  if (inFlight.has(k)) return busy;
+  inFlight.add(k);
+  try {
+    return await fn();
+  } finally {
+    inFlight.delete(k);
+  }
+};
+
 /** Content script: `rows` tells it how tall the menu is, 0 = do not show one. */
 export async function handlePage(req: PageRequest, sender: chrome.runtime.MessageSender): Promise<unknown> {
   if (req.type === "pageLoad") return pageLoadFill(sender);
   const url = httpUrl(sender.url);
   const tabId = sender.tab?.id;
   if (!url || tabId === undefined || sender.frameId === undefined) return { rows: 0 };
-  if (req.type === "inlineFocus") {
-    if (!(await getSettings()).inlineMenu || !(await getLocal("account"))) return { rows: 0 };
-    await setTabState("inline", tabId, { frameId: sender.frameId, url, kind: req.kind });
-    if (!(await unlocked())) return { rows: 1 }; // "Unlock to fill"
-    const logins = (await items(req.kind, url)).length;
-    // A website waiting on a conditional passkey request gets one extra row for it.
-    const passkey = req.kind === "login" && (await conditionalReady(tabId, sender.frameId));
-    return { rows: logins + (passkey ? 1 : 0) };
-  }
-  await loginSubmitted(tabId, url, req.username, req.password);
+  if (req.type === "inlineFocus")
+    return oncePerTab("focus", tabId, () => onFocus(req.kind, req.nonce, url, tabId!, sender.frameId!), { rows: 0 });
+  await oncePerTab("submit", tabId, () => loginSubmitted(tabId!, url, req.username, req.password), undefined);
   return null;
+}
+
+async function onFocus(kind: FieldKind, nonce: string, url: string, tabId: number, frameId: number): Promise<{ rows: number }> {
+  if (!(await getSettings()).inlineMenu || !(await getLocal("account"))) return { rows: 0 };
+  await setTabState("inline", tabId, { frameId, url, kind, nonce });
+  if (!(await unlocked())) return { rows: 1 }; // "Unlock to fill"
+  const logins = (await items(kind, url)).length;
+  // A website waiting on a conditional passkey request gets one extra row for it.
+  const passkey = kind === "login" && (await conditionalReady(tabId, frameId));
+  return { rows: logins + (passkey ? 1 : 0) };
 }
 
 async function loginSubmitted(tabId: number, url: string, username: string, password: string) {
@@ -72,19 +96,48 @@ async function loginSubmitted(tabId: number, url: string, username: string, pass
   await list();
   const matches = await coreCall<VaultItem[]>({ op: "matchUri", url, defaultMatch: settings.defaultUriMatch });
   const same = matches.find((m) => m.sub === username && !m.readOnly);
+  const expiresAt = Date.now() + SAVE_TTL_MS;
   let pending: PendingSave | undefined;
-  if (!same) pending = { kind: "add", url, username, password, expiresAt: Date.now() + SAVE_TTL_MS };
+  if (!same) pending = { kind: "add", url, username, password, token: "", expiresAt };
   else if ((await coreCall<{ password: string }>({ op: "fillData", id: same.id })).password !== password)
-    pending = { kind: "update", url, username, password, itemId: same.id, expiresAt: Date.now() + SAVE_TTL_MS };
+    pending = { kind: "update", url, username, password, itemId: same.id, token: "", expiresAt };
   if (!pending) return;
   await setTabState("save", tabId, pending);
   await showBar(tabId);
 }
 
+/** A pending save, dropping it once its TTL passed so a typed password never outlives it. */
+async function pendingSave(tabId: number): Promise<PendingSave | undefined> {
+  const p = await getTabState("save", tabId);
+  if (!p) return undefined;
+  if (p.expiresAt <= Date.now()) {
+    await setTabState("save", tabId, undefined);
+    return undefined;
+  }
+  return p;
+}
+
 /** Also called when the tab finishes loading: logins are usually submitted right before a navigation. */
 export async function showBar(tabId: number): Promise<void> {
-  const p = await getTabState("save", tabId);
-  if (p && p.expiresAt > Date.now()) await chrome.tabs.sendMessage(tabId, { type: "barShow" }, { frameId: 0 }).catch(() => undefined);
+  const p = await pendingSave(tabId);
+  if (!p) return;
+  // The pending login was typed on `p.url`: never offer it on a page of another site (the tab may have
+  // navigated away). It is kept until it expires, so coming back to the site still prompts.
+  if (!(await onSameSite(tabId, p.url))) return;
+  // A fresh token per show, carried by the bar frame it opens and required back from it: a copy of
+  // bar.html framed by the page has no token and cannot save.
+  const token = crypto.randomUUID();
+  await setTabState("save", tabId, { ...p, token });
+  await chrome.tabs.sendMessage(tabId, { type: "barShow", token }, { frameId: 0 }).catch(() => undefined);
+}
+
+async function onSameSite(tabId: number, url: string): Promise<boolean> {
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    return !!tab.url && new URL(tab.url).host === new URL(url).host;
+  } catch {
+    return false; // no such tab, or a page we cannot read (chrome://, the web store)
+  }
 }
 
 async function dropSave(tabId: number) {
@@ -95,8 +148,10 @@ async function dropSave(tabId: number) {
 /** menu.html / bar.html, framed into the tab `sender.tab`. */
 export async function handleFrame(req: FrameRequest, tabId: number): Promise<unknown> {
   if (req.type === "barInfo" || req.type === "barAction") {
-    const p = await getTabState("save", tabId);
-    if (!p || p.expiresAt < Date.now()) return dropSave(tabId).then(() => null);
+    const p = await pendingSave(tabId);
+    if (!p) return dropSave(tabId).then(() => null);
+    // Only the bar this tab was just opened with may read or act.
+    if (!p.token || req.token !== p.token) throw new Error("this save prompt is no longer active");
     if (req.type === "barInfo") return { kind: p.kind, host: new URL(p.url).host, username: p.username } satisfies BarInfo;
     if (req.action === "never") {
       const s = await getSettings();
@@ -116,6 +171,8 @@ export async function handleFrame(req: FrameRequest, tabId: number): Promise<unk
 
   const ctx = await getTabState("inline", tabId);
   if (!ctx) throw new Error("no field is focused");
+  // Only the menu this document opened may act: a copy of menu.html framed by the page has no nonce.
+  if (req.nonce !== ctx.nonce) throw new Error("this menu is not the one opened for this page");
   if (req.type === "inlineUnlock") {
     await chrome.action.openPopup().catch(() => undefined);
     return null;

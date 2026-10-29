@@ -52,6 +52,9 @@ export function parseTwoFactorChallenge(body: unknown): TwoFactorChallenge | und
   const providers = ci(body, "TwoFactorProviders");
   if (!Array.isArray(providers)) return undefined;
   const ids = providers.map(Number).filter(Number.isInteger);
+  // An empty (or non-numeric) list is not a challenge: Vaultwarden also sends the key on plain
+  // errors, and treating those as 2FA would show a dead-end screen instead of "wrong password".
+  if (!ids.length) return undefined;
   const p2 = ci(body, "TwoFactorProviders2");
   const emailInfo = ci(p2, String(TWO_FACTOR.Email));
   const emailHint = ci(emailInfo, "Email");

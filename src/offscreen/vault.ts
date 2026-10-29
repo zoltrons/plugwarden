@@ -27,7 +27,15 @@ function put(c: Json): void {
 }
 
 export function loadVault(encCiphers: unknown[], encFolders: unknown[], encSends: unknown[], orgKeys: Record<string, string>, encCollections: unknown[], orgs: Folder[]): void {
-  if (Object.keys(orgKeys).length) core.setOrgKeys(JSON.stringify(orgKeys));
+  // Organization keys are an extra: a key we cannot open (or an account without an RSA private key)
+  // must leave the personal vault usable. Items under it are reported as undecryptable instead.
+  if (Object.keys(orgKeys).length) {
+    try {
+      core.setOrgKeys(JSON.stringify(orgKeys));
+    } catch {
+      /* org items end up in `failed` below, everything else still decrypts */
+    }
+  }
   const r = JSON.parse(core.decryptCipherList(JSON.stringify(encCiphers))) as { ciphers: Json[]; failed: { id: string }[] };
   ciphers = new Map();
   trash = new Map();
@@ -281,9 +289,12 @@ export function prepareSend(send: Json): Json {
   if (id) {
     const cur = sends.get(id);
     if (!cur || cur.failed) throw new Error("send not found");
-    // The stored password is the server's hash: never hash it again. No new password keeps it server-side.
-    const { password: _hash, ...rest } = cur;
+    // `cur.password` is the server's PBKDF2 hash. A newly typed password stays `password` (and is
+    // hashed by the core); otherwise the hash is carried over as `passwordHash`, which the core copies
+    // verbatim. Dropping it would leave the send unprotected on the server.
+    const { password: hash, ...rest } = cur;
     plain = { ...rest, ...send };
+    if (hash && !s(ci(send, "password"))) plain.passwordHash = hash;
   }
   return JSON.parse(core.encryptSend(JSON.stringify(plain))) as Json;
 }
@@ -306,6 +317,8 @@ export const removeSend = (id: string): void => void sends.delete(id);
 
 // ---------- Passkeys ----------
 
+/** Page-supplied allowCredentials can be arbitrarily long: only this many are considered. */
+const MAX_ALLOW_IDS = 64;
 
 const checkRp = async (rpId: string, origin: string) => {
   const p = await getPsl();
@@ -316,6 +329,8 @@ const checkRp = async (rpId: string, origin: string) => {
 export async function passkeyCandidates(rpId: string, origin: string, ids: string[]): Promise<PasskeyCandidate[]> {
   if (!ciphers) throw new Error("vault not loaded");
   await checkRp(rpId, origin);
+  // `ids` comes from the page's allowCredentials: bound the work it can ask for.
+  const allow = ids.slice(0, MAX_ALLOW_IDS);
   const out: PasskeyCandidate[] = [];
   for (const c of ciphers.values()) {
     const creds = ci(o(ci(c, "login")), "fido2Credentials");
@@ -328,7 +343,7 @@ export async function passkeyCandidates(rpId: string, origin: string, ids: strin
       } catch {
         continue;
       }
-      if (ids.length ? !ids.includes(id) : s(ci(cred, "discoverable")) === "false") continue;
+      if (allow.length ? !allow.includes(id) : s(ci(cred, "discoverable")) === "false") continue;
       out.push({ itemId: s(ci(c, "id")), name: s(ci(c, "name")), userName: s(ci(cred, "userName")), credentialId: id });
     }
   }

@@ -1143,5 +1143,38 @@
         "content": "$1"
       }
     }
+  },
+  "biometricUnlock": {
+    "message": "Unlock with biometrics"
+  },
+  "biometricUnlockHint": {
+    "message": "Use this device's Touch ID, Windows Hello or screen lock. Requires a platform authenticator that supports WebAuthn PRF."
+  },
+  "unlockWithBiometrics": {
+    "message": "Unlock with biometrics"
+  },
+  "biometricEnabled": {
+    "message": "Biometric unlock is on."
+  },
+  "biometricRemoved": {
+    "message": "Biometric unlock is off."
+  },
+  "biometricUnavailable": {
+    "message": "Biometric unlock is not available on this device."
+  },
+  "biometricCancelled": {
+    "message": "Biometric verification was cancelled."
+  },
+  "biometricAlreadySetUp": {
+    "message": "This device already has a biometric credential for Plugwarden."
+  },
+  "biometricPrfUnsupported": {
+    "message": "This authenticator cannot derive a key (no WebAuthn PRF support), so biometric unlock is not available. Use the master password or PIN."
+  },
+  "busyBiometric": {
+    "message": "Waiting for biometric verification…"
+  },
+  "openInTabHint": {
+    "message": "Biometric prompts can close this popup; a tab stays open."
   }
 }

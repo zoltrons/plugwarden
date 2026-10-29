@@ -18,6 +18,11 @@ import { getLocal, getSession } from "./store.ts";
 import { list, requireUnlocked, save } from "./vault.ts";
 
 const SCRIPT_IDS = ["pw-passkey-page", "pw-passkey-relay"];
+/**
+ * A conditional (passkey-autofill) request is kept open by the page pinging the port, which also keeps
+ * the service worker awake. Bound how long one can live.
+ */
+const CONDITIONAL_TTL_MS = 5 * 60_000;
 /** WebAuthn needs a secure context: https, or localhost during development. */
 const MATCHES = ["https://*/*", "http://localhost/*", "http://127.0.0.1/*"];
 
@@ -109,6 +114,7 @@ export function onPasskeyPort(port: chrome.runtime.Port): void {
       return port.postMessage(error("NotAllowedError", "Another passkey request is pending"));
     const conditional = call.kind === "get" && call.conditional;
     const reqId = crypto.randomUUID();
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const p: Pending = {
       id: reqId,
       call,
@@ -118,6 +124,7 @@ export function onPasskeyPort(port: chrome.runtime.Port): void {
       frameId,
       conditional,
       done: (r) => {
+        clearTimeout(timer);
         pending.delete(reqId);
         if (conditional) void refreshMenu(tabId, frameId);
         if (closed) return;
@@ -135,6 +142,7 @@ export function onPasskeyPort(port: chrome.runtime.Port): void {
     }
     pending.set(reqId, p);
     id = reqId;
+    if (conditional) timer = setTimeout(() => void p.done({ fallback: true }), CONDITIONAL_TTL_MS);
     if (call.kind === "get") {
       if (await unlocked()) {
         // Nothing in the vault can answer this call: stay out of the way, no window.

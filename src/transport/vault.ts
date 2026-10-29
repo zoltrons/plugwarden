@@ -1,6 +1,6 @@
 // Vault endpoints (mirrors vaultwarden src/api/core/ciphers.rs, see upstream-map.yaml).
 import { arr, obj, opt, parse, record, str, unknownValue } from "../shared/validate.ts";
-import { ApiError, call, NetworkError } from "./http.ts";
+import { ApiError, call, NetworkError, readBytes } from "./http.ts";
 
 const syncResponse = obj({
   ciphers: arr(unknownValue),
@@ -59,17 +59,31 @@ export async function verifyPassword(base: string, token: string, masterPassword
 const path = (cipherId: string, attachmentId?: string) =>
   `/api/ciphers/${encodeURIComponent(cipherId)}/attachment${attachmentId ? `/${encodeURIComponent(attachmentId)}` : ""}`;
 
+/** An encrypted attachment for a 25 MB file, with the EncArrayBuffer framing: 40 MB is ample. */
+const MAX_ATTACHMENT_BYTES = 40 * 1024 * 1024;
+
 /** The encrypted body, through the signed download URL the server hands out. */
 export async function downloadAttachment(base: string, token: string, cipherId: string, attachmentId: string): Promise<Uint8Array> {
   const { url } = parse(obj({ url: str }), await call(base, "GET", path(cipherId, attachmentId), { token }));
+  // The URL is server-supplied and the extension holds host permissions for every origin, so it must
+  // stay on the configured server: Vaultwarden builds it from its own domain, so no cross-origin (or
+  // metadata-endpoint) target is ever legitimate here. A redirect the server answers with is still
+  // followed, but the body is only ever handed to the attachment decryptor, which fails closed.
+  let target: URL;
+  try {
+    target = new URL(url, base);
+  } catch {
+    throw new ApiError(0, null, "The server returned an invalid attachment URL");
+  }
+  if (target.origin !== new URL(base).origin) throw new ApiError(0, null, "The server returned an attachment URL that is not on this server");
   let res: Response;
   try {
-    res = await fetch(new URL(url, base), { credentials: "omit", cache: "no-store" });
+    res = await fetch(target, { credentials: "omit", cache: "no-store" });
   } catch (e) {
     throw new NetworkError(e instanceof Error ? e.message : String(e));
   }
   if (!res.ok) throw new ApiError(res.status, null, `Attachment download failed (${res.status})`);
-  return new Uint8Array(await res.arrayBuffer());
+  return readBytes(res, MAX_ATTACHMENT_BYTES, "attachment");
 }
 
 /** Registers a new attachment (encrypted key and name) and uploads its encrypted body. */

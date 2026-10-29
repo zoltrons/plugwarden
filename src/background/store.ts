@@ -66,6 +66,19 @@ export const setTabState = <K extends keyof TabState>(kind: K, tabId: number, va
 export const clearTabState = (tabId: number) => chrome.storage.session.remove([`inline:${tabId}`, `save:${tabId}`]);
 
 /** /api/sync data exactly as the server sent it (encrypted). */
+/** Biometric unlock: the user key wrapped with a key derived from the authenticator's PRF output. */
+export interface Biometric {
+  email: string;
+  /** base64url credential id (WebAuthn) */
+  credentialId: string;
+  /** base64url PRF salt used at setup */
+  prfSalt: string;
+  /** EncString wrapped with the PRF-derived key */
+  protectedUserKey: string;
+  /** epoch ms */
+  createdAt: number;
+}
+
 export interface VaultCache {
   /** server revision date, ms */
   revision: number;
@@ -86,12 +99,15 @@ interface LocalSchema {
   server: Server;
   settings: Settings;
   account: Account;
-  /** email -> TwoFactorToken returned when "remember me" was ticked. */
+  /** `<serverUrl>|<email>` -> TwoFactorToken returned when "remember me" was ticked. Never replayed to
+   * another server: the token is only valid for the server that issued it. */
   rememberTokens: Record<string, string>;
   /** Copied generator values, encrypted with the user key, newest first. */
   genHistory: HistoryEntry[];
   /** cipher id -> epoch ms of the last user-gesture fill (page-load autofill prefers it, like the clients). */
   lastUsed: Record<string, number>;
+  /** Biometric unlock, when set up (removed on logout). */
+  biometric: Biometric;
 }
 
 interface SessionSchema {

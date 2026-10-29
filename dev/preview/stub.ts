@@ -172,7 +172,7 @@ const chromeStub = {
   windows: { getCurrent: async () => ({ id: 1, focused: true, state: "normal", type: "normal", alwaysOnTop: false, incognito: false, top: 0, left: 0, width: 380, height: 600 }) },
   sidePanel: { open: async () => undefined },
   permissions: { request: async () => true },
-  tabs: { create: async () => ({}) },
+  tabs: { create: async () => ({}), getCurrent: async () => undefined },
 };
 
 (globalThis as unknown as { chrome: unknown }).chrome = chromeStub;

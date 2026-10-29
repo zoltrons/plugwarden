@@ -39,6 +39,12 @@ let host: HTMLElement | undefined;
 let frame: HTMLIFrameElement | undefined;
 let anchor: HTMLInputElement | undefined;
 let dismissed: HTMLInputElement | undefined;
+/**
+ * Per-document secret handed to the menu frame it opens. The menu is inside a closed shadow root, so
+ * the page cannot read this; a menu the page frames itself does not have it and is refused.
+ * (crypto.getRandomValues, not randomUUID: content scripts also run on plain-http pages.)
+ */
+const nonce = [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, "0")).join("");
 /** Focus generation: an in-flight open() must not reopen the menu after a newer focus or close. */
 let gen = 0;
 /** Last login field focused, also when the menu had nothing to offer: a later passkey request reopens it. */
@@ -65,7 +71,7 @@ async function open(el: HTMLInputElement, kind: Kind) {
   if (kind === "login") focusedLogin = el;
   if (anchor === el || dismissed === el || Date.now() < quietUntil) return;
   const mine = ++gen;
-  const r = ((await chrome.runtime.sendMessage({ type: "inlineFocus", kind }).catch(() => undefined)) as { data?: { rows: number } } | undefined)?.data;
+  const r = ((await chrome.runtime.sendMessage({ type: "inlineFocus", kind, nonce }).catch(() => undefined)) as { data?: { rows: number } } | undefined)?.data;
   // rows = 0: nothing to offer (no matches, or not logged in), so stay out of the way.
   if (mine !== gen || !r?.rows || active() !== el || Date.now() < quietUntil) return;
   close();
@@ -73,7 +79,7 @@ async function open(el: HTMLInputElement, kind: Kind) {
   host = document.createElement("plugwarden-menu");
   host.style.cssText = "all:initial;position:fixed;z-index:2147483647;display:block";
   frame = document.createElement("iframe");
-  frame.src = chrome.runtime.getURL("menu.html");
+  frame.src = `${chrome.runtime.getURL("menu.html")}#${nonce}`;
   frame.allow = "clipboard-write";
   // Row metrics come from the menu's own CSS: 44 px rows, 1 px separators, 6 px frame padding.
   frame.style.cssText = `all:initial;display:block;width:100%;height:${Math.min(r.rows, 5) * 45 + 13}px;border:0;border-radius:8px;box-shadow:0 8px 28px rgba(0,0,0,.28);color-scheme:normal`;
@@ -182,11 +188,13 @@ chrome.runtime.onMessage.addListener((msg: { type?: string }) => {
       void open(el, kind);
     }
   }
-  if (msg.type === "barShow" && window === top && !bar) {
+  if (msg.type === "barShow" && window === top) {
+    // Rebuilt on every show so the frame always carries the current save's token.
+    bar?.remove();
     bar = document.createElement("plugwarden-bar");
     bar.style.cssText = "all:initial;position:fixed;top:12px;right:12px;z-index:2147483647;display:block;width:380px;max-width:calc(100vw - 24px)";
     const f = document.createElement("iframe");
-    f.src = chrome.runtime.getURL("bar.html");
+    f.src = `${chrome.runtime.getURL("bar.html")}#${String((msg as { token?: unknown }).token ?? "")}`;
     f.style.cssText = "all:initial;display:block;width:100%;height:132px;border:0;border-radius:16px;box-shadow:0 8px 28px rgba(0,0,0,.28);color-scheme:normal";
     bar.attachShadow({ mode: "closed" }).append(f);
     document.documentElement.append(bar);

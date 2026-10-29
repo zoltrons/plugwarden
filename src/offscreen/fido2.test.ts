@@ -22,5 +22,6 @@ test("passkey RP ID: refused for other sites, public suffixes and insecure origi
   assert.throws(() => ok("login.example.com", "https://example.com"), /SecurityError/); // child of the origin
   assert.throws(() => ok("com", "https://example.com"), /SecurityError/);
   assert.throws(() => ok("github.io", "https://alice.github.io"), /SecurityError/); // private-section suffix
+  assert.throws(() => ok("github.io", "https://github.io"), /SecurityError/); // ...also for its own host
   assert.throws(() => ok("example.com", "http://example.com"), /SecurityError/);
 });

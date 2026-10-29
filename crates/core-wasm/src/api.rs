@@ -8,9 +8,11 @@
 
 use std::{cell::RefCell, collections::HashMap, num::NonZeroU32, str::FromStr};
 
+use base64::{Engine, engine::general_purpose::STANDARD};
 use bitwarden_crypto::{
-    BitwardenLegacyKeyBytes, EncString, HashPurpose, Kdf, KeyDecryptable, MasterKey, PinKey,
+    BitwardenLegacyKeyBytes, EncString, HashPurpose, Kdf, KeyDecryptable, KeyEncryptable, MasterKey, PinKey,
     Pkcs8PrivateKeyBytes, PrivateKey, SymmetricCryptoKey, UnsignedSharedKey,
+    derive_symmetric_key_from_prf,
 };
 use serde_json::Value;
 
@@ -115,6 +117,42 @@ pub fn unlock_with_pin(
     open_session(user, encrypted_private_key)
 }
 
+/// Wraps the unlocked user key with a key derived from a WebAuthn PRF output.
+/// The PRF secret never leaves the authenticator; only its stable 32-byte output is used
+/// (bitwarden-crypto `derive_symmetric_key_from_prf`, the same primitive the SDK uses for
+/// passkey-based key sets). The wrapped key is safe to keep in local storage.
+pub fn prf_protect_user_key(prf_b64: &str) -> Result<String> {
+    let prf = STANDARD.decode(prf_b64).map_err(err)?;
+    let key = derive_symmetric_key_from_prf(&prf).map_err(|_| "invalid PRF output")?;
+    with_session(|s| {
+        // The legacy key encoding as text, encrypted under the PRF-derived key. (bitwarden-crypto
+        // has a key-typed encoder for this; going through String keeps the wrapper minimal.)
+        let encoded = STANDARD.encode(s.user.to_encoded().to_vec());
+        encoded
+            .encrypt_with_key(&key)
+            .map_err(err)
+            .map(|wrapped| wrapped.to_string())
+    })
+}
+
+/// Opens the session from a user key wrapped by `prf_protect_user_key`. A different or zero PRF
+/// fails the MAC (or is refused before that).
+pub fn unlock_with_prf(
+    prf_b64: &str,
+    protected_user_key: &str,
+    encrypted_private_key: Option<&str>,
+) -> Result<()> {
+    let prf = STANDARD.decode(prf_b64).map_err(err)?;
+    let key = derive_symmetric_key_from_prf(&prf).map_err(|_| "invalid PRF output")?;
+    let encoded: String = EncString::from_str(protected_user_key)
+        .map_err(err)?
+        .decrypt_with_key(&key)
+        .map_err(err)?;
+    let bytes = STANDARD.decode(encoded).map_err(err)?;
+    let user = SymmetricCryptoKey::try_from(&BitwardenLegacyKeyBytes::from(bytes)).map_err(err)?;
+    open_session(user, encrypted_private_key)
+}
+
 fn open_session(user: SymmetricCryptoKey, encrypted_private_key: Option<&str>) -> Result<()> {
     let private = match encrypted_private_key {
         Some(s) if !s.is_empty() => {
@@ -137,16 +175,26 @@ fn open_session(user: SymmetricCryptoKey, encrypted_private_key: Option<&str>) -
 }
 
 /// `org_keys`: JSON object `{ "<orgId>": "<type-4 UnsignedSharedKey>" }` from sync profile.organizations.
+///
+/// A key that cannot be opened is skipped, never fatal: organization keys are an extra on top of the
+/// personal vault, and one bad entry (an unknown key format, an account without its RSA private key)
+/// must not make the whole vault unloadable. Items under a skipped key are reported as undecryptable
+/// by `cipher_keys`. Returns the number of keys that loaded.
 pub fn set_org_keys(org_keys: &str) -> Result<usize> {
     let map: HashMap<String, String> = serde_json::from_str(org_keys).map_err(err)?;
     with_session_mut(|s| {
-        let private = s.private.as_ref().ok_or("no private key loaded")?;
         let mut orgs = HashMap::with_capacity(map.len());
-        for (id, enc) in map {
-            let shared = UnsignedSharedKey::from_str(&enc).map_err(err)?;
-            #[allow(deprecated)] // Vaultwarden still hands out unsigned (type 4) org keys.
-            let key = shared.decapsulate_key_unsigned(private).map_err(err)?;
-            orgs.insert(id.to_ascii_lowercase(), key);
+        if let Some(private) = s.private.as_ref() {
+            for (id, enc) in map {
+                let Ok(shared) = UnsignedSharedKey::from_str(&enc) else {
+                    continue;
+                };
+                #[allow(deprecated)] // Vaultwarden still hands out unsigned (type 4) org keys.
+                let Ok(key) = shared.decapsulate_key_unsigned(private) else {
+                    continue;
+                };
+                orgs.insert(id.to_ascii_lowercase(), key);
+            }
         }
         let n = orgs.len();
         s.orgs = orgs;
@@ -249,7 +297,8 @@ pub fn make_registration_keys(handle: u32) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use bitwarden_crypto::SymmetricKeyAlgorithm;
+    use base64::{Engine, engine::general_purpose::STANDARD};
+use bitwarden_crypto::SymmetricKeyAlgorithm;
 
     use super::*;
 
@@ -265,6 +314,27 @@ mod tests {
         assert!(!is_unlocked());
         unlock_with_pin("1234", "a@example.test", &kdf, &wrapped, None).unwrap();
         assert_eq!(with_session(|s| Ok(s.user.to_base64())).unwrap(), expected);
+    }
+
+    // Needs the `register` feature for `UserKey::make_key_pair`; CI builds the e2e harness with it.
+    #[cfg(feature = "register")]
+    #[test]
+    fn org_keys_fail_soft() {
+        let user = SymmetricCryptoKey::make(SymmetricKeyAlgorithm::Aes256CbcHmac);
+        let pair = bitwarden_crypto::UserKey::new(user.clone()).make_key_pair().unwrap();
+        open_session(user, Some(&pair.private.to_string())).unwrap();
+        // A key the server got wrong is skipped; the session and the personal vault stay usable.
+        assert_eq!(set_org_keys(r#"{"org":"2.bogus|bogus|bogus"}"#).unwrap(), 0);
+        assert!(is_unlocked());
+        assert!(with_session(|s| Ok(s.orgs.is_empty())).unwrap());
+    }
+
+    #[test]
+    fn org_keys_need_no_private_key() {
+        open_session(SymmetricCryptoKey::make(SymmetricKeyAlgorithm::Aes256CbcHmac), None).unwrap();
+        // No RSA private key at all (not every account has one): nothing loads, nothing fails.
+        assert_eq!(set_org_keys(r#"{"org":"2.x|y|z"}"#).unwrap(), 0);
+        assert!(is_unlocked());
     }
 
     #[test]

@@ -74,7 +74,9 @@ scripts may only send a whitelisted subset of message types).
   walking, TOTP and the generator become small local Rust modules, kept honest by upstream test
   vectors and tracked in `upstream-map.yaml`.
 * JS API is batch oriented (one call decrypts the whole vault): `deriveMasterKey`, `makeAuthHash`,
-  `unlockUserKey`, `decryptCipherList`, `decryptCipher`, `encryptCipher`, `totp`, `generatePassword`.
+  `unlockUserKey`, `decryptCipherList`, `decryptCipher`, `encryptCipher`, `totp`, `generatePassword`,
+  and the PIN / biometric wrappers (`pinProtectUserKey`, `unlockWithPin`, `prfProtectUserKey`,
+  `unlockWithPrf`).
 * Release profile: `opt-level="z"`, `lto`, `codegen-units=1`, `panic="abort"`, `strip`, then
   `wasm-opt -Oz`. Size budget enforced in CI (`tools/size-budget`).
 * Keys live in a WASM-side keystore addressed by opaque handles; JS never receives raw key bytes after
@@ -143,6 +145,14 @@ Other content scripts are registered at runtime (`chrome.scripting.registerConte
   default URI match strategy, clear-clipboard delay (10 s … 5 min, or never), autofill on page load
   + its default, and cards/identities in the tab view. `lastUsed` (cipher id → ms) is the only other
   local state: it decides which login page-load autofill prefers.
+* `chrome.storage.local` also holds biometric unlock: the user key wrapped with a key derived from
+  the platform authenticator's WebAuthn PRF output (bitwarden-crypto
+  `derive_symmetric_key_from_prf`), plus the credential id and salt. No permission and no native
+  helper: the credential is bound to the extension origin (`authenticatorAttachment: platform`,
+  `userVerification: required`), the PRF secret never leaves the authenticator, and a wrong or
+  missing PRF fails the MAC in the WASM core. Unlike the official extension (which asks the desktop
+  app over native messaging), this needs no companion app; devices whose authenticator lacks PRF are
+  refused instead of falling back to a weaker UI-only gate. The wrapped key is removed on logout.
 * Lock = close offscreen document (drops WASM memory) + clear session state. Auto-lock via
   `chrome.idle` and `chrome.alarms`; the timeout action can instead log out (forget the account and
   the cache), also on browser start. Clipboard clearing via alarm + offscreen document.

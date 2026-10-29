@@ -871,8 +871,14 @@ async function download(ctx: Ctx, cipherId: string, attachmentId: string) {
   const r = await send<{ fileName: string; data: string }>({ type: "downloadAttachment", cipherId, attachmentId });
   if (!r.ok) return ((st.error = r.error), ctx.rerender());
   const url = URL.createObjectURL(new Blob([Uint8Array.fromBase64(r.data.data)]));
-  h("a", { href: url, download: r.data.fileName }).click();
+  h("a", { href: url, download: safeFileName(r.data.fileName) }).click();
   setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
+/** The name comes from the server: keep it a plain file name (no separators, no control characters). */
+function safeFileName(name: string): string {
+  const clean = name.replace(/[\\/:*?"<>|\u0000-\u001f\u007f]/g, "_").trim().slice(0, 100);
+  return clean || "attachment";
 }
 
 async function upload(ctx: Ctx, cipherId: string, file: File | undefined) {

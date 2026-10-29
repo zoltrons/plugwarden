@@ -51,15 +51,11 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, reply: (r: CoreResul
     return false;
   }
   if (req.op === "writeClipboard") {
-    // Offscreen documents have no focus, so navigator.clipboard is unavailable; execCommand works.
-    const { text } = req;
-    const onCopy = (e: ClipboardEvent) => {
-      e.clipboardData?.setData("text/plain", text);
-      e.preventDefault();
-    };
-    document.addEventListener("copy", onCopy, { once: true });
-    reply({ ok: true, value: document.execCommand("copy") });
-    return false;
+    void writeClipboard(req.text).then(
+      (ok) => reply({ ok: true, value: ok }),
+      (e: unknown) => reply({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+    );
+    return true;
   }
   if (req.op === "status" && !worker) {
     reply({ ok: true, value: { unlocked: false } });
@@ -68,3 +64,27 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, reply: (r: CoreResul
   callWorker(req).then(reply);
   return true;
 });
+
+/**
+ * Offscreen documents have no focus, so navigator.clipboard is unavailable there; execCommand works.
+ * Returns whether the text actually reached the clipboard, and always drops the listener again: a copy
+ * that never fires would otherwise pile up and keep stale secrets alive.
+ */
+async function writeClipboard(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    // No permission or no focus: fall back to the synthetic copy below.
+  }
+  const onCopy = (e: ClipboardEvent) => {
+    e.clipboardData?.setData("text/plain", text);
+    e.preventDefault();
+  };
+  document.addEventListener("copy", onCopy);
+  try {
+    return document.execCommand("copy");
+  } finally {
+    document.removeEventListener("copy", onCopy);
+  }
+}

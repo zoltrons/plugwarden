@@ -87,6 +87,10 @@
   local: src/background/account.ts (SSO), dev/vaultwarden/mock-idp.mjs
   sync: client_id -> redirect URI table, binding cookie, state handling, SSO_* settings.
 - repo: sdk-internal
+  path: crates/bitwarden-crypto/src/keys/prf.rs
+  local: crates/core-wasm/src/api.rs (prf_protect_user_key, unlock_with_prf), src/ui/biometric.ts
+  sync: PRF key derivation (32-byte minimum, zero refusal, quality stretch), WebAuthn PRF options and user-verification requirements.
+- repo: sdk-internal
   path: crates/bitwarden-crypto/src/keys/pin_key.rs
   local: crates/core-wasm/src/api.rs (pin_protect_user_key, unlock_with_pin), src/background/account.ts (PIN)
   sync: PIN key derivation (KDF + stretch), wrapped user key format, ephemeral vs persistent PIN storage.

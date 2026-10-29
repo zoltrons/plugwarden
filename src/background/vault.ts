@@ -114,13 +114,16 @@ export async function scheduleClipboardClear(): Promise<void> {
   const { clearClipboardDelay } = await getSettings();
   const ms = CLEAR_CLIPBOARD_MS[clearClipboardDelay] ?? CLEAR_CLIPBOARD_MS.fiveMinutes;
   if (!ms) return void (await chrome.alarms.clear(CLIPBOARD_ALARM));
-  await chrome.alarms.create(CLIPBOARD_ALARM, { delayInMinutes: ms / 60_000 });
+  // chrome.alarms will not fire sooner than 30 s, so the short choices are rounded up to that.
+  await chrome.alarms.create(CLIPBOARD_ALARM, { delayInMinutes: Math.max(ms, 30_000) / 60_000 });
 }
 
-/** Puts `text` on the clipboard from the offscreen document; it is cleared like any other copy. */
-export async function copyToClipboard(text: string): Promise<void> {
-  await coreCall({ op: "writeClipboard", text });
-  await scheduleClipboardClear();
+/** Puts `text` on the clipboard from the offscreen document and arms the clear only if that worked. */
+export async function copyToClipboard(text: string): Promise<boolean> {
+  const ok = await coreCall<boolean>({ op: "writeClipboard", text });
+  // A failed write must not arm the clear: it would wipe whatever the user has on the clipboard.
+  if (ok) await scheduleClipboardClear();
+  return ok;
 }
 
 /** Records a user-gesture fill; page-load autofill prefers the login last used for the site. */

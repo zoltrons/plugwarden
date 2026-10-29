@@ -33,6 +33,11 @@ jobs:
       - name: size report (fails over budget)
         shell: bash # explicit bash adds pipefail, so tee does not hide a budget failure
         run: npm run size | tee -a "$GITHUB_STEP_SUMMARY"
+      - run: npx playwright-core install --with-deps chromium
+      - name: biometric smoke test (virtual PRF authenticator, no server)
+        run: |
+          bash tools/build-wasm.sh --features register --out dist/wasm-register
+          npm run test:biometric
       - uses: actions/upload-artifact@v4
         with: { name: wasm, path: dist/wasm }
 

@@ -86,6 +86,22 @@ pub fn unlock_with_pin(
     .map_err(js)
 }
 
+/// The unlocked user key wrapped with a key derived from a WebAuthn PRF output (base64, >= 32 bytes).
+#[wasm_bindgen(js_name = prfProtectUserKey)]
+pub fn prf_protect_user_key(prf_b64: &str) -> Result<String, JsError> {
+    api::prf_protect_user_key(prf_b64).map_err(js)
+}
+
+/// Opens the session from a PRF-wrapped user key.
+#[wasm_bindgen(js_name = unlockWithPrf)]
+pub fn unlock_with_prf(
+    prf_b64: &str,
+    protected_user_key: &str,
+    encrypted_private_key: Option<String>,
+) -> Result<(), JsError> {
+    api::unlock_with_prf(prf_b64, protected_user_key, encrypted_private_key.as_deref()).map_err(js)
+}
+
 #[wasm_bindgen(js_name = setOrgKeys)]
 pub fn set_org_keys(org_keys_json: &str) -> Result<usize, JsError> {
     api::set_org_keys(org_keys_json).map_err(js)

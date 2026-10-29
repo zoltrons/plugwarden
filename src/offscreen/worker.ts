@@ -32,6 +32,11 @@ function run(req: CoreRequest): unknown {
       const { type, iterations, memory, parallelism } = req.kdf;
       return core.pinProtectUserKey(req.pin, req.email, type, iterations, memory, parallelism);
     }
+    case "prfProtect":
+      return core.prfProtectUserKey(req.prf);
+    case "unlockPrf":
+      core.unlockWithPrf(req.prf, req.protectedUserKey, req.encryptedPrivateKey);
+      return true;
     case "unlockPin": {
       const { type, iterations, memory, parallelism } = req.kdf;
       core.unlockWithPin(req.pin, req.email, type, iterations, memory, parallelism, req.protectedUserKey, req.encryptedPrivateKey);

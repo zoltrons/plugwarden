@@ -16,7 +16,7 @@ import {
   TwoFactorRequired,
 } from "../transport/auth.ts";
 import { ApiError } from "../transport/http.ts";
-import { CoreError, coreCall } from "./core.ts";
+import { CoreError, coreAlive, coreCall } from "./core.ts";
 import { lockNow, touchAutoLock } from "./lock.ts";
 import {
   type Account,
@@ -39,6 +39,12 @@ export class UserError extends Error {
 }
 
 const PENDING_TTL_MS = 10 * 60_000;
+
+/**
+ * A 2FA "remember me" token is only valid for the server that issued it, so it is stored per server:
+ * changing the configured server (or pointing at another one) must never replay it there.
+ */
+const rememberKey = (serverUrl: string, email: string) => `${serverUrl}|${email}`;
 
 async function requireServer(): Promise<string> {
   const server = await getLocal("server");
@@ -65,7 +71,7 @@ function kdfFromToken(t: TokenResponse, fallback: KdfParams): KdfParams {
   };
 }
 
-async function completeLogin(email: string, kdf: KdfParams, handle: number, t: TokenResponse): Promise<void> {
+async function completeLogin(serverUrl: string, email: string, kdf: KdfParams, handle: number, t: TokenResponse): Promise<void> {
   if (!t.Key) throw new UserError("badServer", "Server did not return an encrypted user key");
   try {
     await coreCall({ op: "unlock", handle, protectedUserKey: t.Key, encryptedPrivateKey: t.PrivateKey });
@@ -85,7 +91,7 @@ async function completeLogin(email: string, kdf: KdfParams, handle: number, t: T
   await setLocal("account", account);
   if (t.TwoFactorToken) {
     const remember = (await getLocal("rememberTokens")) ?? {};
-    await setLocal("rememberTokens", { ...remember, [email]: t.TwoFactorToken });
+    await setLocal("rememberTokens", { ...remember, [rememberKey(serverUrl, email)]: t.TwoFactorToken });
   }
   await updateSession({
     unlocked: true,
@@ -114,7 +120,7 @@ export async function login(rawEmail: string, password: string): Promise<void> {
   const kdf = await prelogin(base, email);
   const { handle, authHash } = await prepareKey(email, password, kdf);
   const deviceId = await getDeviceId();
-  const remembered = (await getLocal("rememberTokens"))?.[email];
+  const remembered = (await getLocal("rememberTokens"))?.[rememberKey(base, email)];
   try {
     const t = await passwordToken(base, {
       email,
@@ -122,13 +128,13 @@ export async function login(rawEmail: string, password: string): Promise<void> {
       deviceId,
       ...(remembered ? { twoFactor: { provider: TWO_FACTOR.Remember, token: remembered, remember: false } } : {}),
     });
-    await completeLogin(email, kdf, handle, t);
+    await completeLogin(base, email, kdf, handle, t);
   } catch (e) {
     if (e instanceof TwoFactorRequired) {
       if (remembered) {
         // The server rejected (or expired) our remember token: forget it and ask for a real code.
         const all = (await getLocal("rememberTokens")) ?? {};
-        delete all[email];
+        delete all[rememberKey(base, email)];
         await setLocal("rememberTokens", all);
       }
       await updateSession({
@@ -167,7 +173,7 @@ export async function submitTwoFactor(provider: number, token: string, remember:
   const grant = { email: pending.email, authHash, deviceId: await getDeviceId() };
   try {
     const t = await passwordToken(base, { ...grant, twoFactor: { provider, token: code, remember } });
-    await completeLogin(pending.email, pending.kdf, pending.handle, t);
+    await completeLogin(base, pending.email, pending.kdf, pending.handle, t);
   } catch (e) {
     if (!(e instanceof TwoFactorRequired || (e instanceof ApiError && e.status === 400))) throw e;
     if (provider === TWO_FACTOR.WebAuthn) {
@@ -191,7 +197,8 @@ export async function sendTwoFactorEmail(): Promise<void> {
 export async function cancelTwoFactor(): Promise<void> {
   const { pending } = await getSession();
   await updateSession({ pending: undefined });
-  if (pending) await coreCall({ op: "freeKey", handle: pending.handle }).catch(() => undefined);
+  // Only a live worker can hold the handle: do not spin one up just to free it.
+  if (pending && (await coreAlive())) await coreCall({ op: "freeKey", handle: pending.handle }).catch(() => undefined);
 }
 
 export async function unlock(password: string): Promise<void> {
@@ -210,6 +217,11 @@ export async function unlock(password: string): Promise<void> {
     if (e instanceof CoreError) throw new UserError("wrongPassword", "Wrong master password");
     throw e;
   }
+  await afterUnlock(account);
+}
+
+/** Shared tail of every unlock path (master password, PIN, biometrics). */
+async function afterUnlock(account: Account): Promise<void> {
   await updateSession({ unlocked: true });
   await touchAutoLock();
   // After a browser restart the PIN-wrapped key is gone: re-arm it from the stored PIN.
@@ -218,6 +230,41 @@ export async function unlock(password: string): Promise<void> {
     const [plain] = await coreCall<string[]>({ op: "decryptText", values: [account.protectedPin] });
     if (plain) await armPin(account, plain);
   } else if (pin?.attempts) await updateSession({ pin: { ...pin, attempts: 0 } });
+}
+
+// ---------- Biometrics (WebAuthn PRF) ----------
+
+/**
+ * Turns biometric unlock on: wraps the unlocked user key with a key derived from the
+ * authenticator's PRF output. Only the wrapped key is stored; the PRF secret never leaves the
+ * platform authenticator, and every unlock requires its user verification (Touch ID / Hello).
+ */
+export async function setBiometric(credentialId: string, prfSalt: string, prf: string): Promise<void> {
+  const account = await getLocal("account");
+  if (!account?.userId) throw new UserError("sessionExpired", "Please log in again");
+  if (!credentialId || !prfSalt || !prf) throw new UserError("invalid", "The biometric credential is incomplete");
+  const protectedUserKey = await coreCall<string>({ op: "prfProtect", prf });
+  await setLocal("biometric", { email: account.email, credentialId, prfSalt, protectedUserKey, createdAt: Date.now() });
+}
+
+export const removeBiometric = () => removeLocal("biometric").then(() => undefined);
+
+export async function unlockWithBiometric(prf: string): Promise<void> {
+  const [account, bio] = await Promise.all([getLocal("account"), getLocal("biometric")]);
+  if (!account || !bio || bio.email !== account.email) throw new UserError("wrongPhase", "Biometric unlock is not set up");
+  try {
+    await coreCall({
+      op: "unlockPrf",
+      prf,
+      protectedUserKey: bio.protectedUserKey,
+      encryptedPrivateKey: account.encryptedPrivateKey,
+    });
+  } catch (e) {
+    // A different authenticator/user (or a broken credential) fails the MAC: never retry silently.
+    if (e instanceof CoreError) throw new UserError("badBiometric", "Biometric verification failed. Unlock with your master password and set it up again.");
+    throw e;
+  }
+  await afterUnlock(account);
 }
 
 // ---------- PIN (Bitwarden "unlock with PIN", locked with the master password on browser restart) ----------
@@ -266,7 +313,7 @@ export async function unlockWithPin(pin: string): Promise<void> {
 
 export async function logout(): Promise<void> {
   await lockNow();
-  await removeLocal("account", "vault", "genHistory");
+  await removeLocal("account", "vault", "genHistory", "biometric");
   await updateSession({ accessToken: undefined, accessExpiresAt: undefined, pin: undefined });
 }
 

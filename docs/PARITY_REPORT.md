@@ -144,3 +144,48 @@ across restarts, blocked-domains and excluded-domains editors (only removal of n
 SSH-key inline-menu entries, item "archive", appearance extras (extension width, compact mode, badge
 counter, animations, quick copy actions), generator history from the editor, and the
 web-vault-only account operations (change master password, rotate key, manage 2FA).
+
+---
+
+# Biometric unlock (WebAuthn PRF)
+
+Date: 2026-10-30. No new permissions, no native messaging helper, no remote code.
+
+## Design
+
+* The extension creates a **platform-authenticator credential** (`authenticatorAttachment:
+  "platform"`, `userVerification: "required"`, RP id = the extension origin) with the WebAuthn
+  **PRF** extension (`eval.first` = a random 32-byte salt).
+* The PRF output (stable per credential + salt) is stretched by bitwarden-crypto
+  (`derive_symmetric_key_from_prf`, the same primitive the SDK uses for passkey key sets) and wraps
+  the **user key**. Only the wrapped key, the credential id and the salt are stored in
+  `chrome.storage.local`; the PRF secret never leaves the authenticator.
+* Unlock is a WebAuthn **assertion** with `userVerification: "required"`: the OS prompts for Touch
+  ID / Windows Hello every time. The PRF output goes to the crypto worker, which unwraps the user
+  key; a wrong or zero PRF fails the MAC (Rust unit test + WASM roundtrip).
+* Authenticators without PRF support are refused with a clear error (no "biometrics as a UI gate"
+  fallback). Devices that only evaluate PRF on assertions are handled by asking the fresh credential
+  once more.
+* UI: Settings → Security → "Unlock with biometrics" toggles setup; the locked screen shows
+  "Unlock with biometrics" plus an "Open in a tab" fallback for platforms whose system prompt can
+  close the action popup. Logout removes the wrapped key.
+
+## Verified
+
+* `cargo test -p plugwarden-core-wasm`: 10 tests incl. `prf_unlock_roundtrip` (wrap, wrong PRF and
+  zero PRF refused, unlock).
+* `tools/smoke-biometric.mjs` (new; `npm run test:biometric`): real extension in Chromium 156 with a
+  CDP virtual authenticator (`hasPrf`): WebAuthn create/assertion on the extension origin with a
+  stable PRF output, setup in Settings (WASM `prfProtectUserKey`), lock, unlock with the assertion
+  (WASM `unlockWithPrf`), and logout cleanup. **Passes.**
+* Typecheck clean; unit 12/12; build + size budgets pass. WASM: 677,734 B raw / 208.4 KiB brotli
+  (+7.4 KiB raw for the PRF wrapper). `core_wasm.js` is 31,637 B, so its budget is now 32 KiB
+  (was 30 KiB): it is bundled and minified into `worker.js` and is not shipped as a separate file.
+* **Not verified:** real Touch ID / Windows Hello hardware (only a virtual authenticator), and the
+  Vaultwarden e2e suite (no Docker in this environment). Real-hardware PRF support depends on the
+  platform authenticator (Chrome/OS); the UI reports it instead of silently degrading.
+* The credential is bound to the extension id: an unpacked build moved to another path (or a
+  different signing key) cannot use an existing biometric setup. Published builds keep a stable id.
+* The "system prompt may close the action popup" case is handled with an "Open in a tab" action on
+  the locked screen and in Settings; it could not be reproduced here (virtual authenticator has no
+  OS prompt).

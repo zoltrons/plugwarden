@@ -3,6 +3,24 @@
 import { AUTO_LOCK_CHOICES, CLEAR_CLIPBOARD_CHOICES, type ClearClipboardDelay, URI_MATCH_CHOICES } from "./constants.ts";
 import { arr, bool, literal, num, obj, opt, record, str, unknownValue, type Validator, ValidationError } from "./validate.ts";
 
+// ---------- size caps ----------
+// Anything a page, a server or a file can make arbitrarily large is bounded at the boundary.
+
+/** A page-controlled form value: big enough for any real credential, small enough to bound storage. */
+const MAX_FIELD = 8192;
+/** An unencrypted Bitwarden JSON export; the local vault cache is limited to 10 MB anyway. */
+const MAX_IMPORT_CHARS = 16 * 1024 * 1024;
+
+const capped =
+  (max: number): Validator<string> =>
+  (v, p) => {
+    const s = str(v, p);
+    if (s.length > max) throw new ValidationError(`${p}: too long`);
+    return s;
+  };
+
+const field = capped(MAX_FIELD);
+
 // ---------- popup -> service worker ----------
 
 export type Request =
@@ -15,6 +33,11 @@ export type Request =
   | { type: "ssoStart" }
   | { type: "unlock"; password: string }
   | { type: "unlockPin"; pin: string }
+  /** Opens the vault with the PRF output of the biometric passkey (see src/ui/biometric.ts). */
+  | { type: "unlockBiometric"; prf: string }
+  /** Stores the user key wrapped with a key derived from the authenticator's PRF output. */
+  | { type: "setBiometric"; credentialId: string; prfSalt: string; prf: string }
+  | { type: "removeBiometric" }
   /** Without `pin`: turn PIN unlock off. */
   | { type: "setPin"; pin?: string }
   | { type: "lock" }
@@ -89,6 +112,9 @@ const requestValidators: { [K in Request["type"]]: Validator<Extract<Request, { 
   ssoStart: obj({ type: literal("ssoStart") }),
   unlock: obj({ type: literal("unlock"), password: str }),
   unlockPin: obj({ type: literal("unlockPin"), pin: str }),
+  unlockBiometric: obj({ type: literal("unlockBiometric"), prf: str }),
+  setBiometric: obj({ type: literal("setBiometric"), credentialId: str, prfSalt: str, prf: str }),
+  removeBiometric: obj({ type: literal("removeBiometric") }),
   setPin: (v, p) => {
     const s = obj({ type: literal("setPin"), pin: opt(str) })(v, p);
     if (s.pin !== undefined && !s.pin) throw new ValidationError("pin: required");
@@ -140,7 +166,7 @@ const requestValidators: { [K in Request["type"]]: Validator<Extract<Request, { 
   purgeItem: obj({ type: literal("purgeItem"), id: str }),
   downloadAttachment: obj({ type: literal("downloadAttachment"), cipherId: str, attachmentId: str }),
   exportVault: obj({ type: literal("exportVault"), password: str }),
-  importVault: obj({ type: literal("importVault"), text: str }),
+  importVault: obj({ type: literal("importVault"), text: capped(MAX_IMPORT_CHARS) }),
   addAttachment: obj({ type: literal("addAttachment"), cipherId: str, file: obj({ name: str, data: str }) }),
   saveFolder: obj({ type: literal("saveFolder"), name: str, id: opt(str) }),
   deleteFolder: obj({ type: literal("deleteFolder"), id: str }),
@@ -227,6 +253,8 @@ export interface State {
   ssoError?: string;
   /** PIN unlock is turned on for this account. */
   pinSet?: boolean;
+  /** Biometric unlock is set up; the wrapped key stays in the service worker. */
+  biometric?: { credentialId: string; prfSalt: string };
   /** The locked vault can be opened with the PIN (until the browser restarts). */
   pinUnlock?: boolean;
   /** epoch ms of the last successful sync. */
@@ -323,6 +351,7 @@ export type ErrorCode =
   | "badCredentials"
   | "badTwoFactor"
   | "wrongPassword"
+  | "badBiometric"
   | "sessionExpired"
   | "wrongPhase";
 
@@ -344,6 +373,9 @@ export type CoreRequest =
   // PIN: the user key wrapped with a key derived from the PIN (account KDF and email)
   | { op: "pinProtect"; pin: string; email: string; kdf: KdfParams }
   | { op: "unlockPin"; pin: string; email: string; kdf: KdfParams; protectedUserKey: string; encryptedPrivateKey?: string }
+  // biometric: the user key wrapped with a key derived from a WebAuthn PRF output (base64)
+  | { op: "prfProtect"; prf: string }
+  | { op: "unlockPrf"; prf: string; protectedUserKey: string; encryptedPrivateKey?: string }
   | { op: "freeKey"; handle: number }
   | { op: "lock" }
   | { op: "status" }
@@ -387,8 +419,24 @@ export const OFFSCREEN_TARGET = "plugwarden-offscreen";
 
 export const kdfParams: Validator<KdfParams> = obj({ type: num, iterations: num, memory: num, parallelism: num });
 
-const user = obj({ id: str, name: str, displayName: str });
-const passkeyCreateInput: Validator<PasskeyCreateInput> = obj({ origin: str, rpId: str, rpName: str, challenge: str, user, discoverable: bool });
+/** WebAuthn bounds: a challenge is a short random value and names/ids are small by spec. */
+const rpIdField = capped(253);
+const challengeField = capped(1024);
+const user = obj({ id: capped(1024), name: capped(1024), displayName: capped(1024) });
+/** A page-supplied array of credential ids: bounded, so it cannot ask for unbounded work. */
+const credIdList = (v: unknown, p: string): string[] => {
+  const list = arr(capped(1024))(v, p);
+  if (list.length > 64) throw new ValidationError(`${p}: too many entries`);
+  return list;
+};
+const passkeyCreateInput: Validator<PasskeyCreateInput> = obj({
+  origin: str,
+  rpId: rpIdField,
+  rpName: capped(1024),
+  challenge: challengeField,
+  user,
+  discoverable: bool,
+});
 
 const coreValidators: { [K in CoreRequest["op"]]: Validator<Extract<CoreRequest, { op: K }>> } = {
   prepareKey: obj({ op: literal("prepareKey"), email: str, password: str, kdf: kdfParams }),
@@ -396,6 +444,8 @@ const coreValidators: { [K in CoreRequest["op"]]: Validator<Extract<CoreRequest,
   unlock: obj({ op: literal("unlock"), handle: num, protectedUserKey: str, encryptedPrivateKey: opt(str) }),
   pinProtect: obj({ op: literal("pinProtect"), pin: str, email: str, kdf: kdfParams }),
   unlockPin: obj({ op: literal("unlockPin"), pin: str, email: str, kdf: kdfParams, protectedUserKey: str, encryptedPrivateKey: opt(str) }),
+  prfProtect: obj({ op: literal("prfProtect"), prf: str }),
+  unlockPrf: obj({ op: literal("unlockPrf"), prf: str, protectedUserKey: str, encryptedPrivateKey: opt(str) }),
   freeKey: obj({ op: literal("freeKey"), handle: num }),
   lock: obj({ op: literal("lock") }),
   status: obj({ op: literal("status") }),
@@ -471,9 +521,9 @@ export function parsePasskeyCall(v: unknown): PasskeyCall {
   if (kind === "create")
     return obj({
       kind: literal("create"),
-      options: obj({ rpId: opt(str), rpName: str, user, challenge: str, exclude: arr(str), discoverable: bool }),
+      options: obj({ rpId: opt(rpIdField), rpName: capped(1024), user, challenge: challengeField, exclude: credIdList, discoverable: bool }),
     })(v, "");
-  return obj({ kind: literal("get"), conditional: bool, options: obj({ rpId: opt(str), challenge: str, allow: arr(str) }) })(v, "");
+  return obj({ kind: literal("get"), conditional: bool, options: obj({ rpId: opt(rpIdField), challenge: challengeField, allow: credIdList }) })(v, "");
 }
 
 // ---------- content script (every page) and our menu.html / bar.html iframes -> service worker ----------
@@ -482,33 +532,40 @@ export type FieldKind = "login" | "card" | "identity";
 
 /** From the content script. Sender tab, frame and URL come from the browser (sender), never from here. */
 export type PageRequest =
-  | { type: "inlineFocus"; kind: FieldKind }
+  /** `nonce` is a per-document secret, echoed by the menu frame it opens (see FrameRequest). */
+  | { type: "inlineFocus"; kind: FieldKind; nonce: string }
   | { type: "loginSubmitted"; username: string; password: string }
   /** Sent on load only when the frame contains a password field; the worker decides whether to fill. */
   | { type: "pageLoad" };
 
+/** A page-controlled form value: big enough for any real credential, small enough to bound storage. */
 const pageValidators: { [K in PageRequest["type"]]: Validator<Extract<PageRequest, { type: K }>> } = {
-  inlineFocus: obj({ type: literal("inlineFocus"), kind: literal("login", "card", "identity") }),
-  loginSubmitted: obj({ type: literal("loginSubmitted"), username: str, password: str }),
+  inlineFocus: obj({ type: literal("inlineFocus"), kind: literal("login", "card", "identity"), nonce: str }),
+  loginSubmitted: obj({ type: literal("loginSubmitted"), username: field, password: field }),
   pageLoad: obj({ type: literal("pageLoad") }),
 };
 
-/** From menu.html / bar.html, which run as extension pages inside the website's tab. */
+/**
+ * From menu.html / bar.html, which run as extension pages inside the website's tab. The `inline*`
+ * requests carry the nonce of the document that opened the menu: the page cannot read it (it lives in
+ * the iframe's fragment, and the menu is inside a closed shadow root), so a menu the page frames
+ * itself cannot be used to drive a fill.
+ */
 export type FrameRequest =
-  | { type: "inlineList" }
-  | { type: "inlineFill"; id: string }
-  | { type: "inlinePasskey" }
-  | { type: "inlineUnlock" }
-  | { type: "barInfo" }
-  | { type: "barAction"; action: "save" | "never" | "close" };
+  | { type: "inlineList"; nonce: string }
+  | { type: "inlineFill"; id: string; nonce: string }
+  | { type: "inlinePasskey"; nonce: string }
+  | { type: "inlineUnlock"; nonce: string }
+  | { type: "barInfo"; token: string }
+  | { type: "barAction"; action: "save" | "never" | "close"; token: string };
 
 const frameValidators: { [K in FrameRequest["type"]]: Validator<Extract<FrameRequest, { type: K }>> } = {
-  inlineList: obj({ type: literal("inlineList") }),
-  inlineFill: obj({ type: literal("inlineFill"), id: str }),
-  inlinePasskey: obj({ type: literal("inlinePasskey") }),
-  inlineUnlock: obj({ type: literal("inlineUnlock") }),
-  barInfo: obj({ type: literal("barInfo") }),
-  barAction: obj({ type: literal("barAction"), action: literal("save", "never", "close") }),
+  inlineList: obj({ type: literal("inlineList"), nonce: str }),
+  inlineFill: obj({ type: literal("inlineFill"), id: str, nonce: str }),
+  inlinePasskey: obj({ type: literal("inlinePasskey"), nonce: str }),
+  inlineUnlock: obj({ type: literal("inlineUnlock"), nonce: str }),
+  barInfo: obj({ type: literal("barInfo"), token: str }),
+  barAction: obj({ type: literal("barAction"), action: literal("save", "never", "close"), token: str }),
 };
 
 const parseBy =
