@@ -81,6 +81,37 @@ async function enableTotp(u: TestUser): Promise<void> {
   });
 }
 
+/**
+ * Server-side view of a user through a second, independent client session (the test's own WASM
+ * instance + raw API calls), used to seed vaults and to check what the extension wrote.
+ */
+async function apiSession(u: TestUser) {
+  const tok = await passwordToken(BASE, { email: u.email, authHash: authHash(u), deviceId: crypto.randomUUID() });
+  const h = wasm.deriveMasterKey(u.password, u.email, ...u.kdf);
+  wasm.unlockUserKey(h, tok.Key!, tok.PrivateKey);
+  const userId = JSON.parse(Buffer.from(tok.access_token.split(".")[1]!, "base64url").toString()).sub as string;
+  const token = tok.access_token;
+  return {
+    async create(plain: Record<string, unknown>) {
+      const enc = JSON.parse(wasm.encryptCipher(JSON.stringify(plain)));
+      return (await call(BASE, "POST", "/api/ciphers", { token, json: { ...enc, encryptedFor: userId } })) as { id: string };
+    },
+    async update(plain: Record<string, any>) {
+      const enc = JSON.parse(wasm.encryptCipher(JSON.stringify(plain)));
+      await call(BASE, "PUT", `/api/ciphers/${plain.id}`, { token, json: { ...enc, encryptedFor: userId } });
+    },
+    async folder(name: string) {
+      const encName = JSON.parse(wasm.encryptCipher(JSON.stringify({ type: 2, name }))).name;
+      return (await call(BASE, "POST", "/api/folders", { token, json: { name: encName } })) as { id: string };
+    },
+    async ciphers() {
+      const sync = (await call(BASE, "GET", "/api/sync?excludeDomains=true", { token })) as { ciphers: unknown[] };
+      return sync.ciphers.map((c) => JSON.parse(wasm.decryptCipher(JSON.stringify(c))) as Record<string, any>);
+    },
+    done: () => wasm.lock(),
+  };
+}
+
 // ---------- browser ----------
 
 const ext = join(root, "dist/ext");
@@ -95,6 +126,17 @@ try {
   const sw: Worker = ctx.serviceWorkers()[0] ?? (await ctx.waitForEvent("serviceworker"));
   const id = new URL(sw.url()).host;
   const popupUrl = `chrome-extension://${id}/popup.html`;
+  // Extension origins cannot be granted clipboard-read, so read the (browser-wide) clipboard from a server page.
+  await ctx.grantPermissions(["clipboard-read"], { origin: new URL(BASE).origin });
+  const readClipboard = async () => {
+    const p = await ctx.newPage();
+    try {
+      await p.goto(`${BASE}/alive`);
+      return await p.evaluate(() => navigator.clipboard.readText());
+    } finally {
+      await p.close();
+    }
+  };
   const page: Page = await ctx.newPage();
   currentPage = page;
   const open = async () => {
@@ -206,6 +248,137 @@ try {
     await logout();
     await loginAs(totpUser);
     await expectUnlocked();
+  });
+
+  // ---------- Phase 2: vault ----------
+  const vaultUser = await register("vault", [1, 3, 64, 4]);
+  const api = await apiSession(vaultUser);
+  const work = await api.folder("Work");
+  await api.create({ type: 1, name: "GitHub", folderId: work.id, login: { username: "octo", password: "gh-secret-1", totp: TOTP_KEY, uris: [{ uri: "https://github.com/login", match: null }] }, fields: [{ name: "PIN", value: "4321", type: 1 }] });
+  await api.create({ type: 2, name: "Wifi note", notes: "SSID: home\npassword: hunter2", secureNote: { type: 0 } });
+  await api.create({ type: 3, name: "Visa", card: { cardholderName: "Ada L", number: "4111111111111111", code: "123", brand: "Visa", expMonth: "1", expYear: "2030" } });
+  api.done();
+  const rows = () => page.getByRole("list").getByRole("listitem");
+  const back = () => page.getByRole("button", { name: "Back" }).click();
+
+  await step("vault: sync, list, search, folder filter", async () => {
+    await logout();
+    await loginAs(vaultUser);
+    await expectUnlocked();
+    await page.getByRole("listitem").filter({ hasText: "GitHub" }).waitFor();
+    assert.equal(await rows().count(), 3);
+    await page.getByRole("searchbox").fill("wifi");
+    assert.equal(await rows().count(), 1);
+    await page.getByRole("searchbox").fill("");
+    await page.getByRole("button", { name: "Work", exact: true }).click();
+    assert.equal(await rows().count(), 1);
+    assert.match(await rows().first().innerText(), /GitHub/);
+    await page.getByRole("button", { name: "All", exact: true }).click();
+  });
+
+  await step("item view: reveal password, TOTP matches, hidden field, copy schedules clearing", async () => {
+    await rows().filter({ hasText: "GitHub" }).click();
+    await page.getByRole("heading", { name: "GitHub" }).waitFor();
+    await page.getByRole("button", { name: "Show password" }).first().click();
+    await page.getByText("gh-secret-1").waitFor();
+    const shown = (await page.locator("[data-totp]").innerText()).replace(/\s/g, "");
+    assert.ok([totpNow().code, JSON.parse(wasm.totp(TOTP_KEY, Date.now() - 30_000)).code].includes(shown), `totp ${shown}`);
+    assert.ok(!(await page.locator("#app").innerText()).includes("4321"), "hidden custom field shown in clear");
+    await page.getByRole("button", { name: "Copy Username" }).click();
+    await page.getByRole("status").filter({ hasText: "Copied" }).waitFor();
+    assert.ok(await sw.evaluate(() => chrome.alarms.get("clipboard")), "clipboard clear alarm not scheduled");
+    assert.equal(await readClipboard(), "octo");
+    await sw.evaluate(() => chrome.alarms.create("clipboard", { when: Date.now() + 100 }));
+    await page.waitForTimeout(1500);
+    assert.equal(await readClipboard(), "", "clipboard not cleared");
+    await back();
+  });
+
+  await step("card shown read-only with masked number", async () => {
+    await rows().filter({ hasText: "Visa" }).click();
+    await page.getByRole("heading", { name: "Visa" }).waitFor();
+    const text = await page.locator("#app").innerText();
+    assert.ok(text.includes("Ada L") && !text.includes("4111111111111111"));
+    assert.equal(await page.getByRole("button", { name: "Edit" }).count(), 0);
+    await back();
+  });
+
+  await step("create login in popup; server copy decrypts independently", async () => {
+    await page.getByRole("button", { name: "New item" }).click();
+    await fill("Name", "Example");
+    await fill("Username", "alice");
+    await page.getByRole("button", { name: "Generate password" }).click();
+    await fill("Websites (one per line)", "example.com\nhttps://login.example.com");
+    await page.getByRole("button", { name: "Save" }).click();
+    await rows().filter({ hasText: "Example" }).waitFor();
+    const s = await apiSession(vaultUser);
+    const c = (await s.ciphers()).find((x) => x.name === "Example");
+    s.done();
+    assert.equal(c?.login.username, "alice");
+    assert.equal(c?.login.password.length, 20);
+    assert.deepEqual(c?.login.uris.map((u: { uri: string }) => u.uri), ["example.com", "https://login.example.com"]);
+  });
+
+  await step("edit password keeps history; stale edits are refused by the server", async () => {
+    await rows().filter({ hasText: "GitHub" }).click();
+    await page.getByRole("button", { name: "Edit" }).click();
+    await fill("Password", "gh-secret-2");
+    await page.getByRole("button", { name: "Save" }).click();
+    await page.getByRole("heading", { name: "GitHub" }).waitFor();
+    const s = await apiSession(vaultUser);
+    const c = (await s.ciphers()).find((x) => x.name === "GitHub");
+    s.done();
+    assert.equal(c?.login.password, "gh-secret-2");
+    assert.equal(c?.passwordHistory?.[0]?.password, "gh-secret-1");
+    assert.equal(c?.fields?.[0]?.value, "4321", "custom field lost on edit");
+    assert.equal(c?.login.totp, TOTP_KEY, "totp lost on edit");
+    // Another client edits it; our now-stale copy must not overwrite that (server granularity is 1 s).
+    await page.waitForTimeout(1500);
+    const other = await apiSession(vaultUser);
+    await other.update({ ...c, notes: "edited elsewhere" });
+    other.done();
+    await page.getByRole("button", { name: "Edit" }).click();
+    await fill("Password", "gh-secret-3");
+    await page.getByRole("button", { name: "Save" }).click();
+    await page.getByRole("alert").filter({ hasText: "out of date" }).waitFor();
+    await page.getByRole("button", { name: "Cancel" }).click();
+    await back();
+  });
+
+  await step("external change arrives with sync", async () => {
+    const s = await apiSession(vaultUser);
+    await s.create({ type: 2, name: "Added elsewhere", secureNote: { type: 0 } });
+    s.done();
+    await page.getByRole("button", { name: "Sync now" }).click();
+    await rows().filter({ hasText: "Added elsewhere" }).waitFor();
+  });
+
+  await step("move to trash", async () => {
+    await rows().filter({ hasText: "Wifi note" }).click();
+    await page.getByRole("button", { name: "Move to trash" }).click();
+    await page.getByRole("button", { name: "Tap again to move to trash" }).click();
+    await page.getByRole("status").filter({ hasText: "Moved to trash" }).waitFor();
+    assert.equal(await rows().filter({ hasText: "Wifi note" }).count(), 0);
+    const s = await apiSession(vaultUser);
+    const c = (await s.ciphers()).find((x) => x.name === "Wifi note");
+    s.done();
+    assert.ok(c?.deletedDate, "not in server trash");
+  });
+
+  await step("generator: password and passphrase", async () => {
+    await page.getByRole("button", { name: "Generator" }).click();
+    const out = page.getByRole("status", { name: "Generated value" }).or(page.locator("output"));
+    await page.waitForFunction(() => (document.querySelector("output")?.textContent ?? "…") !== "…");
+    assert.equal((await out.first().innerText()).length, 20);
+    await page.getByRole("button", { name: "Passphrase" }).click();
+    await page.waitForFunction(() => (document.querySelector("output")?.textContent ?? "").split("-").length === 5);
+  });
+
+  await step("lock clears decrypted vault from the popup", async () => {
+    await page.getByRole("button", { name: "Vault" }).click();
+    await page.getByRole("button", { name: "Lock now" }).click();
+    await page.getByRole("heading", { name: "Vault locked" }).waitFor();
+    assert.ok(!(await page.locator("#app").innerText()).includes("GitHub"));
   });
 
   console.log(`\n${passed.length} steps passed (${await ctx.browser()?.version() ?? "persistent context"})`);

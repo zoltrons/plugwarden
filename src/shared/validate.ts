@@ -15,6 +15,9 @@ export const str: Validator<string> = (v, p) => (typeof v === "string" ? v : fai
 export const num: Validator<number> = (v, p) => (typeof v === "number" && Number.isFinite(v) ? v : fail(p, "number", v));
 export const bool: Validator<boolean> = (v, p) => (typeof v === "boolean" ? v : fail(p, "boolean", v));
 export const unknownValue: Validator<unknown> = (v) => v;
+/** Plain JSON object with unvalidated contents (checked further by its consumer). */
+export const record: Validator<Record<string, unknown>> = (v, p) =>
+  v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : fail(p, "object", v);
 
 export const opt =
   <T>(inner: Validator<T>): Validator<T | undefined> =>

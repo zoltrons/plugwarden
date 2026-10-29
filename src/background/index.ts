@@ -14,17 +14,17 @@ import {
   unlock,
   UserError,
 } from "./account.ts";
-import { coreAlive } from "./core.ts";
+import { coreAlive, coreCall } from "./core.ts";
 import { AUTOLOCK_ALARM, lockNow, onIdleStateChanged, touchAutoLock } from "./lock.ts";
 import {
   getLocal,
   getSession,
   getSettings,
-  removeLocal,
   restrictStorageAccess,
   setLocal,
   updateSession,
 } from "./store.ts";
+import { CLIPBOARD_ALARM, clearClipboard, list as vaultList, requireUnlocked, save, sync, trash } from "./vault.ts";
 
 async function getState(): Promise<State> {
   const [server, account, session, settings] = await Promise.all([
@@ -62,15 +62,33 @@ async function setServer(input: string): Promise<void> {
     throw new UserError("badServer", "This does not look like a Bitwarden-compatible server");
   });
   const previous = await getLocal("server");
-  if (previous && previous.url !== url) {
-    await lockNow();
-    await removeLocal("account");
-  }
+  if (previous && previous.url !== url) await logout();
   await setLocal("server", { url, version: info.version, name: info.name });
 }
 
-async function handle(req: Request): Promise<State> {
+/** Vault requests return their own data; everything else returns the new State. */
+async function handle(req: Request): Promise<unknown> {
   switch (req.type) {
+    case "vaultList":
+    case "sync":
+    case "getItem":
+    case "saveItem":
+    case "deleteItem":
+    case "totp":
+    case "generate": {
+      await requireUnlocked();
+      await touchAutoLock();
+      if (req.type === "vaultList") return vaultList();
+      if (req.type === "sync") return (await sync(req.force)) ? vaultList() : null;
+      if (req.type === "getItem") return coreCall({ op: "getCipher", id: req.id });
+      if (req.type === "saveItem") return save(req.item);
+      if (req.type === "deleteItem") return trash(req.id);
+      if (req.type === "totp") return coreCall({ op: "totp", id: req.id });
+      return coreCall({ op: "generate", options: req.options });
+    }
+    case "clipboardCopied":
+      await chrome.alarms.create(CLIPBOARD_ALARM, { delayInMinutes: 0.5 });
+      return null;
     case "getState":
       break;
     case "setServer":
@@ -111,7 +129,7 @@ async function handle(req: Request): Promise<State> {
   return state;
 }
 
-function toError(e: unknown): Response {
+function toError(e: unknown): Response<unknown> {
   let code: ErrorCode | undefined;
   let error = e instanceof Error ? e.message : String(e);
   if (e instanceof UserError) code = e.code;
@@ -128,7 +146,7 @@ const POPUP_URL = chrome.runtime.getURL("popup.html");
 // Serialize state-changing requests so e.g. a double-clicked "Log in" cannot interleave.
 let queue: Promise<unknown> = Promise.resolve();
 
-chrome.runtime.onMessage.addListener((msg: unknown, sender, reply: (r: Response) => void) => {
+chrome.runtime.onMessage.addListener((msg: unknown, sender, reply: (r: Response<unknown>) => void) => {
   // URL check is enough: popup.html is not web-accessible, so only our own page can have it (also when opened in a tab).
   if (sender.id !== chrome.runtime.id || !sender.url?.startsWith(POPUP_URL)) return false;
   if ((msg as { target?: unknown } | null)?.target !== undefined) return false; // offscreen traffic
@@ -139,14 +157,16 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, reply: (r: Response)
     reply(toError(e));
     return false;
   }
-  const run = () => handle(req).then((data) => reply({ ok: true, data }), (e: unknown) => reply(toError(e)));
-  if (req.type === "getState") void run();
+  const run = () => handle(req).then((data) => reply({ ok: true, data } as Response<unknown>), (e: unknown) => reply(toError(e)));
+  // Reads run immediately; anything that changes state or talks to the server is queued.
+  if (["getState", "vaultList", "getItem", "totp", "generate"].includes(req.type)) void run();
   else queue = queue.then(run, run);
   return true;
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === AUTOLOCK_ALARM) void lockNow();
+  if (alarm.name === CLIPBOARD_ALARM) void clearClipboard();
 });
 
 chrome.idle.onStateChanged.addListener((state) => void onIdleStateChanged(state));

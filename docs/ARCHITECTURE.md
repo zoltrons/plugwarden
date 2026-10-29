@@ -27,7 +27,7 @@ Plugwarden is a Manifest V3 Chrome extension (Chromium 156+) that talks to a sel
   needs from `chrome.storage.*`; nothing important lives in globals (the SW can be killed at any time).
   Owns network I/O (`src/transport`), alarms (auto-lock, token refresh, periodic sync), `idle`,
   `commands`, context menu, and on-demand `chrome.scripting.executeScript` for fill.
-* **Offscreen document** (`src/offscreen`, reason `WORKERS`): spawns one dedicated worker
+* **Offscreen document** (`src/offscreen`, reasons `WORKERS` + `CLIPBOARD`): spawns one dedicated worker
   (`worker.ts`) that holds the WASM module, the master key during login/2FA and the unlocked user key.
   Lock terminates the worker and closes the document, which also frees the 64+ MiB Argon2id grew the
   WASM memory to. The SW never holds the user key, only encrypted blobs it passes through.
@@ -86,10 +86,10 @@ scripts may only send a whitelisted subset of message types).
 
 ## Permissions
 
-`storage`, `alarms`, `idle`, `offscreen`, plus `optional_host_permissions` `https://*/*`,
+`storage`, `alarms`, `idle`, `offscreen`, `clipboardWrite` (clearing copied secrets), plus `optional_host_permissions` `https://*/*`,
 `http://*/*`: Vaultwarden's CORS only allows its own origin, so the extension needs a host permission
 for the server. It is requested at setup for that one origin only (`chrome.permissions.request`).
-`activeTab`, `scripting`, `clipboardWrite` arrive with the phases that use them.
+`activeTab` and `scripting` arrive with autofill (Phase 3).
 
 ## Storage and lock model
 

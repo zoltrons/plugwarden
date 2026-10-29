@@ -52,7 +52,7 @@
   sync: Register/profile/KDF data shapes.
 - repo: vaultwarden
   path: src/api/core/ciphers.rs
-  local: src/transport/ciphers.ts (Phase 2), tests/e2e/run.ts
+  local: src/transport/vault.ts, tests/e2e/run.ts
   sync: CipherData required fields (e.g. encryptedFor), sync response shape.
 - repo: vaultwarden
   path: src/api/core/mod.rs

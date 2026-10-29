@@ -1,7 +1,7 @@
 // Typed message bus. Every message crossing a context boundary is validated on receipt.
 //   popup  --Request-->  service worker  --OffscreenRequest-->  offscreen doc  --postMessage-->  worker
 import { AUTO_LOCK_CHOICES } from "./constants.ts";
-import { bool, literal, num, obj, opt, str, type Validator, ValidationError } from "./validate.ts";
+import { arr, bool, literal, num, obj, opt, record, str, unknownValue, type Validator, ValidationError } from "./validate.ts";
 
 // ---------- popup -> service worker ----------
 
@@ -15,7 +15,16 @@ export type Request =
   | { type: "unlock"; password: string }
   | { type: "lock" }
   | { type: "logout" }
-  | { type: "setSettings"; autoLockMinutes?: number; lockOnSystemLock?: boolean };
+  | { type: "setSettings"; autoLockMinutes?: number; lockOnSystemLock?: boolean }
+  // vault (unlocked only)
+  | { type: "vaultList" }
+  | { type: "sync"; force: boolean }
+  | { type: "getItem"; id: string }
+  | { type: "saveItem"; item: Record<string, unknown> }
+  | { type: "deleteItem"; id: string }
+  | { type: "totp"; id: string }
+  | { type: "generate"; options: Record<string, unknown> }
+  | { type: "clipboardCopied" };
 
 const requestValidators: { [K in Request["type"]]: Validator<Extract<Request, { type: K }>> } = {
   getState: obj({ type: literal("getState") }),
@@ -33,6 +42,21 @@ const requestValidators: { [K in Request["type"]]: Validator<Extract<Request, { 
       throw new ValidationError("autoLockMinutes: not an allowed choice");
     return s;
   },
+  vaultList: obj({ type: literal("vaultList") }),
+  sync: obj({ type: literal("sync"), force: bool }),
+  getItem: obj({ type: literal("getItem"), id: str }),
+  saveItem: (v, p) => {
+    const s = obj({ type: literal("saveItem"), item: record })(v, p);
+    // Phase 2 edits personal Login (1) and Secure note (2) items only.
+    if (![1, 2].includes(s.item.type as number)) throw new ValidationError("item.type: only login and note can be edited");
+    if (typeof s.item.name !== "string" || !s.item.name.trim()) throw new ValidationError("item.name: required");
+    if (s.item.organizationId) throw new ValidationError("organization items are read-only");
+    return s;
+  },
+  deleteItem: obj({ type: literal("deleteItem"), id: str }),
+  totp: obj({ type: literal("totp"), id: str }),
+  generate: obj({ type: literal("generate"), options: record }),
+  clipboardCopied: obj({ type: literal("clipboardCopied") }),
 };
 
 export function parseRequest(v: unknown): Request {
@@ -60,6 +84,31 @@ export interface State {
   email?: string;
   twoFactor?: TwoFactorChallenge;
   settings: Settings;
+}
+
+/** Decrypted list entry. No passwords, TOTP secrets or notes beyond a one-line preview. */
+export interface VaultItem {
+  id: string;
+  type: number;
+  name: string;
+  sub: string;
+  uris: string[];
+  folderId?: string;
+  favorite: boolean;
+  readOnly: boolean;
+  hasTotp: boolean;
+  failed?: boolean;
+}
+
+export interface Folder {
+  id: string;
+  name: string;
+}
+
+export interface VaultList {
+  items: VaultItem[];
+  folders: Folder[];
+  syncedAt?: number;
 }
 
 export type Response<T = State> = { ok: true; data: T } | { ok: false; error: string; code?: ErrorCode };
@@ -92,7 +141,18 @@ export type CoreRequest =
   | { op: "unlock"; handle: number; protectedUserKey: string; encryptedPrivateKey?: string }
   | { op: "freeKey"; handle: number }
   | { op: "lock" }
-  | { op: "status" };
+  | { op: "status" }
+  // vault: the worker keeps the decrypted vault in memory
+  | { op: "loadVault"; ciphers: unknown[]; folders: unknown[]; orgKeys: Record<string, string> }
+  | { op: "upsertCipher"; cipher: Record<string, unknown> }
+  | { op: "removeCipher"; id: string }
+  | { op: "listVault" }
+  | { op: "getCipher"; id: string }
+  | { op: "prepareSave"; item: Record<string, unknown> }
+  | { op: "totp"; id: string }
+  | { op: "generate"; options: Record<string, unknown> }
+  // handled by the offscreen document itself, not the worker
+  | { op: "clearClipboard" };
 
 export type CoreResult = { ok: true; value: unknown } | { ok: false; error: string };
 
@@ -107,6 +167,15 @@ const coreValidators: { [K in CoreRequest["op"]]: Validator<Extract<CoreRequest,
   freeKey: obj({ op: literal("freeKey"), handle: num }),
   lock: obj({ op: literal("lock") }),
   status: obj({ op: literal("status") }),
+  loadVault: obj({ op: literal("loadVault"), ciphers: arr(unknownValue), folders: arr(unknownValue), orgKeys: record as Validator<Record<string, string>> }),
+  upsertCipher: obj({ op: literal("upsertCipher"), cipher: record }),
+  removeCipher: obj({ op: literal("removeCipher"), id: str }),
+  listVault: obj({ op: literal("listVault") }),
+  getCipher: obj({ op: literal("getCipher"), id: str }),
+  prepareSave: obj({ op: literal("prepareSave"), item: record }),
+  totp: obj({ op: literal("totp"), id: str }),
+  generate: obj({ op: literal("generate"), options: record }),
+  clearClipboard: obj({ op: literal("clearClipboard") }),
 };
 
 export function parseCoreRequest(v: unknown): CoreRequest {

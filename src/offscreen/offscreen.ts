@@ -50,6 +50,16 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, reply: (r: CoreResul
     reply({ ok: true, value: true });
     return false;
   }
+  if (req.op === "clearClipboard") {
+    // Offscreen documents have no focus, so navigator.clipboard is unavailable; execCommand works.
+    const onCopy = (e: ClipboardEvent) => {
+      e.clipboardData?.setData("text/plain", "");
+      e.preventDefault();
+    };
+    document.addEventListener("copy", onCopy, { once: true });
+    reply({ ok: true, value: document.execCommand("copy") });
+    return false;
+  }
   if (req.op === "status" && !worker) {
     reply({ ok: true, value: { unlocked: false } });
     return false;

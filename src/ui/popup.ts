@@ -1,29 +1,10 @@
 // Popup. Talks only to the service worker through the typed message bus: no crypto, no network.
 import { AUTO_LOCK_CHOICES, TWO_FACTOR } from "../shared/constants.ts";
-import type { Request, Response, State } from "../shared/messages.ts";
+import type { Request, State } from "../shared/messages.ts";
 import { normalizeServerUrl, originPattern } from "../shared/url.ts";
+import { type Child, h, send, t } from "./dom.ts";
 import { icon, type IconName } from "./icons.ts";
-
-const t = (key: string, ...subs: string[]): string => chrome.i18n.getMessage(key, subs) || key;
-
-type Child = Node | string | false | null | undefined;
-
-function h<K extends keyof HTMLElementTagNameMap>(
-  tag: K,
-  props: Record<string, unknown> = {},
-  ...children: Child[]
-): HTMLElementTagNameMap[K] {
-  const el = document.createElement(tag);
-  for (const [k, v] of Object.entries(props)) {
-    if (v === undefined || v === false) continue;
-    if (k.startsWith("on") && typeof v === "function") el.addEventListener(k.slice(2), v as EventListener);
-    else if (k === "class" || k.startsWith("aria-") || k.startsWith("data-") || k === "for" || k === "role")
-      el.setAttribute(k, String(v));
-    else (el as unknown as Record<string, unknown>)[k] = v;
-  }
-  for (const c of children) if (c) el.append(c);
-  return el;
-}
+import { type Ctx, generatorScreen, resetVault, toastEl, vaultScreen } from "./vault.ts";
 
 // ---------- state ----------
 
@@ -32,7 +13,7 @@ interface Ui {
   busyLabel?: string;
   error?: string;
   info?: string;
-  tab: "vault" | "settings";
+  tab: "vault" | "generator" | "settings";
   editServer: boolean;
   reveal: boolean;
   provider?: number;
@@ -42,18 +23,10 @@ const draft = { server: "", email: "", password: "", code: "", remember: false }
 const ui: Ui = { busy: false, tab: "vault", editServer: false, reveal: false };
 let state: State | undefined;
 
-async function send(req: Request): Promise<Response> {
-  try {
-    return ((await chrome.runtime.sendMessage(req)) as Response | undefined) ?? { ok: false, error: t("errNoReply") };
-  } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : String(e) };
-  }
-}
-
 async function act(req: Request, busyLabel?: string): Promise<boolean> {
   Object.assign(ui, { busy: true, busyLabel, error: undefined, info: undefined });
   render();
-  const res = await send(req);
+  const res = await send<State>(req);
   ui.busy = false;
   ui.busyLabel = undefined;
   if (res.ok) state = res.data;
@@ -415,26 +388,18 @@ function settingsTab(s: State): HTMLElement {
   );
 }
 
-function vaultTab(): HTMLElement {
-  return h(
-    "div",
-    { class: "page" },
-    h(
-      "div",
-      { class: "top" },
-      h("div", { class: "search", style: "flex:1" }, icon("search"), h("input", { type: "search", placeholder: t("searchVault"), disabled: true, "aria-label": t("searchVault") })),
-      h("button", { type: "button", class: "icon-btn", "aria-label": t("lockNow"), onclick: () => void act({ type: "lock" }) }, icon("lock")),
-    ),
-    h("div", { class: "empty" }, icon("vault"), h("strong", {}, t("vaultEmptyTitle")), h("span", {}, t("vaultEmptyBody"))),
-    errorBox(),
-  );
-}
-
 function unlockedView(s: State): DocumentFragment {
   const frag = document.createDocumentFragment();
   frag.append(
-    ui.tab === "settings" ? settingsTab(s) : vaultTab(),
-    h("nav", { class: "nav", "aria-label": t("navigation") }, navButton("vault", t("vault"), "home"), navButton("settings", t("settings"), "settings")),
+    ui.tab === "settings" ? settingsTab(s) : ui.tab === "generator" ? generatorScreen(vaultCtx) : vaultScreen(vaultCtx),
+    h(
+      "nav",
+      { class: "nav", "aria-label": t("navigation") },
+      navButton("vault", t("vault"), "home"),
+      navButton("generator", t("generator"), "dice"),
+      navButton("settings", t("settings"), "settings"),
+    ),
+    toastEl() || "",
   );
   return frag;
 }
@@ -442,12 +407,16 @@ function unlockedView(s: State): DocumentFragment {
 // ---------- render ----------
 
 const app = document.getElementById("app")!;
+const vaultCtx: Ctx = { rerender: () => render(), lock: () => void act({ type: "lock" }) };
 let firstRender = true;
 
 function render(): void {
   if (!state) return;
   const s = state;
-  if (s.phase !== "unlocked") ui.tab = "vault"; // a new session always starts on the vault
+  if (s.phase !== "unlocked") {
+    ui.tab = "vault"; // a new session always starts on the vault
+    resetVault(); // and holds no decrypted data from the previous one
+  }
   let view: Node;
   if (s.phase === "setup" || ui.editServer) view = setupView();
   else if (s.phase === "loggedOut") view = loginView();
@@ -465,7 +434,7 @@ function render(): void {
   }
 }
 
-void send({ type: "getState" }).then((res) => {
+void send<State>({ type: "getState" }).then((res) => {
   if (res.ok) state = res.data;
   else {
     state = { phase: "setup", settings: { autoLockMinutes: 15, lockOnSystemLock: true } };

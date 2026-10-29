@@ -18,6 +18,17 @@ const paths = {
   phone: "M7 3h10v18H7z M11 18h2",
   vault: "M4 5h16v14H4z M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z M12 9v-1 M12 16v-1 M8 19v2 M16 19v2",
   user: "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8z M4 21a8 8 0 0 1 16 0",
+  copy: "M9 9h11v11H9z M5 15H4V4h11v1",
+  plus: "M12 5v14 M5 12h14",
+  refresh: "M20 11a8 8 0 1 0-2.3 5.7 M20 4v7h-7",
+  edit: "M4 20h4L19 9l-4-4L4 16z M14 6l4 4",
+  trash: "M4 7h16 M10 11v6 M14 11v6 M6 7l1 13h10l1-13 M9 7V4h6v3",
+  star: "M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z",
+  globe: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z M3 12h18 M12 3a14 14 0 0 1 0 18 M12 3a14 14 0 0 0 0 18",
+  folder: "M3 6h6l2 2h10v11H3z",
+  note: "M5 4h14v16H5z M8 9h8 M8 13h8 M8 17h5",
+  dice: "M4 4h16v16H4z M8.5 8.5h.01 M15.5 8.5h.01 M12 12h.01 M8.5 15.5h.01 M15.5 15.5h.01",
+  attach: "M20 11l-8 8a5 5 0 0 1-7-7l8-8a3.5 3.5 0 0 1 5 5l-8 8a2 2 0 0 1-3-3l7-7",
 } as const;
 
 export type IconName = keyof typeof paths;

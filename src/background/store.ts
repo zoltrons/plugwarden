@@ -36,7 +36,18 @@ export interface Session {
   pending?: PendingLogin;
 }
 
+/** /api/sync data exactly as the server sent it (encrypted). */
+export interface VaultCache {
+  /** server revision date, ms */
+  revision: number;
+  syncedAt: number;
+  ciphers: unknown[];
+  folders: unknown[];
+  orgKeys: Record<string, string>;
+}
+
 interface LocalSchema {
+  vault: VaultCache;
   deviceId: string;
   server: Server;
   settings: Settings;

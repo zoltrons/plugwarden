@@ -9,8 +9,9 @@ async function ensureOffscreen(): Promise<void> {
   creating ??= chrome.offscreen
     .createDocument({
       url: OFFSCREEN_URL,
-      reasons: [chrome.offscreen.Reason.WORKERS],
-      justification: "Runs the vault crypto (WebAssembly) in a dedicated worker that holds the unlocked keys.",
+      reasons: [chrome.offscreen.Reason.WORKERS, chrome.offscreen.Reason.CLIPBOARD],
+      justification:
+        "Runs the vault crypto (WebAssembly) in a dedicated worker that holds the unlocked keys, and clears copied passwords from the clipboard.",
     })
     .finally(() => (creating = undefined));
   await creating;

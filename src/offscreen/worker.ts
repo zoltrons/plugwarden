@@ -3,6 +3,7 @@
 // memory that Argon2id grew to 64+ MiB).
 import init, * as core from "../../dist/wasm/core_wasm.js";
 import { type CoreRequest, type CoreResult, parseCoreRequest } from "../shared/messages.ts";
+import * as vault from "./vault.ts";
 
 const ready = init({ module_or_path: new URL("core_wasm_bg.wasm", import.meta.url) });
 
@@ -37,6 +38,22 @@ function run(req: CoreRequest): unknown {
       return true;
     case "status":
       return { unlocked: core.isUnlocked() };
+    case "loadVault":
+      return vault.loadVault(req.ciphers, req.folders, req.orgKeys);
+    case "upsertCipher":
+      return vault.upsertCipher(req.cipher);
+    case "removeCipher":
+      return vault.removeCipher(req.id);
+    case "listVault":
+      return vault.listVault();
+    case "getCipher":
+      return vault.getCipher(req.id);
+    case "prepareSave":
+      return vault.prepareSave(req.item);
+    case "totp":
+      return vault.totp(req.id);
+    case "generate":
+      return vault.generate(req.options);
   }
 }
 

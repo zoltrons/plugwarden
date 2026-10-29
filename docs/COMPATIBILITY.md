@@ -61,7 +61,11 @@ on 2026-10-29 by `spike/vw-flow.mjs`, unless marked otherwise.
   `bankAccount, driversLicense, passport, sshKey, archivedDate, permissions`.
 * **`POST /api/ciphers` and `PUT /api/ciphers/{id}` require `encryptedFor` (user id)**; without it
   the request fails with 422 (`missing field encryptedFor`). Added in the web-v2025.6.0 protocol.
-* `DELETE /api/ciphers/{id}` hard-deletes; soft delete (`PUT .../delete`) not tested yet.
+* `DELETE /api/ciphers/{id}` hard-deletes; `PUT /api/ciphers/{id}/delete` moves to trash (sets
+  `deletedDate`, verified). Plugwarden only uses the trash.
+* `PUT /api/ciphers/{id}` with `lastKnownRevisionDate` (ISO 8601) is refused with "The client copy of
+  this cipher is out of date" when the server copy is more than 1 s newer (verified).
+* Folders: `POST /api/folders {name: EncString}`; sync returns them encrypted under the user key.
 * `GET /api/accounts/revision-date` → integer (ms since epoch).
 
 ## CORS and two-step login (verified in Phase 1)

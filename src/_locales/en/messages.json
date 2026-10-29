@@ -1,52 +1,338 @@
 {
-  "appName": { "message": "Plugwarden" },
-  "errNoReply": { "message": "The extension did not answer. Try again." },
-  "showPassword": { "message": "Show password" },
-  "hidePassword": { "message": "Hide password" },
-  "masterPassword": { "message": "Master password" },
-  "setupSubtitle": { "message": "Connect to your Vaultwarden server" },
-  "serverUrl": { "message": "Server URL" },
-  "continue": { "message": "Continue" },
-  "cancel": { "message": "Cancel" },
-  "back": { "message": "Back" },
-  "setupHint": { "message": "Plugwarden only asks for access to this one server." },
-  "errPermissionDenied": { "message": "Access to the server was not granted." },
-  "busyCheckingServer": { "message": "Checking server…" },
-  "changeServer": { "message": "Change server" },
-  "loginTitle": { "message": "Log in" },
-  "email": { "message": "Email" },
-  "logIn": { "message": "Log in" },
-  "busyLoggingIn": { "message": "Deriving key and logging in…" },
-  "twoFactorTitle": { "message": "Two-step login" },
-  "twoFactorSubtitle": { "message": "Confirm it's you, $P1$", "placeholders": { "p1": { "content": "$1" } } },
-  "twoFactorMethod": { "message": "Verification method" },
-  "providerAuthenticator": { "message": "Authenticator app" },
-  "providerEmail": { "message": "Email" },
-  "twoFactorUnsupported": { "message": "This account only offers two-step methods Plugwarden does not support yet." },
-  "busySendingEmail": { "message": "Sending code…" },
-  "sendEmailCode": { "message": "Send code to $P1$", "placeholders": { "p1": { "content": "$1" } } },
-  "emailSent": { "message": "Code sent to $P1$.", "placeholders": { "p1": { "content": "$1" } } },
-  "verificationCode": { "message": "Verification code" },
-  "rememberDevice": { "message": "Remember this device" },
-  "busyVerifying": { "message": "Verifying…" },
-  "lockedTitle": { "message": "Vault locked" },
-  "unlock": { "message": "Unlock" },
-  "busyUnlocking": { "message": "Unlocking…" },
-  "logOut": { "message": "Log out" },
-  "searchVault": { "message": "Search vault" },
-  "vaultEmptyTitle": { "message": "Your vault is unlocked" },
-  "vaultEmptyBody": { "message": "Items, search and sync arrive in the next phase." },
-  "vault": { "message": "Vault" },
-  "settings": { "message": "Settings" },
-  "navigation": { "message": "Navigation" },
-  "account": { "message": "Account" },
-  "loggedIn": { "message": "Logged in" },
-  "serverVersion": { "message": "Server version $P1$", "placeholders": { "p1": { "content": "$1" } } },
-  "security": { "message": "Security" },
-  "autoLock": { "message": "Auto-lock" },
-  "autoLockRestart": { "message": "On browser restart" },
-  "minutes": { "message": "$P1$ min", "placeholders": { "p1": { "content": "$1" } } },
-  "hours": { "message": "$P1$ h", "placeholders": { "p1": { "content": "$1" } } },
-  "lockOnSystemLock": { "message": "Lock when the computer locks" },
-  "lockNow": { "message": "Lock now" }
+  "appName": {
+    "message": "Plugwarden"
+  },
+  "errNoReply": {
+    "message": "The extension did not answer. Try again."
+  },
+  "showPassword": {
+    "message": "Show password"
+  },
+  "hidePassword": {
+    "message": "Hide password"
+  },
+  "masterPassword": {
+    "message": "Master password"
+  },
+  "setupSubtitle": {
+    "message": "Connect to your Vaultwarden server"
+  },
+  "serverUrl": {
+    "message": "Server URL"
+  },
+  "continue": {
+    "message": "Continue"
+  },
+  "cancel": {
+    "message": "Cancel"
+  },
+  "back": {
+    "message": "Back"
+  },
+  "setupHint": {
+    "message": "Plugwarden only asks for access to this one server."
+  },
+  "errPermissionDenied": {
+    "message": "Access to the server was not granted."
+  },
+  "busyCheckingServer": {
+    "message": "Checking server…"
+  },
+  "changeServer": {
+    "message": "Change server"
+  },
+  "loginTitle": {
+    "message": "Log in"
+  },
+  "email": {
+    "message": "Email"
+  },
+  "logIn": {
+    "message": "Log in"
+  },
+  "busyLoggingIn": {
+    "message": "Deriving key and logging in…"
+  },
+  "twoFactorTitle": {
+    "message": "Two-step login"
+  },
+  "twoFactorSubtitle": {
+    "message": "Confirm it's you, $P1$",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "twoFactorMethod": {
+    "message": "Verification method"
+  },
+  "providerAuthenticator": {
+    "message": "Authenticator app"
+  },
+  "providerEmail": {
+    "message": "Email"
+  },
+  "twoFactorUnsupported": {
+    "message": "This account only offers two-step methods Plugwarden does not support yet."
+  },
+  "busySendingEmail": {
+    "message": "Sending code…"
+  },
+  "sendEmailCode": {
+    "message": "Send code to $P1$",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "emailSent": {
+    "message": "Code sent to $P1$.",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "verificationCode": {
+    "message": "Verification code"
+  },
+  "rememberDevice": {
+    "message": "Remember this device"
+  },
+  "busyVerifying": {
+    "message": "Verifying…"
+  },
+  "lockedTitle": {
+    "message": "Vault locked"
+  },
+  "unlock": {
+    "message": "Unlock"
+  },
+  "busyUnlocking": {
+    "message": "Unlocking…"
+  },
+  "logOut": {
+    "message": "Log out"
+  },
+  "searchVault": {
+    "message": "Search vault"
+  },
+  "vault": {
+    "message": "Vault"
+  },
+  "settings": {
+    "message": "Settings"
+  },
+  "navigation": {
+    "message": "Navigation"
+  },
+  "account": {
+    "message": "Account"
+  },
+  "loggedIn": {
+    "message": "Logged in"
+  },
+  "serverVersion": {
+    "message": "Server version $P1$",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "security": {
+    "message": "Security"
+  },
+  "autoLock": {
+    "message": "Auto-lock"
+  },
+  "autoLockRestart": {
+    "message": "On browser restart"
+  },
+  "minutes": {
+    "message": "$P1$ min",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "hours": {
+    "message": "$P1$ h",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "lockOnSystemLock": {
+    "message": "Lock when the computer locks"
+  },
+  "lockNow": {
+    "message": "Lock now"
+  },
+  "decryptFailed": {
+    "message": "Could not decrypt this item"
+  },
+  "untitled": {
+    "message": "(no name)"
+  },
+  "favorite": {
+    "message": "Favorite"
+  },
+  "noMatches": {
+    "message": "No matching items"
+  },
+  "vaultEmpty": {
+    "message": "Your vault is empty"
+  },
+  "syncNow": {
+    "message": "Sync now"
+  },
+  "folders": {
+    "message": "Folders"
+  },
+  "allItems": {
+    "message": "All"
+  },
+  "noFolder": {
+    "message": "No folder"
+  },
+  "newItem": {
+    "message": "New item"
+  },
+  "editItem": {
+    "message": "Edit item"
+  },
+  "copied": {
+    "message": "Copied — clears in 30 s"
+  },
+  "copyField": {
+    "message": "Copy $P1$",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "oneTimeCode": {
+    "message": "One-time code"
+  },
+  "secondsLeft": {
+    "message": "$P1$ seconds left",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "movedToTrash": {
+    "message": "Moved to trash"
+  },
+  "confirmTrash": {
+    "message": "Tap again to move to trash"
+  },
+  "moveToTrash": {
+    "message": "Move to trash"
+  },
+  "edit": {
+    "message": "Edit"
+  },
+  "readOnlyItem": {
+    "message": "Organization items are read-only in Plugwarden for now."
+  },
+  "websites": {
+    "message": "Websites"
+  },
+  "customFields": {
+    "message": "Custom fields"
+  },
+  "notes": {
+    "message": "Notes"
+  },
+  "details": {
+    "message": "Details"
+  },
+  "folder": {
+    "message": "Folder"
+  },
+  "attachmentsCount": {
+    "message": "$P1$ attachment(s) — download from the web vault",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "username": {
+    "message": "Username"
+  },
+  "password": {
+    "message": "Password"
+  },
+  "nameRequired": {
+    "message": "Enter a name"
+  },
+  "saved": {
+    "message": "Saved"
+  },
+  "itemType": {
+    "message": "Item type"
+  },
+  "typeLogin": {
+    "message": "Login"
+  },
+  "typeNote": {
+    "message": "Note"
+  },
+  "name": {
+    "message": "Name"
+  },
+  "generatePassword": {
+    "message": "Generate password"
+  },
+  "totpSecret": {
+    "message": "Authenticator key (TOTP)"
+  },
+  "websitesOnePerLine": {
+    "message": "Websites (one per line)"
+  },
+  "save": {
+    "message": "Save"
+  },
+  "generator": {
+    "message": "Generator"
+  },
+  "generatedValue": {
+    "message": "Generated value"
+  },
+  "regenerate": {
+    "message": "Regenerate"
+  },
+  "typePassword": {
+    "message": "Password"
+  },
+  "typePassphrase": {
+    "message": "Passphrase"
+  },
+  "length": {
+    "message": "Length"
+  },
+  "avoidAmbiguous": {
+    "message": "Avoid ambiguous characters"
+  },
+  "words": {
+    "message": "Words"
+  },
+  "separator": {
+    "message": "Separator"
+  },
+  "capitalize": {
+    "message": "Capitalize"
+  },
+  "includeNumber": {
+    "message": "Include number"
+  }
 }

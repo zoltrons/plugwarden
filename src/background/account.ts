@@ -70,6 +70,7 @@ async function completeLogin(email: string, kdf: KdfParams, handle: number, t: T
     throw new UserError("badServer", `Could not decrypt the account key: ${(e as Error).message}`);
   }
   const tokens = toTokens(t);
+  await removeLocal("vault"); // never show a previous account's cache
   const account: Account = {
     email,
     userId: jwtSubject(t.access_token),
@@ -208,7 +209,7 @@ export async function unlock(password: string): Promise<void> {
 
 export async function logout(): Promise<void> {
   await lockNow();
-  await removeLocal("account");
+  await removeLocal("account", "vault");
   await updateSession({ accessToken: undefined, accessExpiresAt: undefined });
 }
 
