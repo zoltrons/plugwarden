@@ -15,7 +15,7 @@ Server: Vaultwarden 1.37.4 (local Docker).
 * Refresh-token grant (`accessToken()` in `src/background/account.ts`, transport tested).
 * Lock / unlock, auto-lock via `chrome.alarms` (1 min – 4 h, or browser restart), lock on OS lock via `chrome.idle`.
 * Keys live only in a worker inside the offscreen document; lock terminates it.
-* Popup in a Material You style (Keyguard as visual reference, no assets copied), light + dark.
+* Popup with its own dense admin-style design system (no third-party assets copied), light + dark.
 
 ## Verified (`npm run test:e2e`, all 10 steps pass)
 

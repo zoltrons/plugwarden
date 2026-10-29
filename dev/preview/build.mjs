@@ -31,6 +31,8 @@ await esbuild.build({
 
 copyFileSync(join(root, "src/ui/popup.css"), join(out, "popup.css"));
 
+copyFileSync(join(here, "inline.html"), join(out, "inline.html"));
+
 const shell = readFileSync(join(root, "src/ui/popup.html"), "utf8");
 for (const [file, entry, body] of [
   ["index.html", "popup", "<body>"],

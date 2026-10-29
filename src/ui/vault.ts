@@ -371,8 +371,8 @@ function itemRow(ctx: Ctx, i: VaultItem): HTMLElement {
       h("span", { class: "title" }, name),
       h("span", { class: "sub" }, i.sub || t(TYPE_LABEL[i.type] ?? "untitled")),
     ),
-    i.hasTotp ? icon("timer", t("oneTimeCode")) : null,
-    i.favorite ? icon("star", t("favorite")) : null,
+    i.hasTotp ? h("span", { class: "meta" }, icon("timer", t("oneTimeCode"))) : null,
+    i.favorite ? h("span", { class: "meta fav" }, icon("star", t("favorite"))) : null,
     icon("chevron"),
   );
 }
@@ -966,7 +966,7 @@ function itemView(ctx: Ctx, id: string): HTMLElement {
       iconButton("back", t("back"), () => open(ctx, { kind: "list" })),
       spacer(),
       editable
-        ? iconButton("star", t(item.favorite ? "unfavorite" : "favorite"), () => void vaultAction(ctx, { type: "saveItem", item: { ...item, favorite: !item.favorite } }, "saved", false), {
+        ? iconButton(item.favorite ? "star" : "starBorder", t(item.favorite ? "unfavorite" : "favorite"), () => void vaultAction(ctx, { type: "saveItem", item: { ...item, favorite: !item.favorite } }, "saved", false), {
             class: `icon-btn${item.favorite ? " on" : ""}`,
             "aria-pressed": String(item.favorite === true),
           })

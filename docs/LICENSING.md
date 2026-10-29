@@ -13,6 +13,7 @@ Plugwarden is licensed **GPL-3.0-only**.
 | bitwarden/clients | GPL-3.0-only | Read as reference only. No source copied. |
 | publicsuffix/list | MPL-2.0 | Data file fetched at build time (`tools/fetch-psl.mjs`, pinned in `upstream.lock`) and shipped as `psl.json`. MPL-2.0 is GPL-compatible; ship its notice with releases. |
 | dani-garcia/vaultwarden | AGPL-3.0-only | Protocol reference and a test server in Docker. No code linked or copied. |
+| google/material-design-icons (`round` theme, the "Material Rounded" glyphs) | Apache-2.0 | SVG path data vendored in `src/ui/icons.ts` (43 glyphs, unmodified paths). Apache-2.0 is one-way compatible with GPL-3.0: the combined work ships under GPL-3.0 and the Apache notice is kept with the release. |
 
 Why GPL-3.0-only and not the Bitwarden SDK License: the SDK License only allows use in a
 "Compatible Application" for Bitwarden's own services; Plugwarden targets self-hosted Vaultwarden,
@@ -28,3 +29,5 @@ with GPL-3.0 terms and corresponding source (this repository at the released tag
 * Local modules that re-implement upstream behaviour (`cipher.rs`, `totp.rs`, `generator.rs`) are
   written from scratch against the behaviour and test vectors; `upstream-map.yaml` records what they track.
 * Never enable sdk-internal's `bitwarden-license` feature or any `bitwarden_license/` crate.
+* Icon path data comes from the upstream Apache-2.0 Material icons package, not from a
+  redistributor's proprietary bundle; `src/ui/icons.ts` keeps the upstream icon name for each glyph.

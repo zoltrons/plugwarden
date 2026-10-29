@@ -96,6 +96,12 @@ for (const scheme of ["light", "dark"]) {
     await page.screenshot({ path: join(shots, `${scheme}-${frame}.png`) });
     await page.close();
   }
+  // The inline menu as it appears on a page: same iframe sizing/offset/shadow as the content script.
+  const inline = await open("/inline.html", { width: 720, height: 470 });
+  await inline.emulateMedia({ colorScheme: scheme });
+  await inline.waitForTimeout(500);
+  await inline.screenshot({ path: join(shots, `${scheme}-inline.png`) });
+  await inline.close();
 }
 
 await browser.close();

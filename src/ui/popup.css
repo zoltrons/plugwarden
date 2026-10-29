@@ -1,11 +1,10 @@
 /* ============================================================================
    Plugwarden popup.
 
-   Visual language reverse-engineered from the shipped 1Password extension
-   (popup/index.css + inline/menu/menu.css): white surfaces on a 98% gray page,
-   1 px hairline separators, one blue accent (hsl(212 96% 47%)), Inter-flavoured
-   14/12 px type on a 1.3 line box, 8 px controls, 4 px menu items, 12 px
-   popup-level cards, and a light-blue tint for hover/selection.
+   Visual language: a neutral, dense admin surface — white cards on a 98% gray
+   page, 1 px hairline separators, one blue accent (hsl(212 96% 47%)), 14/12 px
+   type on a 1.3 line box, 8 px controls, 4 px menu items, 12 px popup-level
+   cards, and a light-blue tint for hover/selection.
 
    The screen layout and flows are this app's own.
    ========================================================================== */
@@ -13,29 +12,29 @@
 :root {
   color-scheme: light;
 
-  /* surfaces (1P: grayscale-white / -almost-white) */
+  /* surfaces */
   --bg: hsl(0 0% 98%);
   --surface: hsl(0 0% 100%);
   --surface-raised: hsl(0 0% 100%);
   --surface-sunken: hsl(0 0% 97%);
 
-  /* interaction: 1P paints a blue tint over the surface instead of graying it */
+  /* interaction: a blue tint over the surface instead of graying it */
   --tint: hsla(212 100% 50% / 0.08);
   --tint-strong: hsla(212 100% 50% / 0.12);
   --selected: hsla(212 100% 50% / 0.12);
   --pressed: hsla(212 100% 50% / 0.16);
 
-  /* text (1P: text-color-01-01 / shading-on-light-medium / -faint) */
+  /* text */
   --text: hsl(0 0% 15%);
   --muted: hsla(0 0% 0% / 0.55);
   --faint: hsla(0 0% 0% / 0.3);
 
-  /* hairlines (1P: fill-02-02/03/04 = .3 / .1 / .06, focus border .3) */
+  /* hairlines: strong .3 / normal .1 / weak .06, focus border .3 */
   --outline: hsla(0 0% 0% / 0.1);
   --outline-weak: hsla(0 0% 0% / 0.06);
   --outline-strong: hsla(0 0% 0% / 0.3);
 
-  /* brand (1P: branding-bits-blue, readable blue, bright blue, tint) */
+  /* brand: fill blue, readable link blue, and its 8% tint */
   --primary: hsl(212 96% 47%);
   --primary-hover: hsl(212 92% 40%);
   --primary-pressed: hsl(212 95% 33%);
@@ -44,7 +43,7 @@
   --link: hsl(212 97% 42%);
   --focus-ring: hsla(212 100% 50% / 0.3);
 
-  /* status (1P: readable on light) */
+  /* status */
   --success: hsl(110 98% 24%);
   --success-weak: hsla(110 100% 40% / 0.1);
   --warning: hsl(36 100% 30%);
@@ -54,28 +53,29 @@
   --attention: hsl(250 62% 58%);
   --attention-weak: hsla(250 100% 60% / 0.08);
 
-  /* elevation (1P: elevation-01-01 / -02 / popover) */
+  /* elevation: card / popover / toast */
   --shadow-low: 0 0 0 1px var(--outline-weak), 0 2px 8px 0 var(--outline-weak);
   --shadow-med: 0 0 0 1px var(--outline), 0 4px 20px 0 var(--outline);
   --shadow-high: 0 0 0 1px var(--outline), 0 4px 20px 0 var(--outline), 0 8px 40px 0 var(--outline-weak);
 
-  /* shape (1P: 4 checkbox/menu item, 6 input, 8 control/card, 12 popup) */
+  /* shape: 4 checkbox/menu item, 6 input, 8 control/card, 12 popup */
   --r-xs: 4px;
   --r-sm: 6px;
   --r-md: 8px;
   --r-lg: 12px;
 
-  /* type (1P: Inter, base 16, body 14/12 on a 1.3 line) */
+  /* type: Inter, base 16, body 14/12 on a 1.3 line */
   --font: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --mono: "iA Writer Mono V", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
   --line: 1.3;
 
-  /* 1P monogram tiles: pastel ground, 40% black letter */
+  /* monogram tiles: pastel ground, 40% black letter */
   --tile-l: 81%;
   --tile-fg: 0.4;
   --switch-off: hsla(0 0% 0% / 0.3);
+  --favorite: hsl(40 92% 42%);
 
-  /* motion (1P: 75/175/250 ms, cubic-bezier(.4,0,.2,1)) */
+  /* motion: 75/175/250 ms, cubic-bezier(.4,0,.2,1) */
   --ease: cubic-bezier(0.4, 0, 0.2, 1);
   --fast: 75ms;
   --normal: 175ms;
@@ -115,6 +115,7 @@
   --shadow-med: 0 0 0 1px var(--outline), 0 4px 20px 0 rgba(0 0 0 / 0.45);
   --shadow-high: 0 0 0 1px var(--outline), 0 4px 20px 0 rgba(0 0 0 / 0.45), 0 8px 40px 0 rgba(0 0 0 / 0.35);
   --switch-off: hsla(0 0% 100% / 0.35);
+  --favorite: hsl(40 95% 62%);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -152,6 +153,7 @@
     --shadow-med: 0 0 0 1px var(--outline), 0 4px 20px 0 rgba(0 0 0 / 0.45);
     --shadow-high: 0 0 0 1px var(--outline), 0 4px 20px 0 rgba(0 0 0 / 0.45), 0 8px 40px 0 rgba(0 0 0 / 0.35);
     --switch-off: hsla(0 0% 100% / 0.35);
+    --favorite: hsl(40 95% 62%);
   }
 }
 
@@ -179,12 +181,9 @@ input, textarea { -webkit-user-select: text; user-select: text; }
 input[type="search"]::-webkit-search-cancel-button { display: none; }
 input[type="range"] { accent-color: var(--primary); }
 select { -webkit-appearance: none; appearance: none; }
-svg.i {
-  width: 18px; height: 18px; flex: none;
-  fill: none; stroke: currentColor; stroke-width: 1.5;
-  stroke-linecap: round; stroke-linejoin: round;
-}
-/* 1P focus: a 1 px inset ring plus a 3 px soft blue halo. */
+/* Material Rounded glyphs are filled paths, not strokes. */
+svg.i { width: 18px; height: 18px; flex: none; fill: currentColor; stroke: none; }
+/* Focus: a 1 px inset ring plus a 3 px soft blue halo. */
 :focus-visible { outline: none; border-radius: var(--r-xs); box-shadow: inset 0 0 0 1px var(--focus-ring), 0 0 0 3px var(--focus-ring); }
 /* The wrapper already paints the ring; a second one on the control looks like a box in a box. */
 .search input:focus-visible,
@@ -218,12 +217,12 @@ svg.i {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  padding: 12px 12px 20px; /* 1P list padding: 12px */
+  padding: 12px 12px 20px; /* list padding: 12px */
 }
 .page.center { justify-content: center; }
 .page.center .brand { margin-bottom: 4px; }
 
-/* ---------- header (1P: 52 px, 8 px side padding, space-between) ---------- */
+/* ---------- header (52 px tall, 8 px side padding, space-between) ---------- */
 
 .top {
   display: flex; align-items: center; gap: 6px;
@@ -237,7 +236,7 @@ svg.i {
 .top > svg.i { color: var(--primary); }
 
 .icon-btn {
-  width: 30px; height: 30px; padding: 0; /* 1P icon button: 28-30 px, radius 8 */
+  width: 30px; height: 30px; padding: 0; /* icon button: 30 px, radius 8 */
   border: 0; border-radius: var(--r-md);
   background: transparent; color: var(--muted);
   display: grid; place-items: center; cursor: pointer; flex: none;
@@ -248,7 +247,6 @@ svg.i {
 .icon-btn:active { background-image: linear-gradient(var(--tint-strong), var(--tint-strong)); }
 .icon-btn:disabled { opacity: 0.4; cursor: default; background-image: none; }
 .icon-btn.on { color: var(--primary); }
-.icon-btn.on svg.i { fill: currentColor; }
 .icon-btn.done { color: var(--success); }
 .icon-btn.danger { color: var(--critical); }
 .icon-btn.sm { width: 26px; height: 26px; border-radius: var(--r-sm); }
@@ -263,7 +261,7 @@ svg.i {
   background: var(--primary); color: var(--on-primary);
   box-shadow: var(--shadow-low);
 }
-.logo svg.i { width: 26px; height: 26px; stroke-width: 1.8; }
+.logo svg.i { width: 26px; height: 26px; }
 .brand h1 { font-size: 18px; font-weight: 600; line-height: 1.2; margin: 0; }
 .brand p { margin: 0; color: var(--muted); font-size: 12px; }
 .avatar {
@@ -273,7 +271,7 @@ svg.i {
   background: var(--primary-weak); color: var(--link);
 }
 
-/* ---------- fields (1P: 8 px radius, 1 px inset border, blue halo on focus) ---------- */
+/* ---------- fields (8 px radius, 1 px inset border, blue halo on focus) ---------- */
 
 .field {
   display: flex; align-items: center; gap: 12px;
@@ -314,7 +312,7 @@ svg.i {
 .field-block { display: flex; flex-direction: column; gap: 5px; }
 .sheet-body .field { background: var(--surface-sunken); }
 
-/* ---------- buttons (1P: 8 px radius, solid blue primary, tint-filled secondary) ---------- */
+/* ---------- buttons (8 px radius, solid blue primary, tint-filled secondary) ---------- */
 
 .btn {
   height: 30px; padding: 0 12px;
@@ -340,7 +338,7 @@ svg.i {
 .actions { display: flex; flex-direction: column; gap: 8px; }
 .row-actions { flex-direction: row; justify-content: flex-end; gap: 8px; }
 
-/* ---------- chips (1P filter pills: 8 px radius, tint when active) ---------- */
+/* ---------- chips (filter pills: 8 px radius, tint when active) ---------- */
 
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .chip {
@@ -362,7 +360,7 @@ svg.i {
 .chips.scroll { mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent); }
 .chips.scroll .chip { flex: none; }
 
-/* ---------- grouped lists (keyguard grouping, 1P surface + hairlines) ---------- */
+/* ---------- grouped lists (card grouping, surface + hairlines) ---------- */
 
 .section-title {
   margin: 0;
@@ -379,7 +377,7 @@ svg.i {
 .group > * + * { border-top: 1px solid var(--outline-weak); }
 .row {
   display: flex; align-items: center; gap: 12px;
-  padding: 8px 12px; min-height: 48px; width: 100%; /* 1P row: 48 px */
+  padding: 8px 12px; min-height: 48px; width: 100%; /* row: 48 px */
   background: transparent; border: 0; border-radius: 0;
   text-align: left; color: inherit;
   font-size: 14px; line-height: var(--line);
@@ -391,6 +389,10 @@ button.row:active, a.row:active { background-image: linear-gradient(var(--tint-s
 a.row { text-decoration: none; color: var(--text); }
 .row > svg.i { color: var(--muted); }
 .row > svg.i:last-child { color: var(--faint); width: 16px; height: 16px; }
+/* Secondary state markers (one-time code, favorite) stay small and quiet. */
+.row .meta { display: inline-flex; align-items: center; flex: none; color: var(--faint); }
+.row .meta svg.i { width: 15px; height: 15px; }
+.row .meta.fav { color: var(--favorite); }
 .row .body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .row .title { font-size: 14px; line-height: 1.3; }
 .row .sub { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -410,7 +412,7 @@ a.row { text-decoration: none; color: var(--text); }
 /* Trailing value actions stay a tight pair instead of inheriting the row gap. */
 .field-actions { display: flex; align-items: center; gap: 2px; flex: none; }
 .row .value.mono { font-size: 13px; }
-/* 1P password colorization: digits blue, symbols red. */
+/* Password colorization: digits blue, symbols red. */
 .row .value .d, .generated .d { color: var(--link); }
 .row .value .s, .generated .s { color: var(--critical); }
 .countdown {
@@ -420,7 +422,7 @@ a.row { text-decoration: none; color: var(--text); }
   font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums;
 }
 
-/* A–Z headers (1P section label: 12 px / 600, muted) */
+/* A–Z headers (section label: 12 px / 600, muted) */
 .letter {
   margin: 8px 0 0;
   font-size: 12px; font-weight: 600; line-height: 1.3;
@@ -432,7 +434,7 @@ a.row { text-decoration: none; color: var(--text); }
 .list-body > .group + .letter { margin-top: 6px; }
 .list-body > .empty { margin-top: 2px; }
 
-/* monogram / favicon tile (1P: radius size/5, 40% black letter) */
+/* monogram / favicon tile (radius size/5, 40% black letter) */
 .tile {
   width: 32px; height: 32px; flex: none;
   border-radius: 6px;
@@ -446,7 +448,7 @@ a.row { text-decoration: none; color: var(--text); }
 .hero .tile { width: 44px; height: 44px; border-radius: 9px; font-size: 18px; }
 .hero .tile img { width: 26px; height: 26px; }
 
-/* ---------- switches (1P: 32 x 20, radius 12, 30% black track when off) ---------- */
+/* ---------- switches (32 x 20, radius 12, 30% black track when off) ---------- */
 
 .switch { position: relative; width: 32px; height: 20px; flex: none; }
 .switch input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; z-index: 1; }
@@ -467,7 +469,7 @@ a.row { text-decoration: none; color: var(--text); }
 .check { display: flex; align-items: center; gap: 12px; padding: 4px 4px 4px 12px; }
 .check .body { flex: 1; }
 
-/* ---------- search (1P: inset border, 8 px radius, halo on focus) ---------- */
+/* ---------- search (inset border, 8 px radius, halo on focus) ---------- */
 
 .search {
   display: flex; align-items: center; gap: 6px;
@@ -500,7 +502,7 @@ a.row { text-decoration: none; color: var(--text); }
 }
 @keyframes slide { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
 
-/* 1P callouts: tinted ground + matching 1 px border. */
+/* Callouts: tinted ground + matching 1 px border. */
 .notice {
   display: flex; align-items: center; gap: 10px;
   padding: 9px 11px; border-radius: var(--r-md);
@@ -522,7 +524,7 @@ a.row { text-decoration: none; color: var(--text); }
 .empty svg.i { width: 26px; height: 26px; color: var(--faint); margin-bottom: 2px; }
 .empty strong { color: var(--text); font-weight: 600; font-size: 13px; }
 
-/* ---------- bottom navigation (1P tab bar: white, hairline, blue active) ---------- */
+/* ---------- bottom navigation (white bar, hairline, blue active) ---------- */
 
 .nav {
   display: flex; gap: 2px;
@@ -554,7 +556,7 @@ a.row { text-decoration: none; color: var(--text); }
 .nav button:focus-visible .pill { box-shadow: inset 0 0 0 1px var(--focus-ring), 0 0 0 3px var(--focus-ring); }
 .nav button:disabled { opacity: 0.45; cursor: default; }
 
-/* ---------- popover menu (1P: 8 px radius, 4 px item radius, blue tint hover) ---------- */
+/* ---------- popover menu (8 px radius, 4 px item radius, blue tint hover) ---------- */
 
 .menu {
   position: fixed; inset: auto;
@@ -651,18 +653,18 @@ a.row { text-decoration: none; color: var(--text); }
   white-space: pre-wrap; word-break: break-word;
 }
 
-/* one-time code: 1P shows a small determinate ring next to the value */
+/* one-time code: a small determinate ring next to the value */
 .totp { font-size: 16px; letter-spacing: 0.06em; }
 .totp-ring { position: relative; width: 28px; height: 28px; flex: none; display: grid; place-items: center; }
 .totp-ring svg.ring { position: absolute; inset: 0; width: 100%; height: 100%; }
-.ring-track { fill: none; stroke: var(--outline-weak); stroke-width: 2; }
-.ring-bar { fill: none; stroke: var(--primary); stroke-width: 2; stroke-linecap: round; transition: stroke-dashoffset 0.9s linear; }
+.ring-track { fill: none; stroke: var(--outline-weak); stroke-width: 1.75; }
+.ring-bar { fill: none; stroke: var(--primary); stroke-width: 1.75; stroke-linecap: round; transition: stroke-dashoffset 0.9s linear; }
 .totp-seconds {
   position: relative; font-size: 10.5px; font-weight: 600; color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
 
-/* strength meter: thin bar, red → orange → green (1P password generator) */
+/* strength meter: thin bar, red → orange → green */
 .meter-wrap { display: flex; flex-direction: column; gap: 4px; }
 .field-block { position: relative; }
 .field-block .field { padding-bottom: 12px; }
@@ -710,7 +712,7 @@ a.row { text-decoration: none; color: var(--text); }
 }
 .field-card.add { border-style: dashed; border-color: var(--outline); }
 .add-field { align-self: flex-start; }
-.check-card { background: var(--surface); border: 1px solid var(--outline-weak); border-radius: var(--r-md); padding: 4px 10px 4px 12px; }
+.check-card { background: var(--surface); border: 1px solid var(--outline-weak); border-radius: var(--r-md); padding: 4px 12px; }
 .check-card > svg.i:first-child { color: var(--muted); }
 .check-card:hover { background-image: none; }
 .editor-footer {
@@ -745,7 +747,7 @@ a.row { text-decoration: none; color: var(--text); }
 .slider-row input[type="range"] { flex: 1 0 100%; width: 100%; height: 18px; margin: 0; }
 .small-input { max-width: 70px; }
 
-/* ---------- toast (1P: white card, popover shadow, 8 px radius) ---------- */
+/* ---------- toast (card, popover shadow, 8 px radius) ---------- */
 
 .toast {
   position: fixed; left: 50%; bottom: 68px; transform: translateX(-50%);
@@ -769,9 +771,11 @@ a.row { text-decoration: none; color: var(--text); }
 
 /* ---------- in-page frames (menu.html, bar.html) ---------- */
 
-/* 1P inline menu: 8 px padding, 32 px icon, 14/12 labels, 4 px row radius, blue hover. */
+/* Inline menu: 8 px padding, 32 px icon, 14/12 labels, 4 px row radius, blue hover. */
+html.frame, body.frame { height: 100%; }
 body.frame { width: auto; min-height: 0; background: var(--surface); }
-body.frame #app { min-height: 0; padding: 6px; }
+/* The frame height is computed from the row count; more than five matches scroll. */
+body.frame #app { min-height: 0; height: 100%; padding: 6px; overflow-y: auto; overscroll-behavior: contain; }
 body.frame .group { border-radius: var(--r-md); }
 body.frame .row { min-height: 44px; padding: 5px 12px; cursor: pointer; }
 body.frame .row:first-child { border-radius: var(--r-xs) var(--r-xs) 0 0; }
