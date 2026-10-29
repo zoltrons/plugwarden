@@ -36,3 +36,17 @@ test("host, startsWith, exact, regex, never", () => {
   assert.ok(!uriMatches("([", MATCH.RegularExpression, page("https://example.com"), psl));
   assert.ok(!uriMatches("https://example.com", MATCH.Never, page("https://example.com"), psl));
 });
+
+test("a saved URI without a match strategy uses the account default", () => {
+  const p = page("https://accounts.example.com/login");
+  // Default = Host: subdomains are not included.
+  assert.ok(!uriMatches("https://example.com", null, p, psl, MATCH.Host));
+  assert.ok(uriMatches("https://accounts.example.com", null, p, psl, MATCH.Host));
+  // Default = StartsWith / Exact apply to the whole address.
+  assert.ok(uriMatches("https://accounts.example.com", null, p, psl, MATCH.StartsWith));
+  assert.ok(!uriMatches("https://accounts.example.com", null, page("https://accounts.example.com/login/x"), psl, MATCH.Exact));
+  // Default = Never disables autofill for those entries.
+  assert.ok(!uriMatches("https://accounts.example.com", null, p, psl, MATCH.Never));
+  // An explicit strategy on the URI still wins over the default.
+  assert.ok(uriMatches("https://example.com", MATCH.Domain, p, psl, MATCH.Never));
+});

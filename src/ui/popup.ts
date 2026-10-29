@@ -1,12 +1,12 @@
 // Popup. Talks only to the service worker through the typed message bus: no crypto, no network.
-import { AUTO_LOCK_CHOICES, TWO_FACTOR } from "../shared/constants.ts";
+import { AUTO_LOCK_CHOICES, CLEAR_CLIPBOARD_CHOICES, type ClearClipboardDelay, TWO_FACTOR, URI_MATCH, URI_MATCH_ADVANCED } from "../shared/constants.ts";
 import type { Request, State } from "../shared/messages.ts";
 import { normalizeServerUrl, originPattern } from "../shared/url.ts";
-import { applyTheme, type Child, h, inPanel, savedTheme, send, t, THEMES } from "./dom.ts";
+import { applyTheme, type Child, h, inPanel, savedTheme, send, t, THEMES, withChevron } from "./dom.ts";
 import { icon, type IconName } from "./icons.ts";
 import { passkeyRequestId, passkeyScreen } from "./passkey.ts";
 import { resetSend, sendScreen } from "./send.ts";
-import { type Ctx, generatorScreen, resetVault, setIconBase, toastEl, vaultScreen } from "./vault.ts";
+import { type Ctx, generatorScreen, iconButton, refreshPageMatches, resetVault, setIconBase, toastEl, uriMatchLabel, vaultRouteKey, vaultScreen } from "./vault.ts";
 
 // ---------- state ----------
 
@@ -418,7 +418,12 @@ function navButton(tab: Ui["tab"], label: string, ic: IconName) {
     {
       type: "button",
       "aria-current": ui.tab === tab ? "page" : undefined,
-      onclick: () => ((ui.tab = tab), render()),
+      onclick: () => {
+        ui.tab = tab;
+        // The "On this site" matches depend on settings edited in another tab; refresh on return.
+        if (tab === "vault") void refreshPageMatches().then(render, render);
+        else render();
+      },
     },
     h("span", { class: "pill" }, icon(ic)),
     label,
@@ -432,6 +437,39 @@ function row(ic: IconName, title: string, sub?: string, trailing?: Child, extra:
 function autoLockLabel(m: number): string {
   if (m < 0) return t("autoLockRestart");
   return m < 60 ? t("minutes", String(m)) : t("hours", String(m / 60));
+}
+
+function clearClipboardLabel(v: ClearClipboardDelay): string {
+  const key = {
+    never: "never",
+    tenSeconds: "tenSeconds",
+    twentySeconds: "twentySeconds",
+    thirtySeconds: "thirtySeconds",
+    oneMinute: "oneMinute",
+    twoMinutes: "twoMinutes",
+    fiveMinutes: "fiveMinutes",
+  }[v];
+  return t(key);
+}
+
+function openExternal(url: string) {
+  void chrome.tabs.create({ url });
+}
+
+async function syncNow() {
+  Object.assign(ui, { busy: true, busyLabel: t("syncing"), error: undefined, info: undefined });
+  render();
+  const r = await send<unknown>({ type: "sync", force: true });
+  ui.busy = false;
+  ui.busyLabel = undefined;
+  if (!r.ok) ui.error = r.error;
+  else {
+    const next = await send<State>({ type: "getState" });
+    if (next.ok) state = next.data;
+    ui.info = t("syncComplete");
+    resetVault();
+  }
+  render();
 }
 
 function settingsTab(s: State): HTMLElement {
@@ -468,12 +506,84 @@ function settingsTab(s: State): HTMLElement {
       "div",
       { class: "group" },
       row("home", t("inlineMenu"), t("inlineMenuHint"), toggle(t("inlineMenu"), s.settings.inlineMenu, (b) => void act({ type: "setSettings", inlineMenu: b.checked }))),
+      s.settings.inlineMenu
+        ? row("card", t("inlineMenuCards"), undefined, toggle(t("inlineMenuCards"), s.settings.inlineMenuCards, (b) => void act({ type: "setSettings", inlineMenuCards: b.checked })))
+        : null,
+      s.settings.inlineMenu
+        ? row("user", t("inlineMenuIdentities"), undefined, toggle(t("inlineMenuIdentities"), s.settings.inlineMenuIdentities, (b) => void act({ type: "setSettings", inlineMenuIdentities: b.checked })))
+        : null,
+      row("card", t("showCardsOnTab"), undefined, toggle(t("showCardsOnTab"), s.settings.showCardsOnTab, (b) => void act({ type: "setSettings", showCardsOnTab: b.checked }))),
+      row("user", t("showIdentitiesOnTab"), undefined, toggle(t("showIdentitiesOnTab"), s.settings.showIdentitiesOnTab, (b) => void act({ type: "setSettings", showIdentitiesOnTab: b.checked }))),
       row("timer", t("autoCopyTotp"), t("autoCopyTotpHint"), toggle(t("autoCopyTotp"), s.settings.autoCopyTotp, (b) => void act({ type: "setSettings", autoCopyTotp: b.checked }))),
+      row("more", t("enableContextMenu"), undefined, toggle(t("enableContextMenu"), s.settings.contextMenu, (b) => void act({ type: "setSettings", contextMenu: b.checked }))),
       row("plus", t("savePrompt"), t("savePromptHint"), toggle(t("savePrompt"), s.settings.savePrompt, (b) => void act({ type: "setSettings", savePrompt: b.checked }))),
       s.settings.neverSave.length
         ? row("globe", t("neverSaveSites", String(s.settings.neverSave.length)), s.settings.neverSave.join(", "), h("button", { type: "button", class: "btn text small", onclick: () => void act({ type: "setSettings", clearNeverSave: true }) }, t("clear")))
         : null,
+      ...s.settings.neverSave.map((h0) =>
+        row("globe", h0, undefined, iconButton("close", t("removeNeverSave", h0), () => void act({ type: "setSettings", removeNeverSave: h0 }))),
+      ),
       row("shield", t("defaultManager"), t("defaultManagerHint"), toggle(t("defaultManager"), s.settings.defaultManager, defaultManager)),
+    ),
+    h("h2", { class: "section-title" }, t("autofillOnPageLoad")),
+    h(
+      "div",
+      { class: "group" },
+      row(
+        "timer",
+        t("autofillOnPageLoad"),
+        t("autofillOnPageLoadHint"),
+        toggle(t("autofillOnPageLoad"), s.settings.autofillOnPageLoad, (b) => void act({ type: "setSettings", autofillOnPageLoad: b.checked })),
+      ),
+      s.settings.autofillOnPageLoad
+        ? row(
+            "key",
+            t("autofillOnPageLoadDefault"),
+            t("autofillOnPageLoadDefaultHint"),
+            h(
+              "select",
+              {
+                "aria-label": t("autofillOnPageLoadDefault"),
+                onchange: (e: Event) => void act({ type: "setSettings", autofillOnPageLoadDefault: (e.target as HTMLSelectElement).value === "true" }),
+              },
+              h("option", { value: "true", selected: s.settings.autofillOnPageLoadDefault }, t("on")),
+              h("option", { value: "false", selected: !s.settings.autofillOnPageLoadDefault }, t("off")),
+            ),
+          )
+        : null,
+    ),
+    h("h2", { class: "section-title" }, t("additionalOptions")),
+    h(
+      "div",
+      { class: "group" },
+      row(
+        "timer",
+        t("clearClipboard"),
+        t("clearClipboardDesc"),
+        h(
+          "select",
+          {
+            "aria-label": t("clearClipboard"),
+            onchange: (e: Event) => void act({ type: "setSettings", clearClipboardDelay: (e.target as HTMLSelectElement).value as ClearClipboardDelay }),
+          },
+          ...CLEAR_CLIPBOARD_CHOICES.map((v) => h("option", { value: v, selected: v === s.settings.clearClipboardDelay }, clearClipboardLabel(v))),
+        ),
+      ),
+      row(
+        "globe",
+        t("defaultUriMatchDetection"),
+        t(URI_MATCH_ADVANCED.includes(s.settings.defaultUriMatch) ? "uriMatchDefaultAdvancedHint" : "uriMatchDefaultHint"),
+        h(
+          "select",
+          {
+            "aria-label": t("defaultUriMatchDetection"),
+            onchange: (e: Event) => void act({ type: "setSettings", defaultUriMatch: Number((e.target as HTMLSelectElement).value) }),
+          },
+          ...[URI_MATCH.Domain, URI_MATCH.Host, URI_MATCH.Exact, URI_MATCH.Never, URI_MATCH.StartsWith, URI_MATCH.RegularExpression].map((m) =>
+            h("option", { value: String(m), selected: m === s.settings.defaultUriMatch }, uriMatchLabel(m)),
+          ),
+        ),
+      ),
     ),
     h("h2", { class: "section-title" }, t("account")),
     h(
@@ -486,32 +596,36 @@ function settingsTab(s: State): HTMLElement {
     h(
       "div",
       { class: "group" },
-      row("timer", t("autoLock"), undefined, select),
+      row("timer", t("autoLock"), undefined, withChevron(select)),
       row(
         "logout",
         t("timeoutAction"),
         undefined,
-        h(
-          "select",
-          { "aria-label": t("timeoutAction"), onchange: (e: Event) => void act({ type: "setSettings", timeoutAction: (e.target as HTMLSelectElement).value as "lock" | "logout" }) },
-          h("option", { value: "lock", selected: s.settings.timeoutAction === "lock" }, t("lock")),
-          h("option", { value: "logout", selected: s.settings.timeoutAction === "logout" }, t("logOut")),
+        withChevron(
+          h(
+            "select",
+            { "aria-label": t("timeoutAction"), onchange: (e: Event) => void act({ type: "setSettings", timeoutAction: (e.target as HTMLSelectElement).value as "lock" | "logout" }) },
+            h("option", { value: "lock", selected: s.settings.timeoutAction === "lock" }, t("lock")),
+            h("option", { value: "logout", selected: s.settings.timeoutAction === "logout" }, t("logOut")),
+          ),
         ),
       ),
       row(
         "eye",
         t("theme"),
         undefined,
-        h(
-          "select",
-          {
-            "aria-label": t("theme"),
-            onchange: (e: Event) => {
-              localStorage.setItem("theme", (e.target as HTMLSelectElement).value);
-              applyTheme();
+        withChevron(
+          h(
+            "select",
+            {
+              "aria-label": t("theme"),
+              onchange: (e: Event) => {
+                localStorage.setItem("theme", (e.target as HTMLSelectElement).value);
+                applyTheme();
+              },
             },
-          },
-          ...THEMES.map((v) => h("option", { value: v, selected: v === savedTheme() }, t(`theme_${v}`))),
+            ...THEMES.map((v) => h("option", { value: v, selected: v === savedTheme() }, t(`theme_${v}`))),
+          ),
         ),
       ),
       row("globe", t("favicons"), t("faviconsHint"), toggle(t("favicons"), s.settings.favicons, (b) => void act({ type: "setSettings", favicons: b.checked }))),
@@ -544,6 +658,12 @@ function settingsTab(s: State): HTMLElement {
     h(
       "div",
       { class: "group" },
+      row(
+        "refresh",
+        t("syncNow"),
+        s.syncedAt ? t("lastSync", new Date(s.syncedAt).toLocaleString()) : t("never"),
+        h("button", { type: "button", class: "btn text small", disabled: ui.busy, onclick: () => void syncNow() }, icon("refresh"), t("syncNow")),
+      ),
       row("download", t("exportVault"), t("exportHint"), null, { type: "button", disabled: ui.busy, onclick: () => ((ui.exporting = !ui.exporting), render()) }, "button"),
       ui.exporting
         ? h(
@@ -571,6 +691,14 @@ function settingsTab(s: State): HTMLElement {
     ),
     busyBar(),
     ui.info ? h("p", { class: "note", role: "status" }, ui.info) : null,
+    h("h2", { class: "section-title" }, t("about")),
+    h(
+      "div",
+      { class: "group" },
+      row("info", t("about"), chrome.runtime.getManifest().version),
+      row("globe", t("helpCenter"), undefined, null, { type: "button", onclick: () => openExternal("https://bitwarden.com/help/") }, "button"),
+      s.serverUrl ? row("vault", t("webVault"), host(s.serverUrl), null, { type: "button", onclick: () => openExternal(`${s.serverUrl}/#/`) }, "button") : null,
+    ),
     h(
       "div",
       { class: "group" },
@@ -617,18 +745,25 @@ async function importVault(file: File | undefined) {
 }
 
 function unlockedView(s: State): DocumentFragment {
+  // Detail screens (item, editor, folders, passkey approval) drop the tab bar: they are a
+  // drill-down with their own back action, exactly like the reference app.
+  const detail = !!passkeyRequestId || (ui.tab === "vault" && vaultRouteKey() !== "list");
   const frag = document.createDocumentFragment();
   frag.append(
-    ui.tab === "settings" ? settingsTab(s) : ui.tab === "generator" ? generatorScreen(vaultCtx) : ui.tab === "send" ? sendScreen(vaultCtx) : vaultScreen(vaultCtx),
-    h(
-      "nav",
-      { class: "nav", "aria-label": t("navigation") },
-      navButton("vault", t("vault"), "home"),
-      navButton("generator", t("generator"), "dice"),
-      navButton("send", t("send"), "send"),
-      navButton("settings", t("settings"), "settings"),
-    ),
-    toastEl() || "",
+    ...[
+      ui.tab === "settings" ? settingsTab(s) : ui.tab === "generator" ? generatorScreen(vaultCtx) : ui.tab === "send" ? sendScreen(vaultCtx) : vaultScreen(vaultCtx),
+      detail
+        ? null
+        : h(
+            "nav",
+            { class: "nav", "aria-label": t("navigation") },
+            navButton("vault", t("vault"), "home"),
+            navButton("generator", t("generator"), "dice"),
+            navButton("send", t("send"), "send"),
+            navButton("settings", t("settings"), "settings"),
+          ),
+      toastEl() || "",
+    ].filter((x): x is Exclude<typeof x, null> => x !== null),
   );
   return frag;
 }
@@ -636,8 +771,25 @@ function unlockedView(s: State): DocumentFragment {
 // ---------- render ----------
 
 const app = document.getElementById("app")!;
-const vaultCtx: Ctx = { rerender: () => render(), lock: () => void act({ type: "lock" }), email: () => state?.email };
+const vaultCtx: Ctx = {
+  rerender: () => render(),
+  lock: () => void act({ type: "lock" }),
+  email: () => state?.email,
+  settings: () => state?.settings,
+};
 let firstRender = true;
+
+/** One scroll offset per screen, so coming back from an item lands where the user left. */
+const scrollMemory = new Map<string, number>();
+let lastScreen = "";
+
+function screenKey(): string {
+  if (!state) return "boot";
+  if (state.phase === "setup" || ui.editServer) return "setup";
+  if (state.phase !== "unlocked") return state.phase;
+  if (passkeyRequestId) return "passkey";
+  return ui.tab === "vault" ? `vault:${vaultRouteKey()}` : ui.tab;
+}
 
 function render(): void {
   if (!state) return;
@@ -648,6 +800,7 @@ function render(): void {
     ui.tab = "vault"; // a new session always starts on the vault
     resetVault(); // and holds no decrypted data from the previous one
     resetSend();
+    scrollMemory.clear(); // a locked or logged-out screen never restores a vault position
   }
   let view: Node;
   if (s.phase === "setup" || ui.editServer) view = setupView();
@@ -657,10 +810,14 @@ function render(): void {
   else if (passkeyRequestId) view = passkeyScreen(vaultCtx);
   else view = unlockedView(s);
 
+  const key = screenKey();
+  if (lastScreen) scrollMemory.set(lastScreen, window.scrollY);
   const focused = document.activeElement?.id;
   app.replaceChildren(view);
   const again = focused ? document.getElementById(focused) : null;
-  ((again ?? app.querySelector("[data-autofocus]")) as HTMLElement | null)?.focus();
+  ((again ?? app.querySelector("[data-autofocus]")) as HTMLElement | null)?.focus({ preventScroll: true });
+  window.scrollTo(0, scrollMemory.get(key) ?? 0);
+  lastScreen = key;
   if (firstRender) {
     firstRender = false;
     performance.mark("plugwarden:first-render");
@@ -674,7 +831,15 @@ if (!inPanel) void chrome.windows.getCurrent().then((w) => (windowId = w.id));
 void send<State>({ type: "getState" }).then((res) => {
   if (res.ok) state = res.data;
   else {
-    state = { phase: "setup", settings: { autoLockMinutes: 15, timeoutAction: "lock", lockOnSystemLock: true, inlineMenu: true, savePrompt: true, neverSave: [], defaultManager: false, favicons: true, autoCopyTotp: true } };
+    state = {
+      phase: "setup",
+      settings: {
+        autoLockMinutes: 15, timeoutAction: "lock", lockOnSystemLock: true, inlineMenu: true, savePrompt: true, neverSave: [],
+        defaultManager: false, favicons: true, autoCopyTotp: true, defaultUriMatch: 0, clearClipboardDelay: "fiveMinutes",
+        autofillOnPageLoad: false, autofillOnPageLoadDefault: true, inlineMenuCards: true, inlineMenuIdentities: true, contextMenu: true,
+        showCardsOnTab: true, showIdentitiesOnTab: true,
+      },
+    };
     ui.error = res.error;
   }
   draft.email = state.email ?? "";

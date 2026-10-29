@@ -1,8 +1,9 @@
-// Vault screens: list + search + folder filter, item view, Login/Note editor, generator.
+// Vault screens: list (search, filters, sort), item view, Login/Note/Card/Identity editor, generator.
 // Talks to the service worker only; decrypted data lives here just while the popup is open.
 import type { FillResult, PageLogin } from "../autofill/page.ts";
-import type { HistoryEntry, PageMatches, VaultItem, VaultList } from "../shared/messages.ts";
-import { type Child, h, send, t } from "./dom.ts";
+import { URI_MATCH, URI_MATCH_ADVANCED } from "../shared/constants.ts";
+import type { HistoryEntry, PageMatches, Settings, VaultItem, VaultList } from "../shared/messages.ts";
+import { type Child, h, send, t, withChevron } from "./dom.ts";
 import { icon, type IconName } from "./icons.ts";
 
 type Json = Record<string, unknown>;
@@ -11,8 +12,11 @@ export interface Ctx {
   lock(): void;
   /** The account email (default for plus-addressed usernames). */
   email(): string | undefined;
+  /** Current settings (per-item options depend on the account-level ones). */
+  settings(): Settings | undefined;
 }
 
+type Sort = "name" | "nameDesc" | "updated" | "created";
 type Route = { kind: "list" } | { kind: "item"; id: string } | { kind: "edit"; isNew: boolean } | { kind: "folders" };
 
 interface EditDraft {
@@ -24,7 +28,10 @@ interface EditDraft {
   favorite: boolean;
   /** Type-specific fields (SCHEMA) by key. */
   data: Record<string, string>;
-  uris: string;
+  /** Login websites with their own match strategy (null = the account default). */
+  uris: { uri: string; match: number | null }[];
+  /** Tri-state "Autofill on page load" (null = the account default). */
+  autofillOnPageLoad: boolean | null;
   fields: { name: string; value: string; type: number; linkedId?: unknown }[];
 }
 
@@ -33,6 +40,24 @@ const GEN_DEFAULTS: Json = {
   numWords: 5, wordSeparator: "-", capitalize: true, includeNumber: true,
   usernameType: "word", email: "", domain: "",
 };
+
+const SORT_KEY = "vaultSort";
+const SORTS: { id: Sort; label: string }[] = [
+  { id: "name", label: "sortNameAsc" },
+  { id: "nameDesc", label: "sortNameDesc" },
+  { id: "updated", label: "sortUpdated" },
+  { id: "created", label: "sortCreated" },
+];
+
+function savedSort(): Sort {
+  try {
+    const v = localStorage.getItem(SORT_KEY);
+    if (SORTS.some((s) => s.id === v)) return v as Sort;
+  } catch {
+    /* framed pages have no storage */
+  }
+  return "name";
+}
 
 const st = {
   list: undefined as VaultList | undefined,
@@ -43,42 +68,64 @@ const st = {
   error: undefined as string | undefined,
   route: { kind: "list" } as Route,
   query: "",
+  /** "" all, "fav", "t:<type>", a folder id, "none" (no folder) or "trash". */
   folder: "",
+  sort: savedSort(),
   item: undefined as Json | undefined,
   reveal: new Set<string>(),
-  totp: undefined as { code: string; remaining: number } | undefined,
-  confirmDelete: false,
+  totp: undefined as { code: string; period: number; remaining: number } | undefined,
+  /** Timestamp of the first tap of a two-tap destructive action; 0 when idle. */
+  confirmDelete: 0,
   draft: undefined as EditDraft | undefined,
   gen: { ...GEN_DEFAULTS },
   generated: "",
   /** Generator history screen, while open. */
   history: undefined as HistoryEntry[] | undefined,
   toast: "",
+  /** Key of the field/row that was copied last (shows a check instead of the copy icon). */
+  copied: "",
+  /** The search box was focused once for this session; later renders keep the user's focus. */
+  sawList: false,
+  /** Editor: URI rows whose match-detection select is open, by index. */
+  uriOpen: new Set<number>(),
 };
 let totpTimer: ReturnType<typeof setInterval> | undefined;
 
 export function resetVault(): void {
   clearInterval(totpTimer);
+  closeMenu();
   Object.assign(st, {
     list: undefined, page: undefined, loading: false, syncing: false, busy: false, error: undefined, route: { kind: "list" }, query: "",
-    folder: "", item: undefined, reveal: new Set(), totp: undefined, confirmDelete: false, draft: undefined,
-    gen: { ...GEN_DEFAULTS }, generated: "", history: undefined, toast: "",
+    folder: "", item: undefined, reveal: new Set(), totp: undefined, confirmDelete: 0, draft: undefined,
+    gen: { ...GEN_DEFAULTS }, generated: "", history: undefined, toast: "", copied: "", sawList: false, uriOpen: new Set(),
   });
+}
+
+/** Which screen the vault tab is showing; the popup remembers a scroll position per key. */
+export function vaultRouteKey(): string {
+  const r = st.route;
+  return r.kind === "list" ? "list" : r.kind === "item" ? `item:${r.id}` : r.kind === "edit" ? `edit:${r.isNew ? "new" : "item"}` : "folders";
 }
 
 // ---------- helpers ----------
 
 const str = (v: unknown) => (typeof v === "string" ? v : "");
 const obj = (v: unknown) => (v && typeof v === "object" && !Array.isArray(v) ? (v as Json) : undefined);
-const humanize = (k: string) => k.replace(/([A-Z])/g, " $1").toLowerCase().replace(/^./, (c) => c.toUpperCase());
-/** Item-type sub-objects shown generically (editing them is a later phase). */
-const TYPE_OBJECTS = ["card", "identity", "sshKey", "bankAccount", "driversLicense", "passport"];
-const SECRET_KEYS = /password|code$|^number$|ssn|privateKey|accountNumber|licenseNumber|passportNumber|pin/i;
 
 function hue(s: string): number {
   let x = 0;
   for (const c of s) x = (x * 31 + c.charCodeAt(0)) >>> 0;
   return x % 360;
+}
+
+/** An absolute http(s) URL for `u`, or undefined when it is not one. */
+function webUrl(u: string): string | undefined {
+  try {
+    const url = new URL(/^[a-z][\w+.-]*:/i.test(u) ? u : `https://${u}`);
+    return url.protocol === "https:" || url.protocol === "http:" ? url.toString() : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** The server's icon service (`<server>/icons/<host>/icon.png`); unset when website icons are off. */
@@ -87,23 +134,25 @@ export const setIconBase = (base: string | undefined) => (iconBase = base);
 
 function iconUrl(uris: string[]): string | undefined {
   for (const u of iconBase ? uris : []) {
-    try {
-      const url = new URL(/^[a-z][\w+.-]*:/i.test(u) ? u : `https://${u}`);
-      if (url.protocol === "https:" || url.protocol === "http:") return `${iconBase}/${url.hostname}/icon.png`;
-    } catch {
-      /* not a URL: try the next one */
-    }
+    const url = webUrl(u);
+    if (url) return `${iconBase}/${new URL(url).hostname}/icon.png`;
   }
   return undefined;
 }
 
+/** A tinted letter tile; logins with a website get the server's favicon instead. */
 export function tile(name: string, type: number, uris: string[] = []): HTMLElement {
   const letter = name.trim().slice(0, 1).toUpperCase();
-  const fallback: IconName = type === 2 ? "note" : type === 4 ? "user" : "key";
+  const fallback: IconName = type === 2 ? "note" : type === 3 ? "card" : type === 4 ? "user" : type === 5 ? "key" : "key";
   const el = h("span", { class: "tile", style: `--h:${hue(name)}`, "aria-hidden": "true" }, letter || icon(fallback));
   const src = type === 1 ? iconUrl(uris) : undefined;
   if (src) el.replaceChildren(h("img", { src, alt: "", onerror: () => el.replaceChildren(letter || icon(fallback)) }));
   return el;
+}
+
+/** Password digits and symbols get their own colors, like the rest of the app. */
+function colorize(value: string): (Node | string)[] {
+  return [...value].map((c) => (/\d/.test(c) ? h("span", { class: "d" }, c) : /[^\p{L}\s]/u.test(c) ? h("span", { class: "s" }, c) : c));
 }
 
 export function toast(ctx: Ctx, text: string) {
@@ -117,14 +166,39 @@ export function toast(ctx: Ctx, text: string) {
   }, 1800);
 }
 
-export async function copy(ctx: Ctx, value: string) {
+export async function copy(ctx: Ctx, value: string, key?: string) {
   await navigator.clipboard.writeText(value);
   void send({ type: "clipboardCopied" }); // schedules clearing
   toast(ctx, t("copied"));
+  if (!key) return;
+  // The copy icon turns into a check for a moment, so the action is visible without reading the toast.
+  st.copied = key;
+  ctx.rerender();
+  setTimeout(() => {
+    if (st.copied === key) {
+      st.copied = "";
+      ctx.rerender();
+    }
+  }, 1400);
 }
 
 export function iconButton(ic: IconName, label: string, onclick: () => void, extra: Record<string, unknown> = {}) {
   return h("button", { type: "button", class: "icon-btn", "aria-label": label, title: label, onclick, ...extra }, icon(ic));
+}
+
+function copyButton(ctx: Ctx, key: string, value: string, label: string) {
+  const done = st.copied === key;
+  return h(
+    "button",
+    {
+      type: "button",
+      class: `icon-btn${done ? " done" : ""}`,
+      "aria-label": label,
+      title: label,
+      onclick: () => void copy(ctx, value, key),
+    },
+    icon(done ? "check" : "copy"),
+  );
 }
 
 function errorBox(): Child {
@@ -132,7 +206,82 @@ function errorBox(): Child {
 }
 
 export function toastEl(): Child {
-  return st.toast ? h("div", { class: "toast", role: "status" }, st.toast) : null;
+  return st.toast ? h("div", { class: "toast", role: "status" }, icon("check"), st.toast) : null;
+}
+
+function topBar(...children: Child[]): HTMLElement {
+  return h("div", { class: "top" }, ...children);
+}
+
+function spacer(): HTMLElement {
+  return h("span", { class: "spacer" });
+}
+
+function sectionTitle(text: string): HTMLElement {
+  return h("h2", { class: "section-title" }, text);
+}
+
+function section(title: string, ...rows: Child[]): Child[] {
+  const present = rows.filter(Boolean);
+  return present.length ? [sectionTitle(title), h("div", { class: "group" }, ...present)] : [];
+}
+
+function progress(): HTMLElement {
+  return h("div", { class: "progress" }, h("span", { class: "sr-only" }, t("loading", "")));
+}
+
+// ---------- popover menu ----------
+
+let openMenuEl: HTMLElement | undefined;
+
+function closeMenu() {
+  openMenuEl?.remove();
+  openMenuEl = undefined;
+}
+
+interface MenuItem {
+  label: string;
+  icon?: IconName;
+  checked?: boolean;
+  onClick: () => void;
+}
+
+/** A small popover menu anchored under a button; light-dismiss and Escape come from the platform. */
+function menu(anchor: HTMLElement, label: string, items: MenuItem[], radio = false) {
+  closeMenu();
+  const el = h(
+    "div",
+    { class: "menu", popover: "auto", role: "menu", "aria-label": label },
+    ...items.map((it) =>
+      h(
+        "button",
+        {
+          type: "button",
+          class: "menu-item",
+          role: radio ? "menuitemradio" : "menuitem",
+          ...(radio ? { "aria-checked": String(!!it.checked) } : {}),
+          onclick: () => {
+            closeMenu();
+            it.onClick();
+          },
+        },
+        it.icon ? icon(it.icon) : h("span", { class: "menu-gap" }),
+        h("span", { class: "grow" }, it.label),
+        it.checked ? icon("check") : null,
+      ),
+    ),
+  );
+  document.body.append(el);
+  openMenuEl = el;
+  const r = anchor.getBoundingClientRect();
+  el.style.top = `${Math.round(r.bottom + 6)}px`;
+  el.style.right = `${Math.round(Math.max(8, window.innerWidth - r.right))}px`;
+  el.addEventListener("toggle", (e) => {
+    if ((e as ToggleEvent).newState === "closed" && openMenuEl === el) openMenuEl = undefined;
+  });
+  el.showPopover();
+  // Keep keyboard users in the menu: focus its first item.
+  (el.querySelector("[role=menuitem], [role=menuitemradio]") as HTMLElement | null)?.focus();
 }
 
 // ---------- data ----------
@@ -148,6 +297,12 @@ async function loadList(ctx: Ctx) {
   const p = await send<PageMatches>({ type: "pageMatches" });
   if (p.ok) st.page = p.data;
   await syncNow(ctx, false);
+}
+
+/** Re-reads the logins matching the active tab (e.g. after the default URI match setting changed). */
+export async function refreshPageMatches(): Promise<void> {
+  const p = await send<PageMatches>({ type: "pageMatches" });
+  if (p.ok) st.page = p.data;
 }
 
 async function syncNow(ctx: Ctx, force: boolean) {
@@ -167,72 +322,260 @@ async function syncNow(ctx: Ctx, force: boolean) {
 
 function open(ctx: Ctx, route: Route) {
   clearInterval(totpTimer);
-  Object.assign(st, { route, error: undefined, confirmDelete: false, totp: undefined, reveal: new Set() });
+  Object.assign(st, { route, error: undefined, confirmDelete: 0, totp: undefined, reveal: new Set(), copied: "", uriOpen: new Set() });
   if (route.kind !== "edit") st.draft = undefined;
   ctx.rerender();
 }
 
 // ---------- list ----------
 
-/** st.folder: "" all, "t:<type>", a folder id, "none" (no folder) or "trash" (the trash has its own list). */
+const TYPE_LABEL: Record<number, string> = { 1: "typeLogin", 2: "typeNote", 3: "typeCard", 4: "typeIdentity", 5: "typeSshKey" };
+
 function matches(i: VaultItem, q: string): boolean {
   const f = st.folder;
-  if (f.startsWith("t:") ? i.type !== Number(f.slice(2)) : f === "none" ? i.folderId : f && f !== "trash" && i.folderId !== f) return false;
+  if (f === "fav") {
+    if (!i.favorite) return false;
+  } else if (f.startsWith("t:")) {
+    if (i.type !== Number(f.slice(2))) return false;
+  } else if (f === "none") {
+    if (i.folderId) return false;
+  } else if (f && f !== "trash" && i.folderId !== f) return false;
   if (!q) return true;
   return [i.name, i.sub, ...i.uris].some((s) => s.toLowerCase().includes(q));
 }
 
+function sortItems(items: VaultItem[]): VaultItem[] {
+  const byName = (a: VaultItem, b: VaultItem) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }) || a.id.localeCompare(b.id);
+  const list = [...items];
+  if (st.sort === "nameDesc") return list.sort((a, b) => byName(b, a));
+  if (st.sort === "updated") return list.sort((a, b) => (b.revisionDate ?? 0) - (a.revisionDate ?? 0) || byName(a, b));
+  if (st.sort === "created") return list.sort((a, b) => (b.creationDate ?? 0) - (a.creationDate ?? 0) || byName(a, b));
+  return list.sort(byName);
+}
+
+function itemRow(ctx: Ctx, i: VaultItem): HTMLElement {
+  const name = i.failed ? t("decryptFailed") : i.name || t("untitled");
+  return h(
+    "button",
+    {
+      type: "button",
+      class: "row",
+      role: "listitem",
+      "aria-label": t("showItem", name),
+      onclick: () => open(ctx, { kind: "item", id: i.id }),
+    },
+    tile(i.name, i.type, i.uris),
+    h(
+      "div",
+      { class: "body" },
+      h("span", { class: "title" }, name),
+      h("span", { class: "sub" }, i.sub || t(TYPE_LABEL[i.type] ?? "untitled")),
+    ),
+    i.hasTotp ? icon("timer", t("oneTimeCode")) : null,
+    i.favorite ? icon("star", t("favorite")) : null,
+    icon("chevron"),
+  );
+}
+
+function emptyState(ctx: Ctx, q: string): HTMLElement {
+  const filtered = !!(q || st.folder);
+  const key = st.folder === "trash" ? "trashEmpty" : st.folder === "fav" ? "favoritesEmpty" : filtered ? "noMatches" : "vaultEmpty";
+  return h(
+    "div",
+    { class: "empty" },
+    icon(filtered ? "search" : "vault"),
+    h("strong", {}, t(key)),
+    filtered
+      ? h(
+          "button",
+          {
+            type: "button",
+            class: "btn text small",
+            onclick: () => {
+              st.query = "";
+              st.folder = "";
+              ctx.rerender();
+            },
+          },
+          t("clearFilters"),
+        )
+      : null,
+  );
+}
+
+function fillList(ctx: Ctx, box: HTMLElement, items: VaultItem[], q: string) {
+  const nodes: Child[] = [];
+  const grouped = st.sort === "name" || st.sort === "nameDesc";
+  const pushGroup = (list: VaultItem[]) => nodes.push(h("div", { class: "group" }, ...list.map((i) => itemRow(ctx, i))));
+  if (!items.length) {
+    nodes.push(emptyState(ctx, q));
+  } else {
+    // Favorites float to the top while browsing; a letter index is kept for the rest.
+    const favs = q ? [] : items.filter((i) => i.favorite);
+    const rest = favs.length ? items.filter((i) => !i.favorite) : items;
+    if (favs.length) {
+      nodes.push(sectionTitle(t("favorites")));
+      pushGroup(favs);
+    }
+    if (!grouped) {
+      if (rest.length) pushGroup(rest);
+    } else {
+      let letter = "";
+      let bucket: VaultItem[] = [];
+      const flush = () => {
+        if (!bucket.length) return;
+        nodes.push(h("h2", { class: "letter" }, letter));
+        pushGroup(bucket);
+        bucket = [];
+      };
+      for (const i of rest) {
+        const l = /[\p{L}\p{N}]/u.test(i.name[0] ?? "") ? i.name[0]!.toUpperCase() : "#";
+        if (l !== letter) {
+          flush();
+          letter = l;
+        }
+        bucket.push(i);
+      }
+      flush();
+    }
+  }
+  box.replaceChildren(...(nodes.filter(Boolean) as Node[]));
+}
+
+function arrowNav(box: HTMLElement) {
+  box.addEventListener("keydown", (e) => {
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) return;
+    const rows = [...box.querySelectorAll<HTMLElement>("[role=listitem]")];
+    const at = rows.indexOf(document.activeElement as HTMLElement);
+    if (at < 0) return;
+    e.preventDefault();
+    const next = e.key === "Home" ? 0 : e.key === "End" ? rows.length - 1 : at + (e.key === "ArrowDown" ? 1 : -1);
+    rows[Math.max(0, Math.min(rows.length - 1, next))]?.focus();
+  });
+}
+
+function skeletonList(): HTMLElement {
+  return h(
+    "div",
+    { class: "group", "aria-hidden": "true" },
+    ...Array.from({ length: 7 }, () =>
+      h(
+        "div",
+        { class: "row skeleton" },
+        h("span", { class: "tile skeleton-tile" }),
+        h("div", { class: "body" }, h("span", { class: "skeleton-line w40" }), h("span", { class: "skeleton-line w70" })),
+      ),
+    ),
+  );
+}
+
 function listView(ctx: Ctx): HTMLElement {
   if (st.folder === "trash" && st.list && !st.list.trash.length) st.folder = ""; // the trash was emptied
-  const listBox = h("div", { class: "group", role: "list" });
-  const fill = () => {
+  const listBox = h("div", { class: "list-body", role: "list", "aria-label": t("vault") });
+  arrowNav(listBox);
+  const redraw = () => {
     const q = st.query.trim().toLowerCase();
-    const items = ((st.folder === "trash" ? st.list?.trash : st.list?.items) ?? []).filter((i) => matches(i, q));
-    // A–Z section letters (Keyguard style) while browsing; a plain list while searching.
-    const letter = (i: VaultItem) => (/[a-z]/i.test(i.name[0] ?? "") ? i.name[0]!.toUpperCase() : "#");
-    listBox.replaceChildren(
-      ...items.flatMap((i, n) => [
-        !q && (n === 0 || letter(items[n - 1]!) !== letter(i)) ? h("div", { class: "letter", role: "presentation" }, letter(i)) : null,
-        h(
-          "button",
-          { type: "button", class: "row", role: "listitem", onclick: () => open(ctx, { kind: "item", id: i.id }) },
-          tile(i.name, i.type, i.uris),
-          h("div", { class: "body" }, h("span", { class: "title" }, i.failed ? t("decryptFailed") : i.name || t("untitled")), i.sub ? h("span", { class: "sub" }, i.sub) : null),
-          i.favorite ? icon("star", t("favorite")) : null,
-          icon("chevron"),
-        ),
-      ]).filter((x) => x !== null),
-    );
-    if (!items.length && st.list) listBox.replaceChildren(h("div", { class: "empty" }, icon("vault"), h("strong", {}, t(q || st.folder ? "noMatches" : "vaultEmpty"))));
+    const source = st.folder === "trash" ? st.list?.trash : st.list?.items;
+    const items = sortItems((source ?? []).filter((i) => matches(i, q)));
+    fillList(ctx, listBox, items, q);
   };
-  fill();
-  const search = h("input", {
+  redraw();
+
+  const input = h("input", {
     id: "vault-search",
     type: "search",
     placeholder: t("searchVault"),
     "aria-label": t("searchVault"),
+    title: t("searchHint"),
     value: st.query,
+    ...(st.sawList ? {} : { "data-autofocus": "1" }),
     oninput: (e: Event) => {
       st.query = (e.target as HTMLInputElement).value;
-      fill(); // list only, so the search box keeps focus and caret
+      clearBtn.hidden = !st.query;
+      redraw(); // list only, so the search box keeps focus and caret
+    },
+    onkeydown: (e: KeyboardEvent) => {
+      if (e.key === "Escape" && st.query) {
+        e.stopPropagation();
+        st.query = "";
+        input.value = "";
+        clearBtn.hidden = true;
+        redraw();
+      }
     },
   });
+  st.sawList = true;
+  const clearBtn = h(
+    "button",
+    {
+      type: "button",
+      class: "icon-btn sm",
+      "aria-label": t("clearSearch"),
+      title: t("clearSearch"),
+      hidden: !st.query,
+      onclick: () => {
+        st.query = "";
+        input.value = "";
+        clearBtn.hidden = true;
+        redraw();
+        input.focus();
+      },
+    },
+    icon("close"),
+  );
+
+  const sortButton = iconButton("sort", t("sort"), () => {}, { class: "icon-btn sm", "aria-haspopup": "menu" });
+  sortButton.onclick = () =>
+    menu(
+      sortButton,
+      t("sort"),
+      SORTS.map((s) => ({
+        label: t(s.label),
+        checked: st.sort === s.id,
+        onClick: () => {
+          st.sort = s.id;
+          try {
+            localStorage.setItem(SORT_KEY, s.id);
+          } catch {
+            /* no storage */
+          }
+          ctx.rerender();
+        },
+      })),
+      true,
+    );
+
   const folders = st.list?.folders ?? [];
   const chip = (id: string, label: string, ic?: IconName) =>
-    h("button", { type: "button", class: "chip", "aria-pressed": String(st.folder === id), onclick: () => ((st.folder = st.folder === id ? "" : id), ctx.rerender()) }, ic ? icon(ic) : null, label);
+    h(
+      "button",
+      {
+        type: "button",
+        class: "chip",
+        id: `chip-${id}`,
+        "aria-pressed": String(st.folder === id),
+        onclick: () => {
+          st.folder = st.folder === id ? "" : id;
+          ctx.rerender();
+        },
+      },
+      ic ? icon(ic) : null,
+      label,
+    );
+
   return h(
     "div",
-    { class: "page" },
-    h(
-      "div",
-      { class: "top" },
-      h("div", { class: "search", style: "flex:1" }, icon("search"), search),
-      iconButton("refresh", t("syncNow"), () => void syncNow(ctx, true), { class: `icon-btn${st.syncing ? " spin" : ""}`, disabled: st.syncing }),
-      iconButton("lock", t("lockNow"), () => ctx.lock()),
+    { class: "page list-page" },
+    topBar(
+      h("div", { class: "search" }, icon("search"), input, clearBtn),
+      sortButton,
+      iconButton("refresh", t("syncNow"), () => void syncNow(ctx, true), { class: `icon-btn sm${st.syncing ? " spin" : ""}`, disabled: st.syncing }),
+      iconButton("lock", t("lockNow"), () => ctx.lock(), { class: "icon-btn sm" }),
     ),
     h(
       "div",
       { class: "chips scroll", role: "group", "aria-label": t("filters") },
+      chip("fav", t("favorites"), "star"),
       chip("t:1", t("typeLogin"), "key"),
       chip("t:3", t("typeCard"), "card"),
       chip("t:4", t("typeIdentity"), "user"),
@@ -244,7 +587,7 @@ function listView(ctx: Ctx): HTMLElement {
     ),
     errorBox(),
     st.query || st.folder ? null : suggestions(ctx),
-    st.loading && !st.list ? h("div", { class: "progress" }) : listBox,
+    st.loading && !st.list ? skeletonList() : listBox,
     h("button", { type: "button", class: "fab", onclick: () => startEdit(ctx, undefined) }, icon("plus"), t("newItem")),
   );
 }
@@ -262,13 +605,13 @@ async function saveFromPage(ctx: Ctx) {
   const r = await send<PageLogin | null>({ type: "readPageLogin" });
   if (!r.ok || !r.data) return toast(ctx, r.ok ? t("noLoginOnPage") : r.error);
   const login = r.data;
-  const same = st.page?.items.find((i) => !i.readOnly && i.sub === login.username);
+  const same = st.page?.items.find((i) => i.type === 1 && !i.readOnly && i.sub === login.username);
   if (same) {
     const item = await send<Json>({ type: "getItem", id: same.id });
     if (item.ok) return startEdit(ctx, item.data, { data: { password: login.password } });
   }
   const url = new URL(login.url);
-  startEdit(ctx, undefined, { name: url.hostname, data: { username: login.username, password: login.password }, uris: url.origin });
+  startEdit(ctx, undefined, { name: url.hostname, data: { username: login.username, password: login.password }, uris: [{ uri: url.origin, match: null }] });
 }
 
 function suggestions(ctx: Ctx): Child {
@@ -277,7 +620,7 @@ function suggestions(ctx: Ctx): Child {
   return h(
     "section",
     { class: "suggestions", "aria-label": t("onThisSite", page.host) },
-    h("h2", { class: "section-title" }, t("onThisSite", page.host)),
+    h("div", { class: "suggestions-head" }, h("h2", { class: "section-title" }, t("onThisSite", page.host))),
     page.items.length
       ? h(
           "div",
@@ -288,12 +631,12 @@ function suggestions(ctx: Ctx): Child {
               { class: "row" },
               tile(i.name, i.type, i.uris),
               h("div", { class: "body" }, h("span", { class: "title" }, i.name), i.sub ? h("span", { class: "sub" }, i.sub) : null),
-              h("button", { type: "button", class: "btn tonal small", "aria-label": `${t("fill")} ${i.name}`, onclick: () => void fill(ctx, i.id) }, t("fill")),
+              h("button", { type: "button", class: "btn tonal small", "aria-label": `${t("fill")} ${i.name}`, onclick: () => void fill(ctx, i.id) }, icon("key"), t("fill")),
             ),
           ),
         )
       : null,
-    h("button", { type: "button", class: "btn text", onclick: () => void saveFromPage(ctx) }, icon("plus"), t("saveFromPage")),
+    h("button", { type: "button", class: "btn text small add-page", onclick: () => void saveFromPage(ctx) }, icon("plus"), t("saveFromPage")),
   );
 }
 
@@ -362,7 +705,6 @@ const SCHEMA: Record<number, { obj: string; fields: Spec[] }> = {
     ],
   },
 };
-const TYPE_LABEL: Record<number, string> = { 1: "typeLogin", 2: "typeNote", 3: "typeCard", 4: "typeIdentity", 5: "typeSshKey" };
 const label = (key: string) => t(`field_${key}`);
 
 /** Rough strength from length and character classes (no dictionary check). */
@@ -375,28 +717,66 @@ function strength(pw: string): { label: string; level: number } {
 
 // ---------- item view ----------
 
-function fieldRow(ctx: Ctx, key: string, ic: IconName, title: string, value: string, opts: { secret?: boolean; mono?: boolean; extra?: Child } = {}): HTMLElement {
+function fieldRow(
+  ctx: Ctx,
+  key: string,
+  ic: IconName,
+  title: string,
+  value: string,
+  opts: { secret?: boolean; mono?: boolean; extra?: Child } = {},
+): HTMLElement {
   const shown = !opts.secret || st.reveal.has(key);
+  const valueEl = h("span", { class: `value${opts.mono ? " mono" : ""}` });
+  if (shown) {
+    if (opts.mono && opts.secret) valueEl.append(...colorize(value));
+    else valueEl.textContent = value;
+  } else {
+    valueEl.textContent = "•".repeat(Math.min(Math.max(value.length, 8), 16));
+  }
   return h(
     "div",
-    { class: "row field-row" },
+    { class: `row field-row${opts.secret ? " elevated" : ""}` },
     icon(ic),
+    h("div", { class: "body" }, h("span", { class: "label" }, title), valueEl, opts.extra),
     h(
-      "div",
-      { class: "body" },
-      h("span", { class: "label" }, title),
-      h("span", { class: `value${opts.mono ? " mono" : ""}` }, shown ? value : "•".repeat(Math.min(value.length, 12))),
-      opts.extra,
+      "span",
+      { class: "field-actions" },
+      opts.secret
+        ? iconButton(shown ? "eyeOff" : "eye", t(shown ? "hidePassword" : "showPassword"), () => {
+            if (shown) st.reveal.delete(key);
+            else st.reveal.add(key);
+            ctx.rerender();
+          })
+        : null,
+      copyButton(ctx, key, value, t("copyField", title)),
     ),
-    opts.secret
-      ? iconButton(shown ? "eyeOff" : "eye", t(shown ? "hidePassword" : "showPassword"), () => {
-          if (shown) st.reveal.delete(key);
-          else st.reveal.add(key);
-          ctx.rerender();
-        })
-      : null,
-    iconButton("copy", t("copyField", title), () => void copy(ctx, value)),
   );
+}
+
+const RING_CIRCUMFERENCE = 2 * Math.PI * 9;
+
+/** A countdown ring for the one-time code. */
+function ring(fraction: number): SVGSVGElement {
+  const NS = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(NS, "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("class", "ring");
+  svg.setAttribute("aria-hidden", "true");
+  const track = document.createElementNS(NS, "circle");
+  track.setAttribute("cx", "12");
+  track.setAttribute("cy", "12");
+  track.setAttribute("r", "9");
+  track.setAttribute("class", "ring-track");
+  const bar = document.createElementNS(NS, "circle");
+  bar.setAttribute("cx", "12");
+  bar.setAttribute("cy", "12");
+  bar.setAttribute("r", "9");
+  bar.setAttribute("class", "ring-bar");
+  bar.setAttribute("transform", "rotate(-90 12 12)");
+  bar.style.strokeDasharray = String(RING_CIRCUMFERENCE);
+  bar.style.strokeDashoffset = String(RING_CIRCUMFERENCE * (1 - fraction));
+  svg.append(track, bar);
+  return svg;
 }
 
 function totpRow(ctx: Ctx, id: string): HTMLElement {
@@ -404,38 +784,51 @@ function totpRow(ctx: Ctx, id: string): HTMLElement {
     void refreshTotp(ctx, id);
     return h("div", { class: "row" }, icon("timer"), h("div", { class: "body" }, h("span", { class: "label" }, t("oneTimeCode")), h("span", { class: "value" }, "…")));
   }
-  const { code, remaining } = st.totp;
+  const { code, remaining, period } = st.totp;
   const pretty = code.length === 6 ? `${code.slice(0, 3)} ${code.slice(3)}` : code;
   return h(
     "div",
-    { class: "row field-row" },
+    { class: "row field-row totp-row elevated" },
     icon("timer"),
     h("div", { class: "body" }, h("span", { class: "label" }, t("oneTimeCode")), h("span", { class: "value mono totp", "data-totp": "1" }, pretty)),
-    h("span", { class: "countdown", "data-remaining": "1", "aria-label": t("secondsLeft", String(remaining)) }, String(remaining)),
-    iconButton("copy", t("copyField", t("oneTimeCode")), () => void copy(ctx, code)),
+    h(
+      "span",
+      { class: "field-actions" },
+      h(
+        "span",
+        { class: "totp-ring", "data-remaining": String(remaining), role: "img", "aria-label": t("secondsLeft", String(remaining)) },
+        ring(remaining / Math.max(period, 1)),
+        h("span", { class: "totp-seconds", "aria-hidden": "true" }, String(remaining)),
+      ),
+      copyButton(ctx, "totp", code, t("copyField", t("oneTimeCode"))),
+    ),
   );
 }
 
 async function refreshTotp(ctx: Ctx, id: string) {
-  const r = await send<{ code: string; remaining: number }>({ type: "totp", id });
+  const r = await send<{ code: string; period: number; remaining: number }>({ type: "totp", id });
   if (!r.ok || st.route.kind !== "item" || st.route.id !== id) return;
-  st.totp = { code: r.data.code, remaining: r.data.remaining };
+  st.totp = { code: r.data.code, period: r.data.period || 30, remaining: r.data.remaining };
   ctx.rerender();
   clearInterval(totpTimer);
   totpTimer = setInterval(() => {
     if (!st.totp) return;
     st.totp.remaining -= 1;
-    const pill = document.querySelector<HTMLElement>("[data-remaining]");
     if (st.totp.remaining <= 0) {
       clearInterval(totpTimer);
       void refreshTotp(ctx, id);
-    } else if (pill) pill.textContent = String(st.totp.remaining); // tick without a full re-render
+      return;
+    }
+    // Tick the ring and the counter without re-rendering the whole screen.
+    const pill = document.querySelector<HTMLElement>("[data-remaining]");
+    if (!pill) return;
+    pill.setAttribute("aria-label", t("secondsLeft", String(st.totp.remaining)));
+    pill.setAttribute("data-remaining", String(st.totp.remaining));
+    const seconds = pill.querySelector<HTMLElement>(".totp-seconds");
+    if (seconds) seconds.textContent = String(st.totp.remaining);
+    const bar = pill.querySelector<SVGCircleElement>(".ring-bar");
+    if (bar) bar.style.strokeDashoffset = String(RING_CIRCUMFERENCE * (1 - st.totp.remaining / st.totp.period));
   }, 1000);
-}
-
-function section(title: string, ...rows: Child[]): Child[] {
-  const present = rows.filter(Boolean);
-  return present.length ? [h("h2", { class: "section-title" }, title), h("div", { class: "group" }, ...present)] : [];
 }
 
 const actionRow = (ic: IconName, title: string, onclick: () => void, danger = false) =>
@@ -446,13 +839,29 @@ async function vaultAction(ctx: Ctx, req: Parameters<typeof send>[0], done: stri
   ctx.rerender();
   const r = await send<VaultList>(req);
   st.busy = false;
-  st.confirmDelete = false;
+  st.confirmDelete = 0;
   if (!r.ok) return ((st.error = r.error), ctx.rerender());
   st.list = r.data;
   st.item = undefined;
   if (back) open(ctx, { kind: "list" });
   else ctx.rerender();
   toast(ctx, t(done));
+}
+
+/** Arm a destructive action on the first tap, run it on the second; disarms itself after a while. */
+function twoTap(ctx: Ctx, run: () => void) {
+  if (!st.confirmDelete) {
+    st.confirmDelete = Date.now();
+    ctx.rerender();
+    setTimeout(() => {
+      if (!st.confirmDelete) return;
+      st.confirmDelete = 0;
+      if (st.route.kind === "item") ctx.rerender();
+    }, 4000);
+    return;
+  }
+  st.confirmDelete = 0;
+  run();
 }
 
 // Same cap as Send files (MAX_SEND_FILE_BYTES in background/vault.ts).
@@ -473,6 +882,35 @@ async function upload(ctx: Ctx, cipherId: string, file: File | undefined) {
   await vaultAction(ctx, { type: "addAttachment", cipherId, file: { name: file.name, data } }, "saved", false);
 }
 
+/** Fill / open actions for the item, when the active tab has a matching login or the item has a site. */
+function quickActions(ctx: Ctx, id: string, uris: string[]): Child {
+  const onSite = st.page?.items.some((i) => i.id === id);
+  const url = uris.map(webUrl).find(Boolean);
+  if (!onSite && !url) return null;
+  return h(
+    "div",
+    { class: "quick" },
+    onSite ? h("button", { type: "button", class: "btn tonal", onclick: () => void fill(ctx, id) }, icon("key"), t("fillThisSite")) : null,
+    url
+      ? h(
+          "a",
+          {
+            class: "btn text",
+            href: url,
+            target: "_blank",
+            rel: "noopener noreferrer",
+            onclick: (e: Event) => {
+              e.preventDefault();
+              void chrome.tabs.create({ url });
+            },
+          },
+          icon("external"),
+          t("openWebsite"),
+        )
+      : null,
+  );
+}
+
 function itemView(ctx: Ctx, id: string): HTMLElement {
   const item = st.item && st.item.id === id ? st.item : undefined;
   if (!item) {
@@ -481,12 +919,18 @@ function itemView(ctx: Ctx, id: string): HTMLElement {
       else st.error = r.error;
       ctx.rerender();
     });
-    return h("div", { class: "page" }, h("div", { class: "top" }, iconButton("back", t("back"), () => open(ctx, { kind: "list" }))), errorBox(), st.error ? null : h("div", { class: "progress" }));
+    return h(
+      "div",
+      { class: "page" },
+      topBar(iconButton("back", t("back"), () => open(ctx, { kind: "list" }))),
+      errorBox(),
+      st.error ? null : progress(),
+    );
   }
   const inTrash = !!item.deletedDate;
   const summary = [...(st.list?.items ?? []), ...(st.list?.trash ?? [])].find((i) => i.id === id);
   const type = Number(item.type);
-  const editable = !summary?.readOnly && !inTrash && type >= 1 && type <= 4;
+  const editable = !summary?.readOnly && !inTrash && type >= 1 && type <= 5;
   const schema = SCHEMA[type];
   const data = schema ? (obj(item[schema.obj]) ?? {}) : {};
   const rows: Child[] = [];
@@ -498,10 +942,13 @@ function itemView(ctx: Ctx, id: string): HTMLElement {
       continue;
     }
     const s = type === 1 && f.key === "password" ? strength(v) : undefined;
-    rows.push(fieldRow(ctx, f.key, f.icon, label(f.key), v, { secret: f.secret, mono: f.mono, extra: s ? h("span", { class: `pill s${s.level}` }, s.label) : null }));
+    rows.push(fieldRow(ctx, f.key, f.icon, label(f.key), v, { secret: f.secret, mono: f.mono, extra: s ? h("span", { class: `badge s${s.level}` }, s.label) : null }));
   }
   const login = type === 1 ? data : undefined;
-  const uris = (Array.isArray(login?.uris) ? (login!.uris as Json[]) : []).map((u) => str(u.uri)).filter(Boolean);
+  const uriEntries = (Array.isArray(login?.uris) ? (login!.uris as Json[]) : [])
+    .map((u) => ({ uri: str(u.uri), match: typeof u.match === "number" ? (u.match as number) : null }))
+    .filter((u) => u.uri);
+  const uris = uriEntries.map((u) => u.uri);
   const fields = Array.isArray(item.fields) ? (item.fields as Json[]) : [];
   const history = Array.isArray(item.passwordHistory) ? (item.passwordHistory as Json[]) : [];
   const folder = st.list?.folders.find((f) => f.id === item.folderId);
@@ -510,16 +957,14 @@ function itemView(ctx: Ctx, id: string): HTMLElement {
   const collections = (Array.isArray(item.collectionIds) ? (item.collectionIds as string[]) : []).map((c) => st.list?.collections?.find((x) => x.id === c)?.name).filter(Boolean);
   const date = (v: unknown) => (typeof v === "string" && v ? new Date(v).toLocaleString() : "");
   const passkeys = Array.isArray(login?.fido2Credentials) ? (login!.fido2Credentials as Json[]).length : 0;
-  const confirm = (fn: () => void) => () => (st.confirmDelete ? fn() : ((st.confirmDelete = true), ctx.rerender()));
+  const confirm = st.confirmDelete > 0;
 
   return h(
     "div",
-    { class: "page" },
-    h(
-      "div",
-      { class: "top" },
+    { class: "page item-page" },
+    topBar(
       iconButton("back", t("back"), () => open(ctx, { kind: "list" })),
-      h("span", { style: "flex:1" }),
+      spacer(),
       editable
         ? iconButton("star", t(item.favorite ? "unfavorite" : "favorite"), () => void vaultAction(ctx, { type: "saveItem", item: { ...item, favorite: !item.favorite } }, "saved", false), {
             class: `icon-btn${item.favorite ? " on" : ""}`,
@@ -528,13 +973,43 @@ function itemView(ctx: Ctx, id: string): HTMLElement {
         : null,
       editable ? iconButton("edit", t("edit"), () => startEdit(ctx, item)) : null,
     ),
-    h("div", { class: "hero" }, tile(str(item.name), type, uris), h("div", { class: "body" }, h("h1", {}, str(item.name) || t("untitled")), h("span", { class: "sub" }, t(TYPE_LABEL[type] ?? "untitled")))),
+    h(
+      "div",
+      { class: "hero" },
+      tile(str(item.name), type, uris),
+      h("div", { class: "body" }, h("h1", {}, str(item.name) || t("untitled")), h("span", { class: "sub" }, t(TYPE_LABEL[type] ?? "untitled"))),
+    ),
+    quickActions(ctx, id, uris),
     errorBox(),
     inTrash ? h("div", { class: "notice warn" }, icon("trash"), h("div", {}, t("inTrash"))) : summary?.readOnly ? h("div", { class: "notice" }, icon("lock"), h("div", {}, t("readOnlyItem"))) : null,
     rows.length ? h("div", { class: "group" }, ...rows) : null,
     login?.passwordRevisionDate ? h("p", { class: "caption" }, t("passwordChanged", date(login.passwordRevisionDate))) : null,
     passkeys ? h("div", { class: "notice info" }, icon("key"), h("div", {}, t("passkeyAvailable"))) : null,
-    ...section(t("websites"), ...uris.map((u) => h("a", { class: "row", href: /^https?:\/\//i.test(u) ? u : `https://${u}`, target: "_blank", rel: "noopener noreferrer" }, icon("globe"), h("div", { class: "body" }, h("span", { class: "title ellipsis" }, u))))),
+    ...section(
+      t("websites"),
+      ...uriEntries.map(({ uri: u, match }) => {
+        const href = webUrl(u);
+        const body = h("div", { class: "body" }, h("span", { class: "title ellipsis" }, u), match !== null ? h("span", { class: "sub" }, uriMatchLabel(match)) : null);
+        return href
+          ? h(
+              "a",
+              {
+                class: "row",
+                href,
+                target: "_blank",
+                rel: "noopener noreferrer",
+                onclick: (e: Event) => {
+                  e.preventDefault();
+                  void chrome.tabs.create({ url: href });
+                },
+              },
+              icon("globe"),
+              body,
+              icon("external"),
+            )
+          : h("div", { class: "row" }, icon("globe"), body);
+      }),
+    ),
     ...section(
       t("customFields"),
       ...fields.map((f, i) =>
@@ -545,7 +1020,7 @@ function itemView(ctx: Ctx, id: string): HTMLElement {
             : fieldRow(ctx, `field.${i}`, "note", str(f.name) || t("untitled"), str(f.value), { secret: Number(f.type) === 1 }),
       ),
     ),
-    ...(str(item.notes) ? [h("h2", { class: "section-title" }, t("notes")), h("div", { class: "notes" }, str(item.notes))] : []),
+    ...(str(item.notes) ? [sectionTitle(t("notes")), h("div", { class: "notes" }, str(item.notes))] : []),
     ...section(
       t("passwordHistory"),
       ...(st.reveal.has("history")
@@ -591,9 +1066,9 @@ function itemView(ctx: Ctx, id: string): HTMLElement {
           ? actionRow("copy", t("clone"), () => startEdit(ctx, { ...structuredClone(item), id: undefined, attachments: null, name: `${str(item.name)} ${t("copySuffix")}`, passwordHistory: null }, {}, true))
           : null,
       inTrash
-        ? actionRow("trash", t(st.confirmDelete ? "confirmPurge" : "deleteForever"), confirm(() => void vaultAction(ctx, { type: "purgeItem", id }, "deleted")), true)
+        ? actionRow("trash", t(confirm ? "confirmPurge" : "deleteForever"), () => twoTap(ctx, () => void vaultAction(ctx, { type: "purgeItem", id }, "deleted")), true)
         : editable
-          ? actionRow("trash", t(st.confirmDelete ? "confirmTrash" : "moveToTrash"), confirm(() => void vaultAction(ctx, { type: "deleteItem", id }, "movedToTrash")), true)
+          ? actionRow("trash", t(confirm ? "confirmTrash" : "moveToTrash"), () => twoTap(ctx, () => void vaultAction(ctx, { type: "deleteItem", id }, "movedToTrash")), true)
           : null,
     ),
   );
@@ -603,7 +1078,7 @@ function itemView(ctx: Ctx, id: string): HTMLElement {
 
 interface Prefill {
   name?: string;
-  uris?: string;
+  uris?: { uri: string; match: number | null }[];
   data?: Record<string, string>;
 }
 
@@ -621,7 +1096,12 @@ function startEdit(ctx: Ctx, item: Json | undefined, prefill: Prefill = {}, asNe
     folderId: str(base.folderId),
     favorite: base.favorite === true,
     data: { ...data, ...prefill.data },
-    uris: prefill.uris ?? (Array.isArray(login?.uris) ? (login!.uris as Json[]) : []).map((u) => str(u.uri)).filter(Boolean).join("\n"),
+    uris:
+      prefill.uris ??
+      (Array.isArray(login?.uris) ? (login!.uris as Json[]) : [])
+        .map((u) => ({ uri: str(u.uri), match: typeof u.match === "number" ? u.match : null }))
+        .filter((u) => u.uri),
+    autofillOnPageLoad: typeof login?.autofillOnPageLoad === "boolean" ? (login.autofillOnPageLoad as boolean) : null,
     fields: (Array.isArray(base.fields) ? (base.fields as Json[]) : []).map((f) => ({ name: str(f.name), value: str(f.value), type: Number(f.type) || 0, linkedId: f.linkedId })),
   };
   open(ctx, { kind: "edit", isNew: asNew });
@@ -636,8 +1116,8 @@ function buildItem(d: EditDraft): Json {
     const typed: Json = { ...obj(d.base[schema.obj]) };
     for (const f of schema.fields) typed[f.key] = orNull(d.data[f.key] ?? "");
     if (d.type === 1) {
-      const oldUris = Array.isArray(typed.uris) ? (typed.uris as Json[]) : [];
-      typed.uris = d.uris.split("\n").map((u) => u.trim()).filter(Boolean).map((u) => oldUris.find((o) => o.uri === u) ?? { uri: u, match: null });
+      typed.uris = d.uris.map((u) => ({ uri: u.uri.trim(), match: u.match })).filter((u) => u.uri);
+      typed.autofillOnPageLoad = d.autofillOnPageLoad;
     }
     item[schema.obj] = typed;
   } else item.secureNote = obj(d.base.secureNote) ?? { type: 0 };
@@ -645,6 +1125,110 @@ function buildItem(d: EditDraft): Json {
     .filter((f) => f.name.trim() || f.value)
     .map((f) => ({ name: f.name, value: f.type === 2 ? String(f.value === "true") : f.value || null, type: f.type, linkedId: f.linkedId ?? null }));
   return item;
+}
+
+/** Live strength readout under the password field; updated in place so the caret stays put. */
+function strengthMeter(input: HTMLInputElement | HTMLTextAreaElement, value: string) {
+  const fill = h("i");
+  const bar = h("div", { class: "meter", "aria-hidden": "true" }, fill);
+  const text = h("span", { class: "meter-label" });
+  const sync = (v: string) => {
+    const s = strength(v);
+    bar.dataset.level = String(s.level);
+    text.textContent = v ? s.label : "";
+    bar.hidden = !v;
+  };
+  sync(value);
+  input.addEventListener("input", () => sync(input.value));
+  return h("div", { class: "meter-wrap" }, bar, text);
+}
+
+/** The generator's strength bar, drawn once for the current value. */
+function strengthBar(value: string): HTMLElement {
+  return h("div", { class: "meter", "data-level": String(strength(value).level), "aria-hidden": "true" }, h("i"));
+}
+
+/** Labels for Bitwarden's UriMatchStrategy, as the clients name them. */
+export function uriMatchLabel(match: number): string {
+  const key =
+    match === URI_MATCH.Host ? "uriMatchHost"
+    : match === URI_MATCH.StartsWith ? "uriMatchStartsWith"
+    : match === URI_MATCH.Exact ? "uriMatchExact"
+    : match === URI_MATCH.RegularExpression ? "uriMatchRegex"
+    : match === URI_MATCH.Never ? "uriMatchNever"
+    : "uriMatchBaseDomainShort";
+  return t(key);
+}
+
+/** The default's name, for the "Default (…)" option. */
+function defaultUriMatchLabel(): string {
+  return uriMatchLabel(settingsOf()?.defaultUriMatch ?? URI_MATCH.Domain);
+}
+
+const settingsOf = (): Settings | undefined => currentCtx?.settings();
+let currentCtx: Ctx | undefined;
+
+/** The editor's website rows: URI + match detection, with Add / Remove. */
+function uriEditor(ctx: Ctx): Child[] {
+  const d = st.draft!;
+  const rows = d.uris.map((u, i) => {
+    const open = st.uriOpen.has(i);
+    const select = withChevron(
+      h(
+        "select",
+        {
+          "aria-label": t("matchDetection"),
+          onchange: (e: Event) => {
+            const v = (e.target as HTMLSelectElement).value;
+            u.match = v === "" ? null : Number(v);
+            ctx.rerender();
+          },
+        },
+        h("option", { value: "", selected: u.match === null }, t("defaultLabelWithValue", defaultUriMatchLabel())),
+        h("option", { value: String(URI_MATCH.Domain), selected: u.match === URI_MATCH.Domain }, t("uriMatchBaseDomainShort")),
+        h("option", { value: String(URI_MATCH.Host), selected: u.match === URI_MATCH.Host }, t("uriMatchHost")),
+        h("option", { value: String(URI_MATCH.Exact), selected: u.match === URI_MATCH.Exact }, t("uriMatchExact")),
+        h("option", { value: String(URI_MATCH.Never), selected: u.match === URI_MATCH.Never }, t("uriMatchNever")),
+        h("option", { value: "advanced", disabled: true }, t("uriMatchAdvanced")),
+        h("option", { value: String(URI_MATCH.StartsWith), selected: u.match === URI_MATCH.StartsWith }, t("uriMatchStartsWith")),
+        h("option", { value: String(URI_MATCH.RegularExpression), selected: u.match === URI_MATCH.RegularExpression }, t("uriMatchRegex")),
+      ),
+    );
+    return h(
+      "div",
+      { class: "field-card" },
+      h(
+        "div",
+        { class: "field-card-top" },
+        h("input", {
+          class: "name",
+          value: u.uri,
+          placeholder: "https://example.com",
+          "aria-label": t("uriLabel", String(i + 1)),
+          autocapitalize: "off",
+          spellcheck: false,
+          oninput: (e: Event) => (u.uri = (e.target as HTMLInputElement).value),
+        }),
+        iconButton(open ? "settings" : "settings", t("matchDetection"), () => (open ? st.uriOpen.delete(i) : st.uriOpen.add(i), ctx.rerender()), {
+          class: `icon-btn sm${open ? " on" : ""}`,
+          "aria-pressed": String(open),
+        }),
+        d.uris.length > 1
+          ? iconButton("trash", t("removeWebsite"), () => (d.uris.splice(i, 1), st.uriOpen.clear(), ctx.rerender()), { class: "icon-btn sm" })
+          : null,
+      ),
+      open ? h("div", { class: "field-card-bottom" }, select) : null,
+      open ? h("p", { class: "caption" }, t("uriMatchHint")) : null,
+      open && u.match !== null && URI_MATCH_ADVANCED.includes(u.match)
+        ? h("p", { class: "caption warn" }, t(u.match === URI_MATCH.RegularExpression ? "uriMatchRegExHint" : "uriMatchStartsWithHint"))
+        : null,
+    );
+  });
+  return [
+    sectionTitle(t("autofillOptions")),
+    ...rows,
+    h("button", { type: "button", class: "btn text small add-field", onclick: () => (d.uris.push({ uri: "", match: null }), ctx.rerender()) }, icon("plus"), t("addWebsite")),
+  ];
 }
 
 function editView(ctx: Ctx, isNew: boolean): HTMLElement {
@@ -659,7 +1243,7 @@ function editView(ctx: Ctx, isNew: boolean): HTMLElement {
     return h(area ? "textarea" : "input", { ...rest, value: get(), oninput: (e: Event) => set((e.target as HTMLInputElement).value) });
   };
   const select = (get: () => string, set: (v: string) => void, options: [string, string][]) =>
-    h("select", { onchange: (e: Event) => set((e.target as HTMLSelectElement).value) }, ...options.map(([v, l]) => h("option", { value: v, selected: v === get() }, l)));
+    withChevron(h("select", { onchange: (e: Event) => set((e.target as HTMLSelectElement).value) }, ...options.map(([v, l]) => h("option", { value: v, selected: v === get() }, l))));
 
   const specField = (f: Spec) => {
     const get = () => d.data[f.key] ?? "";
@@ -668,11 +1252,12 @@ function editView(ctx: Ctx, isNew: boolean): HTMLElement {
     if (f.options) return field(id, f.icon, label(f.key), select(get, set, [["", "—"], ...f.options.map((o): [string, string] => [o, o])]));
     if (!f.secret) return field(id, f.icon, label(f.key), text(get, set, { autocomplete: "off", spellcheck: false, area: f.area }));
     const reveal = st.reveal.has(id);
-    return field(
+    const control = text(get, set, { type: reveal ? "text" : "password", autocomplete: "new-password", spellcheck: false, class: "mono" });
+    const block = field(
       id,
       f.icon,
       label(f.key),
-      text(get, set, { type: reveal ? "text" : "password", autocomplete: "new-password", spellcheck: false, class: "mono" }),
+      control,
       h(
         "span",
         { class: "trailing" },
@@ -692,6 +1277,7 @@ function editView(ctx: Ctx, isNew: boolean): HTMLElement {
           : null,
       ),
     );
+    return d.type === 1 && f.key === "password" ? h("div", { class: "field-block" }, block, strengthMeter(control, get())) : block;
   };
 
   const onsubmit = async (e: Event) => {
@@ -716,32 +1302,72 @@ function editView(ctx: Ctx, isNew: boolean): HTMLElement {
       ? null // linked fields are kept as they are
       : h(
           "div",
-          { class: "custom-field" },
-          text(() => f.name, (v) => (f.name = v), { placeholder: t("fieldName"), "aria-label": t("fieldName") }),
-          f.type === 2
-            ? select(() => (f.value === "true" ? "true" : "false"), (v) => (f.value = v), [["false", t("no")], ["true", t("yes")]])
-            : text(() => f.value, (v) => (f.value = v), { placeholder: t("fieldValue"), "aria-label": t("fieldValue"), type: f.type === 1 ? "password" : "text" }),
-          select(() => String(f.type), (v) => ((f.type = Number(v)), ctx.rerender()), [["0", t("fieldText")], ["1", t("fieldHidden")], ["2", t("fieldBoolean")]]),
-          iconButton("trash", t("removeField"), () => (d.fields.splice(i, 1), ctx.rerender())),
+          { class: "field-card" },
+          h(
+            "div",
+            { class: "field-card-top" },
+            h("input", {
+              class: "name",
+              placeholder: t("fieldName"),
+              "aria-label": t("fieldName"),
+              value: f.name,
+              oninput: (e: Event) => (f.name = (e.target as HTMLInputElement).value),
+            }),
+            iconButton("trash", t("removeField"), () => (d.fields.splice(i, 1), ctx.rerender()), { class: "icon-btn sm" }),
+          ),
+          h(
+            "div",
+            { class: "field-card-bottom" },
+            f.type === 2
+              ? select(
+                  () => (f.value === "true" ? "true" : "false"),
+                  (v) => (f.value = v),
+                  [["false", t("no")], ["true", t("yes")]],
+                )
+              : h("input", {
+                  placeholder: t("fieldValue"),
+                  "aria-label": t("fieldValue"),
+                  value: f.value,
+                  type: f.type === 1 ? "password" : "text",
+                  oninput: (e: Event) => (f.value = (e.target as HTMLInputElement).value),
+                }),
+            select(
+              () => String(f.type),
+              (v) => ((f.type = Number(v)), ctx.rerender()),
+              [["0", t("fieldText")], ["1", t("fieldHidden")], ["2", t("fieldBoolean")]],
+            ),
+          ),
         );
 
   return h(
     "form",
-    { class: "page", onsubmit },
-    h("div", { class: "top" }, iconButton("back", t("cancel"), back), h("h1", {}, t(isNew ? "newItem" : "editItem"))),
-    isNew ? h("div", { class: "chips", role: "group", "aria-label": t("itemType") }, typeChip(1, "key"), typeChip(3, "card"), typeChip(4, "user"), typeChip(2, "note")) : null,
+    { class: "page editor", onsubmit },
+    topBar(iconButton("back", t("cancel"), back), h("h1", {}, t(isNew ? "newItem" : "editItem")), spacer()),
+    errorBox(),
+    isNew ? h("div", { class: "chips", role: "group", "aria-label": t("itemType") }, typeChip(1, "key"), typeChip(3, "card"), typeChip(4, "user"), typeChip(2, "note"), typeChip(5, "key")) : null,
     field("edit-name", "edit", t("name"), text(() => d.name, (v) => (d.name = v), { required: true, "data-autofocus": "1" })),
     ...(SCHEMA[d.type]?.fields ?? []).map(specField),
-    d.type === 1 ? field("edit-uris", "globe", t("websitesOnePerLine"), text(() => d.uris, (v) => (d.uris = v), { area: true, rows: 2 })) : null,
-    h("h2", { class: "section-title" }, t("customFields")),
+    ...(d.type === 1 ? uriEditor(ctx) : []),
+    d.type === 1 && settingsOf()?.autofillOnPageLoad
+      ? field(
+          "edit-auto-pageload",
+          "timer",
+          t("autofillOnPageLoad"),
+          select(
+            () => (d.autofillOnPageLoad === null ? "" : String(d.autofillOnPageLoad)),
+            (v) => (d.autofillOnPageLoad = v === "" ? null : v === "true"),
+            [["", t("defaultLabelWithValue", settingsOf()?.autofillOnPageLoadDefault === false ? t("off") : t("on"))], ["true", t("on")], ["false", t("off")]],
+          ),
+        )
+      : null,
+    sectionTitle(t("customFields")),
     ...d.fields.map(customRow),
-    h("button", { type: "button", class: "btn text", onclick: () => (d.fields.push({ name: "", value: "", type: 0 }), ctx.rerender()) }, icon("plus"), t("addField")),
+    h("button", { type: "button", class: "btn text small add-field", onclick: () => (d.fields.push({ name: "", value: "", type: 0 }), ctx.rerender()) }, icon("plus"), t("addField")),
     field("edit-notes", "note", t("notes"), text(() => d.notes, (v) => (d.notes = v), { area: true, rows: 3 })),
     field("edit-folder", "folder", t("folder"), select(() => d.folderId, (v) => (d.folderId = v), [["", t("noFolder")], ...(st.list?.folders ?? []).map((f): [string, string] => [f.id, f.name])])),
-    h("label", { class: "check" }, h("div", { class: "body" }, t("favorite")), h("span", { class: "switch" }, fav, h("span"))),
-    errorBox(),
-    st.busy ? h("div", { class: "progress" }) : null,
-    h("button", { type: "submit", class: "btn filled wide", disabled: st.busy }, t("save")),
+    h("label", { class: "row check-card" }, icon("star"), h("div", { class: "body" }, h("span", { class: "title" }, t("favorite"))), h("span", { class: "switch" }, fav, h("span"))),
+    st.busy ? progress() : null,
+    h("div", { class: "editor-footer" }, h("button", { type: "submit", class: "btn filled wide", disabled: st.busy }, icon("check"), t("save"))),
   );
 }
 
@@ -753,33 +1379,44 @@ function foldersView(ctx: Ctx): HTMLElement {
   const folderRow = (id: string) =>
     h(
       "div",
-      { class: "custom-field" },
-      h("input", { value: names.get(id) ?? "", "aria-label": t("folderName"), oninput: (e: Event) => names.set(id, (e.target as HTMLInputElement).value) }),
-      iconButton("edit", t("rename"), () => void vaultAction(ctx, { type: "saveFolder", id, name: names.get(id) ?? "" }, "saved", false)),
-      iconButton("trash", t("deleteFolder"), () => void vaultAction(ctx, { type: "deleteFolder", id }, "deleted", false)),
+      { class: "field-card" },
+      h("div", { class: "field-card-top" }, h("input", { class: "name", value: names.get(id) ?? "", "aria-label": t("folderName"), oninput: (e: Event) => names.set(id, (e.target as HTMLInputElement).value) })),
+      h(
+        "div",
+        { class: "field-card-bottom" },
+        h("span", { class: "grow" }),
+        iconButton("edit", t("rename"), () => void vaultAction(ctx, { type: "saveFolder", id, name: names.get(id) ?? "" }, "saved", false), { class: "icon-btn sm" }),
+        iconButton("trash", t("deleteFolder"), () => void vaultAction(ctx, { type: "deleteFolder", id }, "deleted", false), { class: "icon-btn sm danger" }),
+      ),
     );
   return h(
     "div",
     { class: "page" },
-    h("div", { class: "top" }, iconButton("back", t("back"), () => open(ctx, { kind: "list" })), h("h1", {}, t("folders"))),
+    topBar(iconButton("back", t("back"), () => open(ctx, { kind: "list" })), h("h1", {}, t("folders"))),
     errorBox(),
     ...(st.list?.folders ?? []).map((f) => folderRow(f.id)),
     h(
       "form",
       {
-        class: "custom-field",
+        class: "field-card add",
         onsubmit: (e: Event) => {
           e.preventDefault();
           if (fresh.name.trim()) void vaultAction(ctx, { type: "saveFolder", name: fresh.name.trim() }, "saved", false);
         },
       },
-      h("input", { placeholder: t("newFolder"), "aria-label": t("newFolder"), oninput: (e: Event) => (fresh.name = (e.target as HTMLInputElement).value) }),
-      h("button", { type: "submit", class: "btn tonal small" }, t("add")),
+      h(
+        "div",
+        { class: "field-card-bottom" },
+        h("input", { placeholder: t("newFolder"), "aria-label": t("newFolder"), oninput: (e: Event) => (fresh.name = (e.target as HTMLInputElement).value) }),
+        h("button", { type: "submit", class: "btn tonal small" }, t("add")),
+      ),
     ),
   );
 }
 
 export function vaultScreen(ctx: Ctx): HTMLElement {
+  currentCtx = ctx;
+  closeMenu(); // a re-render invalidates any open popover menu
   if (!st.list && !st.loading && !st.error) void loadList(ctx);
   const r = st.route;
   if (r.kind === "item") return itemView(ctx, r.id);
@@ -809,7 +1446,7 @@ function historyScreen(ctx: Ctx, list: HistoryEntry[]): HTMLElement {
   return h(
     "div",
     { class: "page" },
-    h("div", { class: "top" }, iconButton("back", t("back"), close), h("h1", { style: "flex:1" }, t("generatorHistory"))),
+    topBar(iconButton("back", t("back"), close), h("h1", { class: "grow" }, t("generatorHistory"))),
     list.length
       ? h(
           "div",
@@ -825,7 +1462,15 @@ function historyScreen(ctx: Ctx, list: HistoryEntry[]): HTMLElement {
         )
       : h("div", { class: "empty" }, icon("timer"), h("strong", {}, t("generatorHistoryEmpty"))),
     list.length
-      ? h("button", { type: "button", class: "btn text", onclick: async () => ((await send({ type: "generatorHistoryClear" })).ok ? ((st.history = []), ctx.rerender()) : undefined) }, t("clear"))
+      ? h(
+          "button",
+          {
+            type: "button",
+            class: "btn text",
+            onclick: async () => ((await send({ type: "generatorHistoryClear" })).ok ? ((st.history = []), ctx.rerender()) : undefined),
+          },
+          t("clear"),
+        )
       : null,
     errorBox(),
   );
@@ -846,13 +1491,27 @@ export function generatorScreen(ctx: Ctx): HTMLElement {
       h("div", { class: "body" }, h("span", { class: "title" }, label)),
       h("span", { class: "switch" }, h("input", { type: "checkbox", checked: g[k] === true, onchange: (e: Event) => set(k, (e.target as HTMLInputElement).checked) }), h("span")),
     );
-  const range = (k: string, label: string, min: number, max: number) =>
-    h(
-      "label",
-      { class: "row" },
-      h("div", { class: "body" }, h("span", { class: "title" }, `${label}: ${String(g[k])}`)),
-      h("input", { type: "range", min, max, value: String(g[k]), "aria-label": label, onchange: (e: Event) => set(k, Number((e.target as HTMLInputElement).value)) }),
+  const slider = (k: string, label: string, min: number, max: number, suffix = "") => {
+    const badge = h("span", { class: "value-badge" }, `${String(g[k])}${suffix}`);
+    return h(
+      "div",
+      { class: "row slider-row" },
+      h("div", { class: "body" }, h("span", { class: "title" }, label)),
+      badge,
+      h(
+        "input",
+        {
+          type: "range",
+          min,
+          max,
+          value: String(g[k]),
+          "aria-label": label,
+          oninput: (e: Event) => (badge.textContent = `${(e.target as HTMLInputElement).value}${suffix}`),
+          onchange: (e: Event) => set(k, Number((e.target as HTMLInputElement).value)),
+        },
+      ),
     );
+  };
   g.email ||= ctx.email() ?? "";
   const chip = (type: string, label: string, key = "type") => h("button", { type: "button", class: "chip", "aria-pressed": String(g[key] === type), onclick: () => set(key, type) }, label);
   const text = (k: string, label: string, props: Record<string, unknown> = {}) =>
@@ -864,12 +1523,21 @@ export function generatorScreen(ctx: Ctx): HTMLElement {
     );
   let options: HTMLElement;
   if (g.type === "password")
-    options = h("div", { class: "group" }, range("length", t("length"), 5, 128), toggle("uppercase", "A–Z"), toggle("lowercase", "a–z"), toggle("numbers", "0–9"), toggle("special", "!@#$%^&*"), toggle("avoidAmbiguous", t("avoidAmbiguous")));
+    options = h(
+      "div",
+      { class: "group" },
+      slider("length", t("length"), 5, 128),
+      toggle("uppercase", "A–Z"),
+      toggle("lowercase", "a–z"),
+      toggle("numbers", "0–9"),
+      toggle("special", "!@#$%^&*"),
+      toggle("avoidAmbiguous", t("avoidAmbiguous")),
+    );
   else if (g.type === "passphrase")
     options = h(
       "div",
       { class: "group" },
-      range("numWords", t("words"), 3, 20),
+      slider("numWords", t("words"), 3, 20),
       text("wordSeparator", t("separator"), { class: "small-input", maxLength: 3 }),
       toggle("capitalize", t("capitalize")),
       toggle("includeNumber", t("includeNumber")),
@@ -892,21 +1560,37 @@ export function generatorScreen(ctx: Ctx): HTMLElement {
   return h(
     "div",
     { class: "page" },
-    h("div", { class: "top" }, h("h1", { style: "flex:1" }, t("generator")), iconButton("timer", t("generatorHistory"), () => void openHistory(ctx))),
+    topBar(h("h1", { class: "grow" }, t("generator")), iconButton("timer", t("generatorHistory"), () => void openHistory(ctx))),
+    h(
+      "div",
+      { class: "chips", role: "group", "aria-label": t("generator") },
+      chip("password", t("typePassword")),
+      chip("passphrase", t("typePassphrase")),
+      chip("username", t("username")),
+    ),
     h(
       "div",
       { class: "generated" },
       h(
-        "output",
-        { class: "mono", "aria-live": "polite", "aria-label": t("generatedValue") },
-        ...(st.generated ? [...st.generated].map((c) => (/\d/.test(c) ? h("span", { class: "d" }, c) : /[^\p{L}\s-]/u.test(c) ? h("span", { class: "s" }, c) : c)) : ["…"]),
+        "div",
+        { class: "generated-row" },
+        h(
+          "output",
+          { class: "mono", "aria-live": "polite", "aria-label": t("generatedValue") },
+          ...(st.generated ? colorize(st.generated) : ["…"]),
+        ),
+        h(
+          "div",
+          { class: "trailing" },
+          iconButton("refresh", t("regenerate"), () => void regenerate(ctx)),
+          iconButton("copy", t("copyField", t("generatedValue")), () => {
+            void copy(ctx, st.generated);
+            void send({ type: "generatorHistoryAdd", value: st.generated });
+          }),
+        ),
       ),
-      h("div", { class: "trailing" }, iconButton("refresh", t("regenerate"), () => void regenerate(ctx)), iconButton("copy", t("copyField", t("generatedValue")), () => {
-        void copy(ctx, st.generated);
-        void send({ type: "generatorHistoryAdd", value: st.generated });
-      })),
+      h("div", { class: "generated-foot" }, st.generated ? strengthBar(st.generated) : null, st.generated ? h("span", { class: "meter-label" }, strength(st.generated).label) : null),
     ),
-    h("div", { class: "chips" }, chip("password", t("typePassword")), chip("passphrase", t("typePassphrase")), chip("username", t("username"))),
     options,
     errorBox(),
   );

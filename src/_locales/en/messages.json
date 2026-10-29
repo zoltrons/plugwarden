@@ -976,5 +976,172 @@
   },
   "strengthShort": {
     "message": "Strength"
+  },
+  "autofillOptions": {
+    "message": "Autofill options"
+  },
+  "uriMatchBaseDomain": {
+    "message": "Base domain (recommended)"
+  },
+  "uriMatchHost": {
+    "message": "Host"
+  },
+  "uriMatchExact": {
+    "message": "Exact"
+  },
+  "uriMatchNever": {
+    "message": "Never"
+  },
+  "uriMatchAdvanced": {
+    "message": "— Advanced —"
+  },
+  "uriMatchStartsWith": {
+    "message": "Starts with"
+  },
+  "uriMatchRegex": {
+    "message": "Regular expression"
+  },
+  "uriMatchHint": {
+    "message": "How the saved website is matched against a page's address."
+  },
+  "uriMatchStartsWithHint": {
+    "message": "Starts with can match unintended websites. Check the saved address."
+  },
+  "uriMatchRegExHint": {
+    "message": "Regular expressions are powerful and can match unintended websites. Check the expression."
+  },
+  "uriMatchDefaultHint": {
+    "message": "Applied to saved websites that are set to Default."
+  },
+  "uriMatchDefaultAdvancedHint": {
+    "message": "An advanced default applies to every saved website set to Default. Check it carefully."
+  },
+  "uriLabel": {
+    "message": "Website $P1$",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "matchDetection": {
+    "message": "Match detection"
+  },
+  "addWebsite": {
+    "message": "Add website"
+  },
+  "removeWebsite": {
+    "message": "Remove website"
+  },
+  "autofillOnPageLoad": {
+    "message": "Autofill on page load"
+  },
+  "autofillOnPageLoadHint": {
+    "message": "Fill the login for a page when it opens. Experimental: use with care."
+  },
+  "autofillOnPageLoadDefault": {
+    "message": "Default autofill on page load"
+  },
+  "autofillOnPageLoadDefaultHint": {
+    "message": "Used for logins whose own setting is Default."
+  },
+  "on": {
+    "message": "On"
+  },
+  "off": {
+    "message": "Off"
+  },
+  "defaultLabelWithValue": {
+    "message": "Default ($P1$)",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "inlineMenuCards": {
+    "message": "Show cards in the inline menu"
+  },
+  "inlineMenuIdentities": {
+    "message": "Show identities in the inline menu"
+  },
+  "showCardsOnTab": {
+    "message": "Show cards in the tab view"
+  },
+  "showIdentitiesOnTab": {
+    "message": "Show identities in the tab view"
+  },
+  "clearClipboard": {
+    "message": "Clear clipboard"
+  },
+  "clearClipboardDesc": {
+    "message": "How long copied values stay on the clipboard."
+  },
+  "never": {
+    "message": "Never"
+  },
+  "tenSeconds": {
+    "message": "10 seconds"
+  },
+  "twentySeconds": {
+    "message": "20 seconds"
+  },
+  "thirtySeconds": {
+    "message": "30 seconds"
+  },
+  "oneMinute": {
+    "message": "1 minute"
+  },
+  "twoMinutes": {
+    "message": "2 minutes"
+  },
+  "fiveMinutes": {
+    "message": "5 minutes"
+  },
+  "defaultUriMatchDetection": {
+    "message": "Default URI match detection"
+  },
+  "syncComplete": {
+    "message": "Syncing complete"
+  },
+  "syncing": {
+    "message": "Syncing…"
+  },
+  "lastSync": {
+    "message": "Last sync: $P1$",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "helpCenter": {
+    "message": "Help center"
+  },
+  "webVault": {
+    "message": "Web vault"
+  },
+  "removePassword": {
+    "message": "Remove password"
+  },
+  "removeSendPasswordHint": {
+    "message": "The link stays the same and anyone with it can open the send."
+  },
+  "additionalOptions": {
+    "message": "Additional options"
+  },
+  "uriMatchBaseDomainShort": {
+    "message": "Base domain"
+  },
+  "enableContextMenu": {
+    "message": "Show the context menu entry"
+  },
+  "removeNeverSave": {
+    "message": "Never save on $P1$ again",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
   }
 }

@@ -2,3 +2,6 @@
 /dist/
 node_modules/
 *.log
+
+# UI preview build output (dev/preview/build.mjs)
+dev/preview/out/

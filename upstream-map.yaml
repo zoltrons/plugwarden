@@ -106,3 +106,27 @@
   path: libs/importer/src/importers/bitwarden/bitwarden-json-importer.ts
   local: src/offscreen/vault.ts (prepareImport)
   sync: Accepted JSON shape, folder relationships, which fields are dropped.
+- repo: clients
+  path: libs/common/src/autofill/services/autofill-settings.service.ts
+  local: src/shared/messages.ts (Settings), src/background/store.ts (getSettings)
+  sync: Defaults and value domains (inline menu visibility, clear-clipboard delay, autofill-on-page-load + its default), per-item tri-state behaviour.
+- repo: clients
+  path: libs/common/src/autofill/services/domain-settings.service.ts
+  local: src/background/autofill.ts (matches), src/offscreen/vault.ts (matchUri)
+  sync: Default URI match strategy and its resolution for URIs without their own `match`.
+- repo: clients
+  path: libs/vault/src/cipher-form/components/autofill-options
+  local: src/ui/vault.ts (uriEditor, autofillOnPageLoad select)
+  sync: Per-URI match detection options (Default / Base domain / Host / Exact / Never / Starts with / RegExp), tri-state autofill-on-page-load.
+- repo: clients
+  path: apps/browser/src/autofill/background/autofill-orchestrator.ts
+  local: src/background/autofill.ts (pageLoadFill), src/shared/pageload.ts
+  sync: Page-load cipher selection (per-item filter, last used/launched), only-empty-fields rule, TOTP copy behaviour.
+- repo: clients
+  path: apps/browser/src/platform/services/browser-clipboard.service.ts
+  local: src/background/vault.ts (scheduleClipboardClear)
+  sync: Clear-clipboard delay options and the "never" case.
+- repo: clients
+  path: apps/browser/src/autofill/popup/settings/autofill.component.ts
+  local: src/ui/popup.ts (settingsTab)
+  sync: Option lists (clear clipboard, default URI match, autofill on page load), context-menu toggle, cards/identities visibility.

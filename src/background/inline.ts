@@ -5,9 +5,10 @@ import { type FillResult, fillForm, fillLogin } from "../autofill/page.ts";
 import type { BarInfo, FieldKind, FrameRequest, MenuData, MenuItem, PageRequest, VaultItem } from "../shared/messages.ts";
 import { coreAlive, coreCall } from "./core.ts";
 import { touchAutoLock } from "./lock.ts";
+import { pageLoadFill } from "./autofill.ts";
 import { conditionalReady, openConditional } from "./passkey.ts";
 import { getLocal, getSession, getSettings, getTabState, setLocal, setTabState } from "./store.ts";
-import { copyToClipboard, list, save } from "./vault.ts";
+import { copyToClipboard, list, markUsed, save } from "./vault.ts";
 
 export interface InlineContext {
   frameId: number;
@@ -34,8 +35,12 @@ async function items(kind: FieldKind, url: string): Promise<MenuItem[]> {
   const pick = ({ id, type, name, sub }: VaultItem) => ({ id, type, name, sub });
   if (kind === "login") {
     await list(); // vault loaded into the worker
-    return (await coreCall<VaultItem[]>({ op: "matchUri", url })).map(pick);
+    const { defaultUriMatch } = await getSettings();
+    return (await coreCall<VaultItem[]>({ op: "matchUri", url, defaultMatch: defaultUriMatch })).map(pick);
   }
+  const settings = await getSettings();
+  if (kind === "card" && !settings.inlineMenuCards) return [];
+  if (kind === "identity" && !settings.inlineMenuIdentities) return [];
   const type = kind === "card" ? 3 : 4;
   return (await list()).items.filter((i) => i.type === type && !i.failed).map(pick);
 }
@@ -43,6 +48,7 @@ async function items(kind: FieldKind, url: string): Promise<MenuItem[]> {
 
 /** Content script: `rows` tells it how tall the menu is, 0 = do not show one. */
 export async function handlePage(req: PageRequest, sender: chrome.runtime.MessageSender): Promise<unknown> {
+  if (req.type === "pageLoad") return pageLoadFill(sender);
   const url = httpUrl(sender.url);
   const tabId = sender.tab?.id;
   if (!url || tabId === undefined || sender.frameId === undefined) return { rows: 0 };
@@ -64,7 +70,7 @@ async function loginSubmitted(tabId: number, url: string, username: string, pass
   const host = new URL(url).host;
   if (!settings.savePrompt || settings.neverSave.includes(host) || !(await unlocked())) return;
   await list();
-  const matches = await coreCall<VaultItem[]>({ op: "matchUri", url });
+  const matches = await coreCall<VaultItem[]>({ op: "matchUri", url, defaultMatch: settings.defaultUriMatch });
   const same = matches.find((m) => m.sub === username && !m.readOnly);
   let pending: PendingSave | undefined;
   if (!same) pending = { kind: "add", url, username, password, expiresAt: Date.now() + SAVE_TTL_MS };
@@ -133,7 +139,10 @@ export async function handleFrame(req: FrameRequest, tabId: number): Promise<unk
   if (ctx.kind === "login") {
     const { username, password, totp } = await coreCall<{ username: string; password: string; totp?: string }>({ op: "fillData", id: req.id });
     res = (await chrome.scripting.executeScript({ target, func: fillLogin, args: [origin, username, password] }))[0]?.result;
-    if (res?.filled && totp && (await getSettings()).autoCopyTotp) await copyToClipboard(totp);
+    if (res?.filled) {
+      await markUsed(req.id);
+      if (totp && (await getSettings()).autoCopyTotp) await copyToClipboard(totp);
+    }
   } else {
     const values = await coreCall<Record<string, string>>({ op: "formValues", id: req.id });
     res = (await chrome.scripting.executeScript({ target, func: fillForm, args: [origin, values] }))[0]?.result;

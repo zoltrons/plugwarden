@@ -88,3 +88,59 @@ shipped as is: it is bundled, minified, into `worker.js`. All other budgets unch
 * Organization items stay read-only.
 * Not touched: the setup screen still calls `chrome.permissions.request` for the server origin;
   with required host permissions this is a no-op prompt-wise and was left as is.
+
+---
+
+# Parity round 2 (2026-10-29, after `146e9f3`)
+
+Scope: the settings and autofill surfaces of `browser-v2026.10.1` that were still missing, plus the
+Send edit gaps. Upstream files read at the pin (`d4141a4`): `libs/common/src/autofill/constants`,
+`libs/common/src/autofill/services/autofill-settings.service.ts`,
+`libs/common/src/autofill/services/domain-settings.service.ts`,
+`libs/vault/src/cipher-form/components/autofill-options/*`,
+`apps/browser/src/autofill/background/autofill-orchestrator.ts`,
+`apps/browser/src/platform/services/browser-clipboard.service.ts`,
+`apps/browser/src/autofill/popup/settings/autofill.component.ts`,
+`apps/browser/src/tools/popup/send-v2/*`, `libs/tools/send/send-ui/src/send-form/*`.
+No new permissions, dependencies or remote code.
+
+| Item | How | Verified by |
+|---|---|---|
+| Clear clipboard delay | `never`, 10 s, 20 s, 30 s, 1 min, 2 min, **5 min default** (was a fixed 30 s); armed by every copy, cancelled by "never" | unit/render only |
+| Default URI match detection | Setting (Base domain default, Host, Exact, Never + advanced Starts with / RegExp) now resolves URIs whose own `match` is null, everywhere matching happens (tab list, badge, context menu, inline menu, save/update, page load) | unit (`match.test.ts`) |
+| Per-URI match detection | Login editor lists websites as rows; each row has the clients' gear toggle, match select (Default (…), Base domain, Host, Exact, Never, advanced Starts with / RegExp) and remove; Add website; advanced hint text | render |
+| Autofill on page load | Off by default (experimental, like upstream). Worker picks a candidate using the per-item tri-state and the account default, prefers the login last used for the site, and fills only empty fields; copies the TOTP when that setting is on | unit (`pageload.test.ts`) |
+| Per-login autofill on page load | Tri-state select in the login editor (Default (On/Off) / On / Off), shown only while the account setting is on | render |
+| Inline menu type toggles | Cards and identities can be hidden from the inline menu (logins are always offered) | — |
+| Tab view type toggles | Cards and identities can be hidden from "On this site"; when shown, their **Fill** button fills the card/identity fields (previously only logins could be filled there) | — |
+| Context-menu toggle | "Show the context menu entry" removes/creates the menu and no-ops the handler | — |
+| Sync now | Settings → Vault: sync button, last-sync time (from the encrypted cache) and a completion toast | render |
+| About | Extension version, help center, web vault links | render |
+| Send: edit text | Text and "hide text" of an existing text send can be changed (the list only carries metadata, so the edit form loads the decrypted send); the link is unchanged | — |
+| Send: remove password | Edit form offers "Remove password" (`PUT /api/sends/{id}/remove-password`, added to Vaultwarden's `sends.rs`), link unchanged | — |
+| SSH key items | Can be created and edited (private key, public key, fingerprint), not view-only any more | — |
+| Never-save hosts | Each host can be removed individually (Clear All stays) | — |
+
+## Verified
+
+* `npm run typecheck` clean. JS unit 12/12 (3 new page-load selection tests + 1 default-match test).
+* `node tools/build.mjs` builds; `npm run size` passes every budget (WASM 654.5 KiB raw / 206.0 KiB
+  brotli, unchanged; popup and background grew with the new settings/screens but stay in budget).
+* Preview renders (`dev/preview`) of the settings page, the editor with the match select open, and the
+  inline menu: no page errors.
+* **Not run:** the Playwright/Vaultwarden e2e suite. Docker is not installed in this environment
+  (`docker ps` → no daemon), so no live server was available. The new paths therefore have no
+  end-to-end proof yet; run `npm run test:e2e` where Docker is available before releasing.
+
+## Still missing vs the official browser extension
+
+Server-gated (Vaultwarden has no equivalent): Archive (premium), at-risk password reports/notifications
+(premium, security-task API), admin/org management, premium/billing nudges, "import upgrade" flow.
+
+Not implemented yet: account switching / multiple accounts, Duo 2FA, YubiKey validation end-to-end,
+email-restricted ("hide my email") sends, CSV import/export, password-protected/encrypted JSON
+export, org item writes and org attachments, master-password re-prompt (`reprompt`), persistent PIN
+across restarts, blocked-domains and excluded-domains editors (only removal of never-save hosts),
+SSH-key inline-menu entries, item "archive", appearance extras (extension width, compact mode, badge
+counter, animations, quick copy actions), generator history from the editor, and the
+web-vault-only account operations (change master password, rotate key, manage 2FA).

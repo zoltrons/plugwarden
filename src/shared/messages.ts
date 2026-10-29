@@ -1,6 +1,6 @@
 // Typed message bus. Every message crossing a context boundary is validated on receipt.
 //   popup  --Request-->  service worker  --OffscreenRequest-->  offscreen doc  --postMessage-->  worker
-import { AUTO_LOCK_CHOICES } from "./constants.ts";
+import { AUTO_LOCK_CHOICES, CLEAR_CLIPBOARD_CHOICES, type ClearClipboardDelay, URI_MATCH_CHOICES } from "./constants.ts";
 import { arr, bool, literal, num, obj, opt, record, str, unknownValue, type Validator, ValidationError } from "./validate.ts";
 
 // ---------- popup -> service worker ----------
@@ -28,8 +28,19 @@ export type Request =
       savePrompt?: boolean;
       favicons?: boolean;
       autoCopyTotp?: boolean;
-      /** Only clearing the list is offered. */
+      /** Clear the whole list, or remove one host from it. */
       clearNeverSave?: boolean;
+      removeNeverSave?: string;
+      defaultUriMatch?: number;
+      clearClipboardDelay?: ClearClipboardDelay;
+      autofillOnPageLoad?: boolean;
+      autofillOnPageLoadDefault?: boolean;
+      inlineMenuCards?: boolean;
+      inlineMenuIdentities?: boolean;
+      /** The browser context menu entry ("Fill with Plugwarden"). */
+      contextMenu?: boolean;
+      showCardsOnTab?: boolean;
+      showIdentitiesOnTab?: boolean;
     }
   | { type: "setDefaultManager"; enabled: boolean }
   // vault (unlocked only)
@@ -55,8 +66,11 @@ export type Request =
   | { type: "clipboardCopied" }
   // Send
   | { type: "sendList" }
+  | { type: "getSend"; id: string }
   | { type: "saveSend"; send: Record<string, unknown>; file?: { name: string; data: string } }
   | { type: "deleteSend"; id: string }
+  /** Removes the access password of an existing send (PUT /api/sends/{id}/remove-password). */
+  | { type: "removeSendPassword"; id: string }
   // passkeys: the approval window opened for a website request
   | { type: "passkeyPrompt"; id: string }
   | { type: "passkeyDecision"; id: string; action: "use" | "fallback"; itemId?: string; credentialId?: string }
@@ -93,9 +107,21 @@ const requestValidators: { [K in Request["type"]]: Validator<Extract<Request, { 
       favicons: opt(bool),
       autoCopyTotp: opt(bool),
       clearNeverSave: opt(bool),
+      removeNeverSave: opt(str),
+      defaultUriMatch: opt(num),
+      clearClipboardDelay: opt(literal(...CLEAR_CLIPBOARD_CHOICES)),
+      autofillOnPageLoad: opt(bool),
+      autofillOnPageLoadDefault: opt(bool),
+      inlineMenuCards: opt(bool),
+      inlineMenuIdentities: opt(bool),
+      contextMenu: opt(bool),
+      showCardsOnTab: opt(bool),
+      showIdentitiesOnTab: opt(bool),
     })(v, p);
     if (s.autoLockMinutes !== undefined && !(AUTO_LOCK_CHOICES as readonly number[]).includes(s.autoLockMinutes))
       throw new ValidationError("autoLockMinutes: not an allowed choice");
+    if (s.defaultUriMatch !== undefined && !(URI_MATCH_CHOICES as readonly number[]).includes(s.defaultUriMatch))
+      throw new ValidationError("defaultUriMatch: not an allowed choice");
     return s;
   },
   vaultList: obj({ type: literal("vaultList") }),
@@ -103,8 +129,8 @@ const requestValidators: { [K in Request["type"]]: Validator<Extract<Request, { 
   getItem: obj({ type: literal("getItem"), id: str }),
   saveItem: (v, p) => {
     const s = obj({ type: literal("saveItem"), item: record })(v, p);
-    // Login, secure note, card, identity. SSH keys (5) are view-only.
-    if (![1, 2, 3, 4].includes(s.item.type as number)) throw new ValidationError("item.type: this item type cannot be edited");
+    // Login, secure note, card, identity, SSH key.
+    if (![1, 2, 3, 4, 5].includes(s.item.type as number)) throw new ValidationError("item.type: this item type cannot be edited");
     if (typeof s.item.name !== "string" || !s.item.name.trim()) throw new ValidationError("item.name: required");
     if (s.item.organizationId) throw new ValidationError("organization items are read-only");
     return s;
@@ -125,6 +151,7 @@ const requestValidators: { [K in Request["type"]]: Validator<Extract<Request, { 
   generatorHistoryClear: obj({ type: literal("generatorHistoryClear") }),
   clipboardCopied: obj({ type: literal("clipboardCopied") }),
   sendList: obj({ type: literal("sendList") }),
+  getSend: obj({ type: literal("getSend"), id: str }),
   saveSend: (v, p) => {
     const s = obj({ type: literal("saveSend"), send: record, file: opt(obj({ name: str, data: str })) })(v, p);
     if (typeof s.send.name !== "string" || !s.send.name.trim()) throw new ValidationError("send.name: required");
@@ -133,6 +160,7 @@ const requestValidators: { [K in Request["type"]]: Validator<Extract<Request, { 
     return s;
   },
   deleteSend: obj({ type: literal("deleteSend"), id: str }),
+  removeSendPassword: obj({ type: literal("removeSendPassword"), id: str }),
   setDefaultManager: obj({ type: literal("setDefaultManager"), enabled: bool }),
   passkeyPrompt: obj({ type: literal("passkeyPrompt"), id: str }),
   passkeyDecision: obj({ type: literal("passkeyDecision"), id: str, action: literal("use", "fallback"), itemId: opt(str), credentialId: opt(str) }),
@@ -173,6 +201,20 @@ export interface Settings {
   favicons: boolean;
   /** After filling a login that has a TOTP key, put the current code on the clipboard. */
   autoCopyTotp: boolean;
+  /** Match strategy for saved URIs whose own `match` is null (and what "Default" means). */
+  defaultUriMatch: number;
+  /** How long copied values stay on the clipboard (official default: five minutes). */
+  clearClipboardDelay: ClearClipboardDelay;
+  /** Fill matching logins when a page loads. */
+  autofillOnPageLoad: boolean;
+  /** Value of a login's tri-state "Autofill on page load" when it is not set explicitly. */
+  autofillOnPageLoadDefault: boolean;
+  inlineMenuCards: boolean;
+  inlineMenuIdentities: boolean;
+  /** Show the "Fill with Plugwarden" context-menu entry. */
+  contextMenu: boolean;
+  showCardsOnTab: boolean;
+  showIdentitiesOnTab: boolean;
 }
 
 export interface State {
@@ -187,6 +229,8 @@ export interface State {
   pinSet?: boolean;
   /** The locked vault can be opened with the PIN (until the browser restarts). */
   pinUnlock?: boolean;
+  /** epoch ms of the last successful sync. */
+  syncedAt?: number;
   settings: Settings;
 }
 
@@ -201,6 +245,8 @@ export interface VaultItem {
   favorite: boolean;
   readOnly: boolean;
   hasTotp: boolean;
+  /** Tri-state "Autofill on page load" of a login (absent: inherit the account default). */
+  autofillOnPageLoad?: boolean;
   /** epoch ms; used by the list's "recently edited / created" sorting. */
   revisionDate?: number;
   creationDate?: number;
@@ -313,7 +359,7 @@ export type CoreRequest =
   // free text encrypted with the user key (like a folder name)
   | { op: "encryptText"; values: string[] }
   | { op: "decryptText"; values: string[] }
-  | { op: "matchUri"; url: string }
+  | { op: "matchUri"; url: string; defaultMatch: number }
   | { op: "fillData"; id: string }
   | { op: "formValues"; id: string }
   // attachments (bodies base64)
@@ -323,6 +369,7 @@ export type CoreRequest =
   | { op: "encryptAttachment"; cipherId: string; fileName: string; data: string }
   // Send
   | { op: "listSends" }
+  | { op: "getSend"; id: string }
   | { op: "prepareSend"; send: Record<string, unknown> }
   | { op: "encryptSendFile"; key: string; data: string }
   | { op: "upsertSend"; send: Record<string, unknown> }
@@ -370,7 +417,7 @@ const coreValidators: { [K in CoreRequest["op"]]: Validator<Extract<CoreRequest,
   generate: obj({ op: literal("generate"), options: record }),
   encryptText: obj({ op: literal("encryptText"), values: arr(str) }),
   decryptText: obj({ op: literal("decryptText"), values: arr(str) }),
-  matchUri: obj({ op: literal("matchUri"), url: str }),
+  matchUri: obj({ op: literal("matchUri"), url: str, defaultMatch: num }),
   fillData: obj({ op: literal("fillData"), id: str }),
   formValues: obj({ op: literal("formValues"), id: str }),
   decryptAttachment: obj({ op: literal("decryptAttachment"), cipherId: str, attachmentId: str, data: str }),
@@ -378,6 +425,7 @@ const coreValidators: { [K in CoreRequest["op"]]: Validator<Extract<CoreRequest,
   prepareImport: obj({ op: literal("prepareImport"), text: str }),
   encryptAttachment: obj({ op: literal("encryptAttachment"), cipherId: str, fileName: str, data: str }),
   listSends: obj({ op: literal("listSends") }),
+  getSend: obj({ op: literal("getSend"), id: str }),
   prepareSend: obj({ op: literal("prepareSend"), send: record }),
   encryptSendFile: obj({ op: literal("encryptSendFile"), key: str, data: str }),
   upsertSend: obj({ op: literal("upsertSend"), send: record }),
@@ -435,11 +483,14 @@ export type FieldKind = "login" | "card" | "identity";
 /** From the content script. Sender tab, frame and URL come from the browser (sender), never from here. */
 export type PageRequest =
   | { type: "inlineFocus"; kind: FieldKind }
-  | { type: "loginSubmitted"; username: string; password: string };
+  | { type: "loginSubmitted"; username: string; password: string }
+  /** Sent on load only when the frame contains a password field; the worker decides whether to fill. */
+  | { type: "pageLoad" };
 
 const pageValidators: { [K in PageRequest["type"]]: Validator<Extract<PageRequest, { type: K }>> } = {
   inlineFocus: obj({ type: literal("inlineFocus"), kind: literal("login", "card", "identity") }),
   loginSubmitted: obj({ type: literal("loginSubmitted"), username: str, password: str }),
+  pageLoad: obj({ type: literal("pageLoad") }),
 };
 
 /** From menu.html / bar.html, which run as extension pages inside the website's tab. */

@@ -134,6 +134,21 @@ addEventListener(
 
 addEventListener("submit", () => report(), true);
 
+// ---------- autofill on page load ----------
+
+/** One cheap query; the service worker decides whether anything is filled (setting, lock, matches). */
+function offerPageLoad() {
+  if (!document.querySelector('input[type="password"]')) return;
+  void chrome.runtime.sendMessage({ type: "pageLoad" }).catch(() => undefined);
+}
+
+// The script runs at document_idle, so the DOM is normally ready; `pageshow` covers bfcache returns
+// and same-document back/forward navigations, like the official autofiller.
+offerPageLoad();
+addEventListener("pageshow", (e) => {
+  if ((e as PageTransitionEvent).persisted) offerPageLoad();
+});
+
 // ---------- save / update detection ----------
 
 let reported = "";

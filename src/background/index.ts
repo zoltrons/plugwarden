@@ -33,16 +33,17 @@ import {
 import { handleFrame, handlePage, showBar } from "./inline.ts";
 import { ensurePasskeyScripts, onPasskeyPort, onWindowRemoved, passkeyDecision, passkeyPrompt } from "./passkey.ts";
 import { AUTOFILL_COMMAND, autofillFromGesture, fillActiveTab, onContextMenu, pageMatches, readPageLogin, updateTabUi } from "./autofill.ts";
-import { addAttachment, addGeneratorHistory, CLIPBOARD_ALARM, downloadAttachment, exportVault, importVault, clearClipboard, clearGeneratorHistory, deleteFolder, generatorHistory, deleteSend, purge, restore, saveFolder, list as vaultList, requireUnlocked, save, saveSend, sendList, sync, trash } from "./vault.ts";
+import { addAttachment, addGeneratorHistory, CLIPBOARD_ALARM, downloadAttachment, exportVault, importVault, clearClipboard, clearGeneratorHistory, deleteFolder, generatorHistory, deleteSend, getSend, purge, removeSendPassword, restore, saveFolder, scheduleClipboardClear, list as vaultList, requireUnlocked, save, saveSend, sendList, sync, trash } from "./vault.ts";
 
 async function getState(): Promise<State> {
-  const [server, account, session, settings] = await Promise.all([
+  const [server, account, session, settings, vault] = await Promise.all([
     getLocal("server"),
     getLocal("account"),
     getSession(),
     getSettings(),
+    getLocal("vault"),
   ]);
-  const base = { settings, serverUrl: server?.url, serverVersion: server?.version, ...(session.ssoError ? { ssoError: session.ssoError } : {}) };
+  const base = { settings, serverUrl: server?.url, serverVersion: server?.version, syncedAt: vault?.syncedAt, ...(session.ssoError ? { ssoError: session.ssoError } : {}) };
   if (!server) return { phase: "setup", ...base };
   if (session.pending && session.pending.expiresAt > Date.now())
     return { phase: "twoFactor", ...base, email: session.pending.email, twoFactor: session.pending.challenge };
@@ -98,8 +99,10 @@ async function handle(req: Request): Promise<unknown> {
     case "generatorHistoryAdd":
     case "generatorHistoryClear":
     case "sendList":
+    case "getSend":
     case "saveSend":
-    case "deleteSend": {
+    case "deleteSend":
+    case "removeSendPassword": {
       await requireUnlocked();
       await touchAutoLock();
       if (req.type === "vaultList") return vaultList();
@@ -120,8 +123,10 @@ async function handle(req: Request): Promise<unknown> {
       if (req.type === "generatorHistoryAdd") return addGeneratorHistory(req.value);
       if (req.type === "generatorHistoryClear") return clearGeneratorHistory();
       if (req.type === "sendList") return sendList();
+      if (req.type === "getSend") return getSend(req.id);
       if (req.type === "saveSend") return saveSend(req.send, req.file);
       if (req.type === "deleteSend") return deleteSend(req.id);
+      if (req.type === "removeSendPassword") return removeSendPassword(req.id);
       return coreCall({ op: "generate", options: req.options });
     }
     case "pageMatches":
@@ -133,7 +138,7 @@ async function handle(req: Request): Promise<unknown> {
       if (req.type === "fill") return fillActiveTab(req.id);
       return readPageLogin();
     case "clipboardCopied":
-      await chrome.alarms.create(CLIPBOARD_ALARM, { delayInMinutes: 0.5 });
+      await scheduleClipboardClear();
       return null;
     case "getState":
       break;
@@ -186,7 +191,16 @@ async function handle(req: Request): Promise<unknown> {
         savePrompt: req.savePrompt ?? current.savePrompt,
         favicons: req.favicons ?? current.favicons,
         autoCopyTotp: req.autoCopyTotp ?? current.autoCopyTotp,
-        neverSave: req.clearNeverSave ? [] : current.neverSave,
+        defaultUriMatch: req.defaultUriMatch ?? current.defaultUriMatch,
+        clearClipboardDelay: req.clearClipboardDelay ?? current.clearClipboardDelay,
+        autofillOnPageLoad: req.autofillOnPageLoad ?? current.autofillOnPageLoad,
+        autofillOnPageLoadDefault: req.autofillOnPageLoadDefault ?? current.autofillOnPageLoadDefault,
+        inlineMenuCards: req.inlineMenuCards ?? current.inlineMenuCards,
+        inlineMenuIdentities: req.inlineMenuIdentities ?? current.inlineMenuIdentities,
+        contextMenu: req.contextMenu ?? current.contextMenu,
+        showCardsOnTab: req.showCardsOnTab ?? current.showCardsOnTab,
+        showIdentitiesOnTab: req.showIdentitiesOnTab ?? current.showIdentitiesOnTab,
+        neverSave: req.clearNeverSave ? [] : req.removeNeverSave ? current.neverSave.filter((h) => h !== req.removeNeverSave) : current.neverSave,
       });
       break;
     }
@@ -248,8 +262,10 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, reply: (r: Response<
     }
     const go = () => run().then((data) => reply({ ok: true, data } as Response<unknown>), (e: unknown) => reply(toError(e)));
     // Menu reads must not wait behind an unlock (Argon2id) or a sync; fills and saves stay in order.
+    // A page-load opportunity changes nothing the badge or menu shows, so it skips the refresh.
+    const refresh = () => (frame || (msg as { type?: unknown }).type !== "pageLoad" ? updateTabUi() : undefined);
     if (read) void go();
-    else queue = queue.then(go, go);
+    else queue = queue.then(go, go).then(refresh);
     return true;
   }
   if (!UI_URLS.some((u) => sender.url?.startsWith(u))) return false;
@@ -264,7 +280,7 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, reply: (r: Response<
   const run = () => handle(req).then((data) => reply({ ok: true, data } as Response<unknown>), (e: unknown) => reply(toError(e)));
   // Reads run immediately; anything that changes state or talks to the server is queued, and may
   // change what the badge and the context menu show (unlock, lock, sync, edits).
-  if (["getState", "vaultList", "getItem", "totp", "generate", "generatorHistory", "downloadAttachment", "pageMatches", "readPageLogin", "sendList", "passkeyPrompt"].includes(req.type)) void run();
+  if (["getState", "vaultList", "getItem", "totp", "generate", "generatorHistory", "downloadAttachment", "pageMatches", "readPageLogin", "sendList", "getSend", "passkeyPrompt"].includes(req.type)) void run();
   else queue = queue.then(run, run).then(updateTabUi);
   return true;
 });

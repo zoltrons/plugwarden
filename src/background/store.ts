@@ -90,6 +90,8 @@ interface LocalSchema {
   rememberTokens: Record<string, string>;
   /** Copied generator values, encrypted with the user key, newest first. */
   genHistory: HistoryEntry[];
+  /** cipher id -> epoch ms of the last user-gesture fill (page-load autofill prefers it, like the clients). */
+  lastUsed: Record<string, number>;
 }
 
 interface SessionSchema {
@@ -123,7 +125,27 @@ export async function getSettings(): Promise<Settings> {
   // Older builds stored a `passkeys` toggle; passkeys are always on now, so drop it.
   const stored = ((await getLocal("settings")) ?? {}) as Settings & { passkeys?: boolean };
   const { passkeys: _ignored, ...settings } = stored;
-  return { autoLockMinutes: DEFAULT_AUTO_LOCK_MINUTES, timeoutAction: "lock", lockOnSystemLock: true, inlineMenu: true, savePrompt: true, neverSave: [], defaultManager: false, favicons: true, autoCopyTotp: true, ...(settings as Partial<Settings>) };
+  return {
+    autoLockMinutes: DEFAULT_AUTO_LOCK_MINUTES,
+    timeoutAction: "lock",
+    lockOnSystemLock: true,
+    inlineMenu: true,
+    savePrompt: true,
+    neverSave: [],
+    defaultManager: false,
+    favicons: true,
+    autoCopyTotp: true,
+    defaultUriMatch: 0,
+    clearClipboardDelay: "fiveMinutes",
+    autofillOnPageLoad: false,
+    autofillOnPageLoadDefault: true,
+    inlineMenuCards: true,
+    inlineMenuIdentities: true,
+    contextMenu: true,
+    showCardsOnTab: true,
+    showIdentitiesOnTab: true,
+    ...(settings as Partial<Settings>),
+  };
 }
 
 export async function getDeviceId(): Promise<string> {

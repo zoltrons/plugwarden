@@ -34,7 +34,10 @@ Plugwarden is a Manifest V3 Chrome extension (Chromium 156+) that talks to a sel
 * **Popup** (`src/ui`): vanilla TS, no components framework. Asks the SW for data; never sees keys, never calls
   `fetch`. First paint must not wait for WASM.
 * **Autofill** (`src/autofill`): a static content script (`content.js`, all http(s) pages and frames,
-  `document_idle`) that scans nothing on load and only reacts when the user focuses an input. For
+  `document_idle`) that only checks for a password field on load (one `querySelector`) and otherwise
+  reacts when the user focuses an input. "Autofill on page load" (off by default) asks the worker to
+  fill the frame's best login: the per-item tri-state decides who takes part, the login last used for
+  the site wins, and only empty fields are written. For
   login, card and identity fields it frames the inline menu (`menu.html`) under the field; after a login
   form is submitted it asks the SW whether to show the save/update bar (`bar.html`, top frame only).
   Both are extension pages (web-accessible resources), so the site cannot read their contents; they ask
@@ -135,6 +138,11 @@ Other content scripts are registered at runtime (`chrome.scripting.registerConte
   lives only in the offscreen document's WASM memory. A browser restart empties this area, so the
   master password is needed once; that unlock re-wraps the key with the stored PIN. Five wrong PINs
   log out.
+* Settings live in `chrome.storage.local` too: lock/timeout, inline menu (all/cards/identities),
+  save prompt + never-save hosts, default password manager, favicons, TOTP copy, context-menu entry,
+  default URI match strategy, clear-clipboard delay (10 s … 5 min, or never), autofill on page load
+  + its default, and cards/identities in the tab view. `lastUsed` (cipher id → ms) is the only other
+  local state: it decides which login page-load autofill prefers.
 * Lock = close offscreen document (drops WASM memory) + clear session state. Auto-lock via
   `chrome.idle` and `chrome.alarms`; the timeout action can instead log out (forget the account and
   the cache), also on browser start. Clipboard clearing via alarm + offscreen document.

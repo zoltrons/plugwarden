@@ -1,4 +1,5 @@
 import type { FrameRequest, Request, Response } from "../shared/messages.ts";
+import { icon } from "./icons.ts";
 
 export const t = (key: string, ...subs: string[]): string => chrome.i18n.getMessage(key, subs) || key;
 
@@ -38,6 +39,19 @@ export function h<K extends keyof HTMLElementTagNameMap>(
   }
   for (const c of children) if (c) el.append(c);
   return el;
+}
+
+/**
+ * A <select> with the app's own label and chevron. Native select text cannot be aligned
+ * reliably, so the real control is transparent on top of a plain text label.
+ */
+export function withChevron(control: HTMLSelectElement): HTMLElement {
+  const text = h("span", { class: "select-value", "aria-hidden": "true" });
+  const sync = () => (text.textContent = control.selectedOptions[0]?.textContent ?? "");
+  sync();
+  control.addEventListener("change", sync);
+  control.addEventListener("input", sync);
+  return h("span", { class: "select" }, text, control, icon("chevronDown"));
 }
 
 export async function send<T>(req: Request | FrameRequest): Promise<Response<T>> {

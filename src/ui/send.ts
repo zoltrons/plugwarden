@@ -1,7 +1,7 @@
 // Send screen: the user's sends, create a text or file send, edit or disable one, copy its link, delete it.
 // Talks to the service worker only; the link (with its key fragment) is built there.
 import type { SendItem } from "../shared/messages.ts";
-import { type Child, h, send, t } from "./dom.ts";
+import { type Child, h, send, t, withChevron } from "./dom.ts";
 import { icon, type IconName } from "./icons.ts";
 import { copy, type Ctx, iconButton, tile, toast } from "./vault.ts";
 
@@ -9,7 +9,7 @@ const DELETION_DAYS = [1, 2, 3, 7, 14, 30] as const;
 const MAX_FILE_BYTES = 25 * 1024 * 1024; // keep in sync with MAX_SEND_FILE_BYTES in background/vault.ts
 
 interface Draft {
-  /** Set when editing an existing send (its content stays as it is). */
+  /** Set when editing an existing send. */
   id?: string;
   /** Edit: the current deletion date, kept while `days` is 0. */
   deletionDate?: string;
@@ -22,9 +22,13 @@ interface Draft {
   password: string;
   days: number;
   maxAccess: string;
+  /** Edit: the send currently has an access password. */
+  originalHasPassword: boolean;
+  /** Edit: remove the access password (PUT /sends/{id}/remove-password). */
+  removePassword: boolean;
 }
 
-const newDraft = (): Draft => ({ kind: "text", name: "", text: "", hidden: false, password: "", days: 7, maxAccess: "", disabled: false });
+const newDraft = (): Draft => ({ kind: "text", name: "", text: "", hidden: false, password: "", days: 7, maxAccess: "", disabled: false, originalHasPassword: false, removePassword: false });
 const editDraft = (s: SendItem): Draft => ({
   ...newDraft(),
   id: s.id,
@@ -34,6 +38,7 @@ const editDraft = (s: SendItem): Draft => ({
   deletionDate: s.deletionDate,
   maxAccess: s.maxAccessCount === undefined ? "" : String(s.maxAccessCount),
   disabled: s.disabled,
+  originalHasPassword: s.hasPassword,
 });
 
 const sd = {
@@ -76,6 +81,24 @@ async function remove(ctx: Ctx, id: string) {
   ctx.rerender();
 }
 
+/** Editing loads the decrypted text of a text send (the list only carries metadata). */
+async function editSend(ctx: Ctx, item: SendItem) {
+  const d = editDraft(item);
+  if (d.kind === "text") {
+    sd.busy = true;
+    ctx.rerender();
+    const r = await send<Record<string, unknown>>({ type: "getSend", id: item.id });
+    if (r.ok) {
+      const text = r.data.text as { text?: unknown; hidden?: unknown } | undefined;
+      d.text = typeof text?.text === "string" ? text.text : "";
+      d.hidden = text?.hidden === true;
+    } else sd.error = r.error;
+    sd.busy = false;
+  }
+  sd.draft = d;
+  ctx.rerender();
+}
+
 function listView(ctx: Ctx): HTMLElement {
   const items = sd.list ?? [];
   const date = (iso: string) => (iso ? new Date(iso).toLocaleDateString() : "");
@@ -102,7 +125,7 @@ function listView(ctx: Ctx): HTMLElement {
                   h("span", { class: "sub" }, [t("sendDeletes", date(s.deletionDate)), s.hasPassword ? t("password") : "", s.disabled ? t("sendDisabled") : ""].filter(Boolean).join(" · ")),
                 ),
                 s.failed ? null : iconButton("copy", `${t("copyLink")} ${s.name}`, () => void copy(ctx, s.link)),
-                s.failed ? null : iconButton("edit", `${t("edit")} ${s.name}`, () => ((sd.draft = editDraft(s)), (sd.error = undefined), ctx.rerender())),
+                s.failed ? null : iconButton("edit", `${t("edit")} ${s.name}`, () => ((sd.error = undefined), void editSend(ctx, s))),
                 iconButton("trash", sd.confirmDelete === s.id ? t("tapAgainToDelete") : `${t("delete")} ${s.name}`, () => void remove(ctx, s.id), sd.confirmDelete === s.id ? { class: "icon-btn danger" } : {}),
               ),
             ),
@@ -127,14 +150,20 @@ async function create(ctx: Ctx, d: Draft) {
     disabled: d.disabled,
   };
   const body = d.id
-    ? { id: d.id, ...common }
+    ? { id: d.id, ...common, ...(d.kind === "text" ? { text: { text: d.text, hidden: d.hidden } } : {}) }
     : { ...common, ...(d.kind === "text" ? { text: { text: d.text, hidden: d.hidden } } : {}), hideEmail: false };
   const file = !d.id && d.kind === "file" && d.file ? { name: d.file.name, data: new Uint8Array(await d.file.arrayBuffer()).toBase64() } : undefined;
   const before = new Set((sd.list ?? []).map((s) => s.id));
   const r = await send<SendItem[]>({ type: "saveSend", send: body, ...(file ? { file } : {}) });
+  if (!r.ok) return ((sd.busy = false), (sd.error = r.error), ctx.rerender());
+  let next = r.data;
+  if (d.id && d.removePassword) {
+    const removed = await send<SendItem[]>({ type: "removeSendPassword", id: d.id });
+    if (!removed.ok) return ((sd.busy = false), (sd.error = removed.error), ctx.rerender());
+    next = removed.data;
+  }
   sd.busy = false;
-  if (!r.ok) return ((sd.error = r.error), ctx.rerender());
-  sd.list = r.data;
+  sd.list = next;
   sd.draft = undefined;
   const created = r.data.find((s) => !before.has(s.id));
   if (created) await copy(ctx, created.link).catch(() => toast(ctx, t("saved")));
@@ -163,20 +192,29 @@ function createView(ctx: Ctx, d: Draft): HTMLElement {
     h("div", { class: "top" }, iconButton("back", t("cancel"), () => ((sd.draft = undefined), (sd.error = undefined), ctx.rerender())), h("h1", {}, t(isNew ? "newSend" : "editSend"))),
     isNew ? h("div", { class: "chips", role: "group", "aria-label": t("sendType") }, kindChip("text", t("sendText"), "note"), kindChip("file", t("sendFile"), "attach")) : null,
     field("send-name", "edit", t("name"), input("name", { required: true, "data-autofocus": "1" })),
-    !isNew
-      ? null
-      : d.kind === "text"
-        ? field("send-text", "note", t("sendText"), h("textarea", { rows: 4, value: d.text, oninput: (e: Event) => (d.text = (e.target as HTMLTextAreaElement).value) }))
-        : field("send-file", "attach", t("sendFile"), h("input", { type: "file", onchange: (e: Event) => (d.file = (e.target as HTMLInputElement).files?.[0]) })),
-    isNew && d.kind === "text" ? h("label", { class: "row" }, icon("eyeOff"), h("div", { class: "body" }, t("hideText")), h("span", { class: "switch" }, hidden, h("span"))) : null,
+    d.kind === "text"
+      ? field("send-text", "note", t("sendText"), h("textarea", { rows: 4, value: d.text, oninput: (e: Event) => (d.text = (e.target as HTMLTextAreaElement).value) }))
+      : isNew
+        ? field("send-file", "attach", t("sendFile"), h("input", { type: "file", onchange: (e: Event) => (d.file = (e.target as HTMLInputElement).files?.[0]) }))
+        : null,
+    d.kind === "text" ? h("label", { class: "row" }, icon("eyeOff"), h("div", { class: "body" }, t("hideText")), h("span", { class: "switch" }, hidden, h("span"))) : null,
     field(
       "send-days",
       "timer",
       t("deleteAfter"),
-      h("select", { onchange: (e: Event) => (d.days = Number((e.target as HTMLSelectElement).value)) }, ...dayChoices.map((n) => h("option", { value: String(n), selected: n === d.days }, dayLabel(n)))),
+      withChevron(h("select", { onchange: (e: Event) => (d.days = Number((e.target as HTMLSelectElement).value)) }, ...dayChoices.map((n) => h("option", { value: String(n), selected: n === d.days }, dayLabel(n))))),
     ),
-    field("send-password", "key", t(isNew ? "sendPasswordOptional" : "newPasswordOptional"), input("password", { type: "password", autocomplete: "new-password" })),
+    field("send-password", "key", t(isNew || !d.originalHasPassword || d.removePassword ? "sendPasswordOptional" : "newPasswordOptional"), input("password", { type: "password", autocomplete: "new-password", disabled: d.removePassword })),
     field("send-max", "user", t("maxAccessOptional"), input("maxAccess", { type: "number", min: 1, inputMode: "numeric" })),
+    !isNew && d.originalHasPassword
+      ? h(
+          "label",
+          { class: "row" },
+          icon("lock"),
+          h("div", { class: "body" }, h("span", { class: "title" }, t("removePassword")), h("span", { class: "sub" }, t("removeSendPasswordHint"))),
+          h("span", { class: "switch" }, h("input", { type: "checkbox", checked: d.removePassword, "aria-label": t("removePassword"), onchange: (e: Event) => ((d.removePassword = (e.target as HTMLInputElement).checked), (d.password = ""), ctx.rerender()) }), h("span")),
+        )
+      : null,
     isNew ? null : h("label", { class: "row" }, icon("lock"), h("div", { class: "body" }, t("disableSend")), h("span", { class: "switch" }, disabled, h("span"))),
     errorBox(),
     sd.busy ? h("div", { class: "progress" }) : null,

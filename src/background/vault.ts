@@ -1,5 +1,6 @@
 // Vault orchestration in the service worker: encrypted cache in storage.local, sync, and writes.
 // Decryption happens in the offscreen worker; the SW only moves encrypted JSON around.
+import { CLEAR_CLIPBOARD_MS } from "../shared/constants.ts";
 import type { HistoryEntry, SendItem, VaultList } from "../shared/messages.ts";
 import { revisionDate } from "../transport/auth.ts";
 import {
@@ -12,6 +13,7 @@ import {
   fullSync,
   importCiphers,
   purgeCipher,
+  removeSendPassword as apiRemoveSendPassword,
   restoreCipher,
   saveCipher,
   saveFolder as apiSaveFolder,
@@ -23,7 +25,7 @@ import {
 import { ApiError } from "../transport/http.ts";
 import { accessToken, UserError } from "./account.ts";
 import { coreAlive, coreCall } from "./core.ts";
-import { getLocal, getSession, removeLocal, setLocal, type VaultCache } from "./store.ts";
+import { getLocal, getSession, getSettings, removeLocal, setLocal, type VaultCache } from "./store.ts";
 
 export const CLIPBOARD_ALARM = "clipboard";
 
@@ -57,6 +59,10 @@ export async function sync(force: boolean): Promise<boolean> {
   const next: VaultCache = { revision, syncedAt: Date.now(), ciphers: r.ciphers, folders: r.folders, sends: r.sends ?? [], orgKeys, collections: r.collections ?? [], orgs };
   await setLocal("vault", next);
   await load(next);
+  // Forget last-used stamps of items that no longer exist.
+  const ids = new Set(r.ciphers.map((c) => (c as { id?: unknown }).id));
+  const lastUsed = await getLocal("lastUsed");
+  if (lastUsed) await setLocal("lastUsed", Object.fromEntries(Object.entries(lastUsed).filter(([id]) => ids.has(id))));
   return true;
 }
 
@@ -103,12 +109,28 @@ export async function saveFolder(name: string, id?: string): Promise<VaultList> 
   return thenSync((b, t) => apiSaveFolder(b, t, enc.name, id));
 }
 
-/** Clears the clipboard; closes the offscreen document again if it only exists for this. */
+/** Arms the clipboard clear according to the user's "Clear clipboard" setting (never = cancel). */
+export async function scheduleClipboardClear(): Promise<void> {
+  const { clearClipboardDelay } = await getSettings();
+  const ms = CLEAR_CLIPBOARD_MS[clearClipboardDelay] ?? CLEAR_CLIPBOARD_MS.fiveMinutes;
+  if (!ms) return void (await chrome.alarms.clear(CLIPBOARD_ALARM));
+  await chrome.alarms.create(CLIPBOARD_ALARM, { delayInMinutes: ms / 60_000 });
+}
+
 /** Puts `text` on the clipboard from the offscreen document; it is cleared like any other copy. */
 export async function copyToClipboard(text: string): Promise<void> {
   await coreCall({ op: "writeClipboard", text });
-  await chrome.alarms.create(CLIPBOARD_ALARM, { delayInMinutes: 0.5 });
+  await scheduleClipboardClear();
 }
+
+/** Records a user-gesture fill; page-load autofill prefers the login last used for the site. */
+export async function markUsed(id: string): Promise<void> {
+  const lastUsed = (await getLocal("lastUsed")) ?? {};
+  await setLocal("lastUsed", { ...lastUsed, [id]: Date.now() });
+}
+
+/** The full decrypted send (for the edit form). */
+export const getSend = (id: string) => coreCall<Record<string, unknown>>({ op: "getSend", id });
 
 export async function clearClipboard(): Promise<void> {
   const unlocked = (await getSession()).unlocked;
@@ -224,6 +246,16 @@ export async function saveSend(send: Json, file?: { name: string; data: string }
     saved = await createSend(base, token, await coreCall<Json>({ op: "prepareSend", send: { ...send, type: 0 } }));
   }
   await cacheSends((s) => [...s, saved]);
+  await coreCall({ op: "upsertSend", send: saved });
+  return sendList();
+}
+
+/** Removes the access password in place; the link and the content stay the same. */
+export async function removeSendPassword(id: string): Promise<SendItem[]> {
+  const base = await server();
+  const token = await accessToken();
+  const saved = await apiRemoveSendPassword(base, token, id);
+  await cacheSends((s) => s.map((x) => ((x as Json).id === saved.id ? saved : x)));
   await coreCall({ op: "upsertSend", send: saved });
   return sendList();
 }

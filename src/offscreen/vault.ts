@@ -64,6 +64,10 @@ function summary(c: Json): VaultItem {
     : type === 5 ? s(ci(o(ci(c, "sshKey")), "keyFingerprint"))
     : "";
   const uris = (Array.isArray(ci(login, "uris")) ? (ci(login, "uris") as unknown[]) : []).map((u) => s(ci(u, "uri"))).filter(Boolean);
+  const time = (v: unknown) => {
+    const n = Date.parse(s(v));
+    return Number.isFinite(n) ? n : undefined;
+  };
   return {
     id: s(ci(c, "id")),
     type,
@@ -74,6 +78,9 @@ function summary(c: Json): VaultItem {
     favorite: ci(c, "favorite") === true,
     readOnly: !!ci(c, "organizationId") || ci(c, "edit") === false,
     hasTotp: !!s(ci(login, "totp")),
+    ...(typeof ci(login, "autofillOnPageLoad") === "boolean" ? { autofillOnPageLoad: ci(login, "autofillOnPageLoad") as boolean } : {}),
+    revisionDate: time(ci(c, "revisionDate")),
+    creationDate: time(ci(c, "creationDate")),
     ...(c.failed ? { failed: true } : {}),
   };
 }
@@ -155,8 +162,8 @@ async function getPsl(): Promise<Psl> {
   return psl;
 }
 
-/** Personal and org logins whose URIs match `url` (Bitwarden match types, default Domain). */
-export async function matchUri(url: string): Promise<VaultItem[]> {
+/** Personal and org logins whose URIs match `url`; `defaultMatch` applies to URIs without one. */
+export async function matchUri(url: string, defaultMatch: number): Promise<VaultItem[]> {
   if (!ciphers) throw new Error("vault not loaded");
   await getPsl();
   const page = new URL(url);
@@ -164,7 +171,7 @@ export async function matchUri(url: string): Promise<VaultItem[]> {
     .filter((c) => Number(ci(c, "type")) === 1)
     .filter((c) => {
       const uris = ci(o(ci(c, "login")), "uris");
-      return Array.isArray(uris) && uris.some((u) => uriMatches(s(ci(u, "uri")), ci(u, "match") as number | null, page, psl!));
+      return Array.isArray(uris) && uris.some((u) => uriMatches(s(ci(u, "uri")), ci(u, "match") as number | null, page, psl!, defaultMatch));
     })
     .map(summary)
     .sort((a, b) => a.name.localeCompare(b.name));
@@ -282,6 +289,13 @@ export function prepareSend(send: Json): Json {
 }
 
 export const encryptSendFile = (key: string, data: string): string => core.encryptSendFile(key, Uint8Array.fromBase64(data)).toBase64();
+
+/** The full decrypted send, for editing (never leaves the popup). */
+export function getSend(id: string): Json {
+  const send = sends.get(id);
+  if (!send || send.failed) throw new Error("send not found");
+  return send;
+}
 
 export function upsertSend(enc: Json): void {
   const r = JSON.parse(core.decryptSendList(JSON.stringify([enc]))) as { sends: Json[] };

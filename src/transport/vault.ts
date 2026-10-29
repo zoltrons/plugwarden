@@ -111,3 +111,8 @@ export async function updateSend(base: string, token: string, id: string, send: 
 export async function deleteSend(base: string, token: string, id: string): Promise<void> {
   await call(base, "DELETE", `/api/sends/${encodeURIComponent(id)}`, { token });
 }
+
+/** Clears the send's access password (vaultwarden src/api/core/sends.rs, put_remove_password). */
+export async function removeSendPassword(base: string, token: string, id: string): Promise<Record<string, unknown>> {
+  return parse(record, await call(base, "PUT", `/api/sends/${encodeURIComponent(id)}/remove-password`, { token }));
+}

@@ -1,6 +1,7 @@
 // URI matching with Bitwarden's UriMatchType semantics (clients: libs/common/src/models/domain/login-uri).
-// null = the default, Domain. Equivalent-domain settings are not supported.
-export const MATCH = { Domain: 0, Host: 1, StartsWith: 2, Exact: 3, RegularExpression: 4, Never: 5 } as const;
+// A null `match` means "Default": the account's default URI match strategy (Domain unless changed).
+import { URI_MATCH as MATCH } from "../shared/constants.ts";
+export { MATCH };
 
 /** Public Suffix List lookup (rules as in public_suffix_list.dat, punycode). */
 export class Psl {
@@ -44,9 +45,9 @@ export function parseUri(uri: string): URL | undefined {
   }
 }
 
-export function uriMatches(saved: string, match: number | null | undefined, page: URL, psl: Psl): boolean {
+export function uriMatches(saved: string, match: number | null | undefined, page: URL, psl: Psl, defaultMatch: number = MATCH.Domain): boolean {
   if (page.protocol !== "https:" && page.protocol !== "http:") return false;
-  switch (match ?? MATCH.Domain) {
+  switch (match ?? defaultMatch) {
     case MATCH.Domain: {
       const s = parseUri(saved);
       if (!s?.hostname) return false;

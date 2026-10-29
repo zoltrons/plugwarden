@@ -125,8 +125,10 @@ on 2026-10-29 by `spike/vw-flow.mjs`, unless marked otherwise.
   checks it with Yubico's servers (`YUBICO_CLIENT_ID`/`YUBICO_SECRET_KEY`), so the e2e test stands in
   for the server's 2FA answer and only checks what we send. **Not verified with a real key.**
 * **Send edit**: `PUT /api/sends/<id>` takes the full `SendData` again with the same `key` (the link
-  stays valid). A missing `password` keeps the current one (`/remove-password` exists, not used);
-  text sends must carry `text`; a file send's `file` is ignored (immutable). `disabled: true` makes
+  stays valid). A missing `password` keeps the current one; removing it is
+  `PUT /api/sends/<id>/remove-password` (read in 1.37.4 `sends.rs#put_remove_password`, used by the
+  edit form; **not yet exercised by the e2e suite**). Text sends must carry `text` (so text and
+  `hidden` are editable); a file send's `file` is ignored (immutable). `disabled: true` makes
   `send_access` fail.
 * **Website icons**: `GET <server>/icons/<host>/icon.png` answers 200 `image/png` for any host,
   falling back to a generic icon (also for `localhost`).

@@ -40,6 +40,37 @@ export function fillLogin(expectedOrigin: string, username: string, password: st
 }
 
 /**
+ * Page-load autofill: like fillLogin, but only into empty fields so a page that pre-filled or a
+ * user who already typed is never overwritten (the official client's `onlyEmptyFields`).
+ */
+export function fillLoginIfEmpty(expectedOrigin: string, username: string, password: string): FillResult {
+  if (location.origin !== expectedOrigin) return { filled: false, reason: "origin" };
+  const deep = (root: ParentNode): HTMLInputElement[] =>
+    [...root.querySelectorAll("*")].flatMap((e) => [...(e instanceof HTMLInputElement ? [e] : []), ...(e.shadowRoot ? deep(e.shadowRoot) : [])]);
+  const visible = (el: HTMLInputElement) => !el.disabled && !el.readOnly && el.getClientRects().length > 0 && getComputedStyle(el).visibility !== "hidden";
+  const inputs = deep(document).filter(visible);
+  const pass = inputs.find((i) => i.type === "password");
+  // Like the clients: page load never fills a username-only step, and never a "new password" field
+  // (sign-up / change-password forms).
+  if (!pass || /new-password/.test(pass.autocomplete)) return { filled: false, reason: "noFields" };
+  const isUser = (i: HTMLInputElement) =>
+    ["text", "email", "tel", ""].includes(i.type) && !/search|captcha|otp|code/i.test(`${i.name} ${i.id} ${i.autocomplete}`);
+  const user = inputs.slice(0, inputs.indexOf(pass)).filter(isUser).filter((i) => i.form === pass.form).at(-1) ?? inputs.slice(0, inputs.indexOf(pass)).filter(isUser).at(-1);
+  let n = 0;
+  const set = (el: HTMLInputElement | undefined, value: string) => {
+    if (!el || !value || el.value !== "") return;
+    el.focus();
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(el, value);
+    el.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+    n++;
+  };
+  set(user, username);
+  set(pass, password);
+  return n ? { filled: true } : { filled: false, reason: "noFields" };
+}
+
+/**
  * Card / identity fill. `values` is keyed by autocomplete token (cc-number, given-name, …); fields
  * without an autocomplete attribute are matched by name/id hints.
  */

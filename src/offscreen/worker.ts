@@ -68,7 +68,7 @@ function run(req: CoreRequest): unknown {
     case "decryptText":
       return vault.decryptText(req.values);
     case "matchUri":
-      return vault.matchUri(req.url);
+      return vault.matchUri(req.url, req.defaultMatch);
     case "fillData":
       return vault.fillData(req.id);
     case "formValues":
@@ -83,6 +83,8 @@ function run(req: CoreRequest): unknown {
       return vault.encryptAttachment(req.cipherId, req.fileName, req.data);
     case "listSends":
       return vault.listSends();
+    case "getSend":
+      return vault.getSend(req.id);
     case "prepareSend":
       return vault.prepareSend(req.send);
     case "encryptSendFile":
