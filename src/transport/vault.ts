@@ -21,6 +21,24 @@ export async function saveCipher(base: string, token: string, cipher: Record<str
   return parse(record, await call(base, id ? "PUT" : "POST", path, { token, json: cipher }));
 }
 
+export async function restoreCipher(base: string, token: string, id: string): Promise<void> {
+  await call(base, "PUT", `/api/ciphers/${encodeURIComponent(id)}/restore`, { token });
+}
+
+/** Permanent delete (from the trash). */
+export async function purgeCipher(base: string, token: string, id: string): Promise<void> {
+  await call(base, "DELETE", `/api/ciphers/${encodeURIComponent(id)}`, { token });
+}
+
+/** `name` is the encrypted folder name. */
+export async function saveFolder(base: string, token: string, name: string, id?: string): Promise<void> {
+  await call(base, id ? "PUT" : "POST", id ? `/api/folders/${encodeURIComponent(id)}` : "/api/folders", { token, json: { name } });
+}
+
+export async function deleteFolder(base: string, token: string, id: string): Promise<void> {
+  await call(base, "DELETE", `/api/folders/${encodeURIComponent(id)}`, { token });
+}
+
 /** Moves the item to the trash (restorable from the web vault). */
 export async function trashCipher(base: string, token: string, id: string): Promise<void> {
   await call(base, "PUT", `/api/ciphers/${encodeURIComponent(id)}/delete`, { token });

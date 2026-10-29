@@ -2,7 +2,19 @@
 // Decryption happens in the offscreen worker; the SW only moves encrypted JSON around.
 import type { SendItem, VaultList } from "../shared/messages.ts";
 import { revisionDate } from "../transport/auth.ts";
-import { createFileSend, createSend, deleteSend as apiDeleteSend, fullSync, saveCipher, trashCipher, uploadSendFile } from "../transport/vault.ts";
+import {
+  createFileSend,
+  createSend,
+  deleteFolder as apiDeleteFolder,
+  deleteSend as apiDeleteSend,
+  fullSync,
+  purgeCipher,
+  restoreCipher,
+  saveCipher,
+  saveFolder as apiSaveFolder,
+  trashCipher,
+  uploadSendFile,
+} from "../transport/vault.ts";
 import { accessToken, UserError } from "./account.ts";
 import { coreAlive, coreCall } from "./core.ts";
 import { getLocal, getSession, setLocal, type VaultCache } from "./store.ts";
@@ -65,12 +77,22 @@ export async function save(item: Record<string, unknown>): Promise<VaultList> {
   return list();
 }
 
-export async function trash(id: string): Promise<VaultList> {
-  await trashCipher(await server(), await accessToken(), id);
-  const cache = await getLocal("vault");
-  if (cache) await setLocal("vault", { ...cache, ciphers: cache.ciphers.filter((c) => (c as { id?: unknown }).id !== id) });
-  await coreCall({ op: "removeCipher", id });
+/** Trash, restore, permanent delete and folder changes re-sync instead of patching the cache by hand. */
+async function thenSync(change: (base: string, token: string) => Promise<void>): Promise<VaultList> {
+  await change(await server(), await accessToken());
+  await sync(true);
   return list();
+}
+
+export const trash = (id: string) => thenSync((b, t) => trashCipher(b, t, id));
+export const restore = (id: string) => thenSync((b, t) => restoreCipher(b, t, id));
+export const purge = (id: string) => thenSync((b, t) => purgeCipher(b, t, id));
+export const deleteFolder = (id: string) => thenSync((b, t) => apiDeleteFolder(b, t, id));
+
+export async function saveFolder(name: string, id?: string): Promise<VaultList> {
+  // Folder names are encrypted with the user key, like a personal cipher name.
+  const enc = await coreCall<{ name: string }>({ op: "prepareSave", item: { type: 2, name } });
+  return thenSync((b, t) => apiSaveFolder(b, t, enc.name, id));
 }
 
 /** Clears the clipboard; closes the offscreen document again if it only exists for this. */

@@ -483,5 +483,280 @@
   },
   "ssoHint": {
     "message": "SSO signs you in; you still unlock the vault with your master password."
+  },
+  "unlockToFill": {
+    "message": "Unlock to fill"
+  },
+  "close": {
+    "message": "Close"
+  },
+  "barSaveTitle": {
+    "message": "Save this login in Plugwarden?"
+  },
+  "barUpdateTitle": {
+    "message": "Update the saved password?"
+  },
+  "barNever": {
+    "message": "Never for this site"
+  },
+  "barUpdate": {
+    "message": "Update"
+  },
+  "autofill": {
+    "message": "Autofill"
+  },
+  "inlineMenu": {
+    "message": "Autofill menu in fields"
+  },
+  "inlineMenuHint": {
+    "message": "Show matching items under login, card and identity fields"
+  },
+  "savePrompt": {
+    "message": "Offer to save logins"
+  },
+  "savePromptHint": {
+    "message": "Ask to save new logins and update changed passwords"
+  },
+  "neverSaveSites": {
+    "message": "Never save on $P1$ sites",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "clear": {
+    "message": "Clear"
+  },
+  "defaultManager": {
+    "message": "Use as default password manager"
+  },
+  "defaultManagerHint": {
+    "message": "Turns off Chrome's own password saving and address/card autofill"
+  },
+  "typeCard": {
+    "message": "Card"
+  },
+  "typeIdentity": {
+    "message": "Identity"
+  },
+  "typeSshKey": {
+    "message": "SSH key"
+  },
+  "field_username": {
+    "message": "Username"
+  },
+  "field_password": {
+    "message": "Password"
+  },
+  "field_totp": {
+    "message": "Authenticator key (TOTP)"
+  },
+  "field_cardholderName": {
+    "message": "Cardholder name"
+  },
+  "field_brand": {
+    "message": "Brand"
+  },
+  "field_number": {
+    "message": "Number"
+  },
+  "field_expMonth": {
+    "message": "Expiration month"
+  },
+  "field_expYear": {
+    "message": "Expiration year"
+  },
+  "field_code": {
+    "message": "Security code"
+  },
+  "field_title": {
+    "message": "Title"
+  },
+  "field_firstName": {
+    "message": "First name"
+  },
+  "field_middleName": {
+    "message": "Middle name"
+  },
+  "field_lastName": {
+    "message": "Last name"
+  },
+  "field_company": {
+    "message": "Company"
+  },
+  "field_email": {
+    "message": "Email"
+  },
+  "field_phone": {
+    "message": "Phone"
+  },
+  "field_ssn": {
+    "message": "Social security number"
+  },
+  "field_passportNumber": {
+    "message": "Passport number"
+  },
+  "field_licenseNumber": {
+    "message": "License number"
+  },
+  "field_address1": {
+    "message": "Address 1"
+  },
+  "field_address2": {
+    "message": "Address 2"
+  },
+  "field_address3": {
+    "message": "Address 3"
+  },
+  "field_city": {
+    "message": "City / Town"
+  },
+  "field_state": {
+    "message": "State / Province"
+  },
+  "field_postalCode": {
+    "message": "Postal code"
+  },
+  "field_country": {
+    "message": "Country"
+  },
+  "field_privateKey": {
+    "message": "Private key"
+  },
+  "field_publicKey": {
+    "message": "Public key"
+  },
+  "field_keyFingerprint": {
+    "message": "Fingerprint"
+  },
+  "strengthWeak": {
+    "message": "Weak"
+  },
+  "strengthFair": {
+    "message": "Fair"
+  },
+  "strengthStrong": {
+    "message": "Strong"
+  },
+  "strengthVeryStrong": {
+    "message": "Very strong"
+  },
+  "unfavorite": {
+    "message": "Remove from favorites"
+  },
+  "inTrash": {
+    "message": "This item is in the trash."
+  },
+  "passwordChanged": {
+    "message": "Password last changed $P1$",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "passkeyAvailable": {
+    "message": "Passkey available"
+  },
+  "yes": {
+    "message": "Yes"
+  },
+  "no": {
+    "message": "No"
+  },
+  "passwordHistory": {
+    "message": "Password history"
+  },
+  "showPasswordHistory": {
+    "message": "Show $P1$ previous passwords",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "lastEdited": {
+    "message": "Last edited"
+  },
+  "restore": {
+    "message": "Restore"
+  },
+  "restored": {
+    "message": "Restored"
+  },
+  "clone": {
+    "message": "Clone"
+  },
+  "copySuffix": {
+    "message": "(copy)"
+  },
+  "confirmPurge": {
+    "message": "Tap again to delete forever"
+  },
+  "deleteForever": {
+    "message": "Delete forever"
+  },
+  "deleted": {
+    "message": "Deleted"
+  },
+  "fieldName": {
+    "message": "Field name"
+  },
+  "fieldValue": {
+    "message": "Value"
+  },
+  "fieldText": {
+    "message": "Text"
+  },
+  "fieldHidden": {
+    "message": "Hidden"
+  },
+  "fieldBoolean": {
+    "message": "Checkbox"
+  },
+  "removeField": {
+    "message": "Remove field"
+  },
+  "addField": {
+    "message": "Add field"
+  },
+  "folderName": {
+    "message": "Folder name"
+  },
+  "rename": {
+    "message": "Rename"
+  },
+  "deleteFolder": {
+    "message": "Delete folder"
+  },
+  "newFolder": {
+    "message": "New folder"
+  },
+  "add": {
+    "message": "Add"
+  },
+  "filters": {
+    "message": "Filters"
+  },
+  "trashCount": {
+    "message": "Trash ($P1$)",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "theme": {
+    "message": "Theme"
+  },
+  "theme_system": {
+    "message": "System"
+  },
+  "theme_light": {
+    "message": "Light"
+  },
+  "theme_dark": {
+    "message": "Dark"
   }
 }

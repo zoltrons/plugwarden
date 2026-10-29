@@ -14,16 +14,21 @@ let sends = new Map<string, Json>();
 const s = (v: unknown): string => (typeof v === "string" ? v : "");
 const o = (v: unknown): Json | undefined => (v && typeof v === "object" && !Array.isArray(v) ? (v as Json) : undefined);
 
+/** Trashed items: shown only in the trash view, never matched or filled. */
+let trash = new Map<string, Json>();
+
 function put(c: Json): void {
   const id = s(ci(c, "id"));
-  if (ci(c, "deletedDate")) ciphers!.delete(id); // trash is not shown in Phase 2
-  else ciphers!.set(id, c);
+  ciphers!.delete(id);
+  trash.delete(id);
+  (ci(c, "deletedDate") ? trash : ciphers!).set(id, c);
 }
 
 export function loadVault(encCiphers: unknown[], encFolders: unknown[], encSends: unknown[], orgKeys: Record<string, string>): void {
   if (Object.keys(orgKeys).length) core.setOrgKeys(JSON.stringify(orgKeys));
   const r = JSON.parse(core.decryptCipherList(JSON.stringify(encCiphers))) as { ciphers: Json[]; failed: { id: string }[] };
   ciphers = new Map();
+  trash = new Map();
   for (const c of r.ciphers) put(c);
   // Keep undecryptable items visible instead of silently hiding them.
   for (const f of r.failed) ciphers.set(f.id, { id: f.id, type: 0, name: "", failed: true });
@@ -69,12 +74,12 @@ function summary(c: Json): VaultItem {
 
 export function listVault(): VaultList | null {
   if (!ciphers) return null;
-  const items = [...ciphers.values()].map(summary).sort((a, b) => a.name.localeCompare(b.name));
-  return { items, folders };
+  const sorted = (m: Map<string, Json>) => [...m.values()].map(summary).sort((a, b) => a.name.localeCompare(b.name));
+  return { items: sorted(ciphers), folders, trash: sorted(trash) };
 }
 
 function get(id: string): Json {
-  const c = ciphers?.get(id);
+  const c = ciphers?.get(id) ?? trash.get(id);
   if (!c) throw new Error("item not found");
   return c;
 }
@@ -181,7 +186,7 @@ export const removeSend = (id: string): void => void sends.delete(id);
 
 const checkRp = async (rpId: string, origin: string) => {
   const p = await getPsl();
-  fido2.checkRpId(rpId, origin, (d) => p.baseDomain(`x.${d}`) === `x.${d}`);
+  fido2.checkRpId(rpId, origin, (d) => p.isPublicSuffix(d));
 };
 
 /** Stored passkeys for `rpId`; with `ids` (base64url) only those, otherwise only discoverable ones. */
@@ -220,4 +225,51 @@ export async function passkeyAssert(itemId: string, credentialId: string, rpId: 
 export async function passkeyCreate(input: fido2.CreateInput) {
   await checkRp(input.rpId, input.origin);
   return fido2.createCredential(input);
+}
+
+// ---------- card / identity fill ----------
+
+/** Values keyed by HTML autocomplete token, for fillForm in the page. */
+export function formValues(id: string): Record<string, string> {
+  const c = get(id);
+  const type = Number(ci(c, "type"));
+  const f = (k: string, obj: Json | undefined) => s(ci(obj, k));
+  if (type === 3) {
+    const card = o(ci(c, "card"));
+    const mm = f("expMonth", card).padStart(2, "0");
+    const yyyy = f("expYear", card);
+    return {
+      "cc-name": f("cardholderName", card),
+      "cc-number": f("number", card),
+      "cc-csc": f("code", card),
+      "cc-type": f("brand", card),
+      "cc-exp-month": f("expMonth", card) ? mm : "",
+      "cc-exp-year": yyyy,
+      "cc-exp": f("expMonth", card) && yyyy ? `${mm}/${yyyy.slice(-2)}` : "",
+    };
+  }
+  if (type === 4) {
+    const i = o(ci(c, "identity"));
+    const lines = ["address1", "address2", "address3"].map((k) => f(k, i)).filter(Boolean);
+    return {
+      name: [f("firstName", i), f("middleName", i), f("lastName", i)].filter(Boolean).join(" "),
+      "given-name": f("firstName", i),
+      "additional-name": f("middleName", i),
+      "family-name": f("lastName", i),
+      email: f("email", i),
+      tel: f("phone", i),
+      organization: f("company", i),
+      username: f("username", i),
+      "street-address": lines.join("\n"),
+      "address-line1": f("address1", i),
+      "address-line2": f("address2", i),
+      "address-line3": f("address3", i),
+      "address-level2": f("city", i),
+      "address-level1": f("state", i),
+      "postal-code": f("postalCode", i),
+      country: f("country", i),
+      "country-name": f("country", i),
+    };
+  }
+  throw new Error("not a card or identity");
 }

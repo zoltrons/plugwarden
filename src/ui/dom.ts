@@ -1,6 +1,22 @@
-import type { Request, Response } from "../shared/messages.ts";
+import type { FrameRequest, Request, Response } from "../shared/messages.ts";
 
 export const t = (key: string, ...subs: string[]): string => chrome.i18n.getMessage(key, subs) || key;
+
+// Theme is a per-device UI preference (localStorage of the extension origin, shared by popup, panel and
+// the in-page frames); applied before the first render to avoid a flash.
+export const THEMES = ["system", "light", "dark"] as const;
+export function savedTheme(): string {
+  try {
+    return localStorage.getItem("theme") ?? "system";
+  } catch {
+    return "system"; // blocked third-party storage (menu/bar frames inside websites)
+  }
+}
+export function applyTheme(theme = savedTheme()) {
+  if (theme === "system") delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = theme;
+}
+applyTheme();
 
 /** True in the side panel (sidepanel.html), false in the action popup or a tab. */
 export const inPanel = document.body.classList.contains("panel");
@@ -24,7 +40,7 @@ export function h<K extends keyof HTMLElementTagNameMap>(
   return el;
 }
 
-export async function send<T>(req: Request): Promise<Response<T>> {
+export async function send<T>(req: Request | FrameRequest): Promise<Response<T>> {
   try {
     return ((await chrome.runtime.sendMessage(req)) as Response<T> | undefined) ?? { ok: false, error: t("errNoReply") };
   } catch (e) {

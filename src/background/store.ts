@@ -4,6 +4,7 @@
 //   session (memory): unlock flag, access token, pending 2FA login. Cleared on browser restart.
 import { DEFAULT_AUTO_LOCK_MINUTES } from "../shared/constants.ts";
 import type { KdfParams, Settings, TwoFactorChallenge } from "../shared/messages.ts";
+import type { InlineContext, PendingSave } from "./inline.ts";
 
 export interface Server {
   url: string;
@@ -39,6 +40,26 @@ export interface Session {
   /** Why the last SSO login failed (shown when the popup opens next). */
   ssoError?: string;
 }
+
+/**
+ * Per-tab state in storage.session, one key per tab ("inline:<tabId>", "save:<tabId>"), so writes for
+ * different tabs (or the login session) never overwrite each other.
+ *   inline: the field the inline menu belongs to;  save: a submitted login waiting in the save bar.
+ */
+interface TabState {
+  inline: InlineContext;
+  save: PendingSave;
+}
+
+export async function getTabState<K extends keyof TabState>(kind: K, tabId: number): Promise<TabState[K] | undefined> {
+  const key = `${kind}:${tabId}`;
+  return (await chrome.storage.session.get(key))[key] as TabState[K] | undefined;
+}
+
+export const setTabState = <K extends keyof TabState>(kind: K, tabId: number, value: TabState[K] | undefined) =>
+  value === undefined ? chrome.storage.session.remove(`${kind}:${tabId}`) : chrome.storage.session.set({ [`${kind}:${tabId}`]: value });
+
+export const clearTabState = (tabId: number) => chrome.storage.session.remove([`inline:${tabId}`, `save:${tabId}`]);
 
 /** /api/sync data exactly as the server sent it (encrypted). */
 export interface VaultCache {
@@ -90,7 +111,7 @@ export async function updateSession(patch: Partial<Session>): Promise<Session> {
 export const clearSession = () => chrome.storage.session.remove("session");
 
 export async function getSettings(): Promise<Settings> {
-  return { autoLockMinutes: DEFAULT_AUTO_LOCK_MINUTES, lockOnSystemLock: true, passkeys: false, ...(await getLocal("settings")) };
+  return { autoLockMinutes: DEFAULT_AUTO_LOCK_MINUTES, lockOnSystemLock: true, passkeys: false, inlineMenu: true, savePrompt: true, neverSave: [], defaultManager: false, ...(await getLocal("settings")) };
 }
 
 export async function getDeviceId(): Promise<string> {
@@ -106,4 +127,21 @@ export async function getDeviceId(): Promise<string> {
 export async function restrictStorageAccess(): Promise<void> {
   await chrome.storage.local.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" });
   await chrome.storage.session.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" });
+}
+
+/**
+ * Turns Chrome's own password saving and address/card autofill off (or hands them back), like the
+ * official "make Bitwarden the default password manager". Needs the optional "privacy" permission,
+ * which the popup requests in the click.
+ */
+export async function setDefaultManager(enabled: boolean): Promise<void> {
+  if (enabled && !(await chrome.permissions.contains({ permissions: ["privacy"] })))
+    throw new Error("Permission to change Chrome's password settings was not granted");
+  if (chrome.privacy) {
+    const prefs = [chrome.privacy.services.passwordSavingEnabled, chrome.privacy.services.autofillAddressEnabled, chrome.privacy.services.autofillCreditCardEnabled];
+    // Some browsers (or policies, or another extension) own these; leave those alone.
+    for (const p of prefs) if ((await p.get({})).levelOfControl.endsWith("by_this_extension")) await (enabled ? p.set({ value: false }) : p.clear({}));
+  }
+  if (!enabled) await chrome.permissions.remove({ permissions: ["privacy"] }).catch(() => undefined);
+  await setLocal("settings", { ...(await getSettings()), defaultManager: enabled });
 }

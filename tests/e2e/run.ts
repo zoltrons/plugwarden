@@ -105,6 +105,10 @@ async function apiSession(u: TestUser) {
       const encName = JSON.parse(wasm.encryptCipher(JSON.stringify({ type: 2, name }))).name;
       return (await call(BASE, "POST", "/api/folders", { token, json: { name: encName } })) as { id: string };
     },
+    async folders() {
+      const sync = (await call(BASE, "GET", "/api/sync?excludeDomains=true", { token })) as { folders: unknown[] };
+      return (JSON.parse(wasm.decryptFolders(JSON.stringify(sync.folders))).folders as { name: string }[]).map((f) => f.name);
+    },
     async ciphers() {
       const sync = (await call(BASE, "GET", "/api/sync?excludeDomains=true", { token })) as { ciphers: unknown[] };
       return sync.ciphers.map((c) => JSON.parse(wasm.decryptCipher(JSON.stringify(c))) as Record<string, any>);
@@ -115,10 +119,17 @@ async function apiSession(u: TestUser) {
 
 // A plain login page for autofill tests, reachable as localhost:8099 (matches) and 127.0.0.1:8099 (does not).
 const SITE = "http://localhost:8099";
-const site = createServer((_req, res) => {
+const LOGIN_FORM = `<form onsubmit="return false"><input id="u" name="user" autocomplete="username"><input id="p" type="password" name="pw"><button type="button" id="show">Show</button><button>Sign in</button></form>`;
+const pages: Record<string, string> = {
+  "/card": `<form><input id="cn" autocomplete="cc-name"><input id="cc" autocomplete="cc-number"><select id="m" autocomplete="cc-exp-month"><option></option><option>01</option><option>02</option></select><input id="y" name="exp-year"><input id="cvc" name="cvc"></form>`,
+  // Login fields inside an open shadow root.
+  "/shadow": `<div id="host"></div><script>document.getElementById("host").attachShadow({ mode: "open" }).innerHTML = ${JSON.stringify(LOGIN_FORM)};</script>`,
+  "/change": `<form onsubmit="return false"><input id="u" autocomplete="username"><input id="cur" type="password" autocomplete="current-password"><input id="new" type="password" autocomplete="new-password"><input id="rep" type="password"><button>Change</button></form>`,
+  "/framed": `<p>outer</p><iframe id="f" src="/login" style="width:500px;height:200px"></iframe>`,
+};
+const site = createServer((req, res) => {
   res.setHeader("Content-Type", "text/html; charset=utf-8");
-  res.end(`<!doctype html><title>Login</title><form onsubmit="return false">
-    <input id="u" name="user" autocomplete="username"><input id="p" type="password" name="pw"><button>Sign in</button></form>`);
+  res.end(`<!doctype html><title>Test site</title>${pages[new URL(req.url!, SITE).pathname] ?? LOGIN_FORM}`);
 }).listen(8099);
 
 // ---------- browser ----------
@@ -429,7 +440,8 @@ try {
     await page.getByRole("button", { name: "Work", exact: true }).click();
     assert.equal(await rows().count(), 1);
     assert.match(await rows().first().innerText(), /GitHub/);
-    await page.getByRole("button", { name: "All", exact: true }).click();
+    await page.getByRole("button", { name: "Work", exact: true }).click(); // chips toggle off again
+    assert.equal(await rows().count(), 3);
   });
 
   await step("item view: reveal password, TOTP matches, hidden field, copy schedules clearing", async () => {
@@ -450,12 +462,12 @@ try {
     await back();
   });
 
-  await step("card shown read-only with masked number", async () => {
+  await step("card shown with masked number and editable", async () => {
     await rows().filter({ hasText: "Visa" }).click();
     await page.getByRole("heading", { name: "Visa" }).waitFor();
     const text = await page.locator("#app").innerText();
     assert.ok(text.includes("Ada L") && !text.includes("4111111111111111"));
-    assert.equal(await page.getByRole("button", { name: "Edit" }).count(), 0);
+    assert.equal(await page.getByRole("button", { name: "Edit" }).count(), 1);
     await back();
   });
 
@@ -521,6 +533,79 @@ try {
     assert.ok(c?.deletedDate, "not in server trash");
   });
 
+  await step("trash: restore, then delete forever", async () => {
+    await page.getByRole("button", { name: "Trash (1)" }).click();
+    await rows().filter({ hasText: "Wifi note" }).click();
+    await page.getByText("This item is in the trash.").waitFor();
+    await page.getByRole("button", { name: "Restore" }).click();
+    await page.getByRole("status").filter({ hasText: "Restored" }).waitFor();
+    await rows().filter({ hasText: "Wifi note" }).click();
+    await page.getByRole("button", { name: "Move to trash" }).click();
+    await page.getByRole("button", { name: "Tap again to move to trash" }).click();
+    await page.getByRole("button", { name: "Trash (1)" }).click();
+    await rows().filter({ hasText: "Wifi note" }).click();
+    await page.getByRole("button", { name: "Delete forever" }).click();
+    await page.getByRole("button", { name: "Tap again to delete forever" }).click();
+    await page.getByRole("status").filter({ hasText: "Deleted" }).waitFor();
+    const s = await apiSession(vaultUser);
+    assert.equal((await s.ciphers()).filter((x) => x.name === "Wifi note").length, 0);
+    s.done();
+  });
+
+  await step("editor: new card with a hidden custom field; clone; favorite", async () => {
+    await page.getByRole("button", { name: "New item" }).click();
+    await page.getByRole("button", { name: "Card", exact: true }).click();
+    await fill("Name", "Work Amex");
+    await fill("Cardholder name", "Ada Lovelace");
+    await page.getByLabel("Brand").selectOption("Amex");
+    await fill("Number", "378282246310005");
+    await page.getByLabel("Expiration month").selectOption("7");
+    await fill("Expiration year", "2031");
+    await page.getByRole("button", { name: "Add field" }).click();
+    await page.getByLabel("Field name").fill("PIN");
+    await page.getByLabel("Value").fill("9876");
+    await page.getByRole("combobox").filter({ hasText: "Text" }).selectOption("1");
+    await page.getByRole("button", { name: "Save" }).click();
+    await rows().filter({ hasText: "Work Amex" }).click();
+    await page.getByRole("button", { name: "Favorite" }).click();
+    await page.getByRole("status").filter({ hasText: "Saved" }).waitFor();
+    await page.getByRole("button", { name: "Clone" }).click();
+    await page.getByRole("button", { name: "Save" }).click();
+    await rows().filter({ hasText: "Work Amex (copy)" }).waitFor();
+    const s = await apiSession(vaultUser);
+    const all = await s.ciphers();
+    s.done();
+    const c = all.find((x) => x.name === "Work Amex");
+    assert.deepEqual([c?.type, c?.card.brand, c?.card.number, c?.card.expMonth, c?.card.expYear, c?.favorite], [3, "Amex", "378282246310005", "7", "2031", true]);
+    assert.deepEqual(c?.fields, [{ name: "PIN", value: "9876", type: 1, linkedId: null }]);
+    assert.equal(all.find((x) => x.name === "Work Amex (copy)")?.card.number, "378282246310005");
+  });
+
+  await step("folders: create, rename, delete (names checked on the server)", async () => {
+    const names = () => page.locator("input[aria-label=\"Folder name\"]");
+    const index = (name: string) => page.evaluate((n) => [...document.querySelectorAll<HTMLInputElement>("input[aria-label=\"Folder name\"]")].findIndex((i) => i.value === n), name);
+    const serverFolders = async () => {
+      const s = await apiSession(vaultUser);
+      const f = await s.folders();
+      s.done();
+      return f;
+    };
+    await page.getByRole("button", { name: "Folders", exact: true }).click();
+    await page.getByLabel("New folder").fill("Banking");
+    await page.getByRole("button", { name: "Add", exact: true }).click();
+    await page.waitForFunction(() => [...document.querySelectorAll<HTMLInputElement>("input[aria-label=\"Folder name\"]")].some((i) => i.value === "Banking"));
+    assert.ok((await serverFolders()).includes("Banking"));
+    const i = await index("Banking");
+    await names().nth(i).fill("Bank");
+    await page.getByRole("button", { name: "Rename" }).nth(i).click();
+    await page.waitForFunction(() => [...document.querySelectorAll<HTMLInputElement>("input[aria-label=\"Folder name\"]")].some((i) => i.value === "Bank"));
+    assert.ok((await serverFolders()).includes("Bank"));
+    await page.getByRole("button", { name: "Delete folder" }).nth(await index("Bank")).click();
+    await page.waitForFunction(() => ![...document.querySelectorAll<HTMLInputElement>("input[aria-label=\"Folder name\"]")].some((i) => i.value === "Bank"));
+    assert.ok(!(await serverFolders()).includes("Bank"));
+    await page.getByRole("button", { name: "Back" }).click();
+  });
+
   await step("generator: password and passphrase", async () => {
     await page.getByRole("button", { name: "Generator" }).click();
     const out = page.getByRole("status", { name: "Generated value" }).or(page.locator("output"));
@@ -529,6 +614,29 @@ try {
     await page.getByRole("button", { name: "Passphrase" }).click();
     await page.waitForFunction(() => (document.querySelector("output")?.textContent ?? "").split("-").length === 5);
   });
+
+  // Design review screenshots (not assertions): SHOTS=<dir> npm run test:e2e
+  if (process.env.SHOTS) {
+    for (const scheme of ["dark", "light"] as const) {
+      await page.emulateMedia({ colorScheme: scheme });
+      const shot = (name: string) => page.locator("body").screenshot({ path: join(process.env.SHOTS!, `${scheme}-${name}.png`) });
+      await page.getByRole("button", { name: "Vault" }).click();
+      await shot("list");
+      await rows().filter({ hasText: "GitHub" }).click();
+      await page.getByRole("heading", { name: "GitHub" }).waitFor();
+      await shot("item");
+      await page.getByRole("button", { name: "Edit" }).click();
+      await shot("edit");
+      await page.getByRole("button", { name: "Cancel" }).click();
+      await back();
+      await page.getByRole("button", { name: "Generator" }).click();
+      await shot("generator");
+      await page.getByRole("button", { name: "Settings" }).click();
+      await shot("settings");
+    }
+    await page.emulateMedia({ colorScheme: null });
+    await page.getByRole("button", { name: "Vault" }).click();
+  }
 
   await step("lock clears decrypted vault from the popup", async () => {
     await page.getByRole("button", { name: "Vault" }).click();
@@ -615,6 +723,134 @@ try {
     s.done();
     assert.equal(c?.login.password, "local-pass-2");
     assert.equal(c?.passwordHistory?.[0]?.password, "local-pass");
+  });
+
+  // ---------- inline menu, save bar, card fill (content script on every page) ----------
+  // Menu and bar are extension iframes inside a closed shadow root; Playwright still lists their frames.
+  const frameOf = async (p: Page, file: string) => {
+    for (let i = 0; i < 100; i++) {
+      const f = p.frames().find((x) => x.url().includes(`/${file}`));
+      if (f) return f;
+      await p.waitForTimeout(100);
+    }
+    throw new Error(`${file} did not appear`);
+  };
+  const values = (p: Page | import("playwright-core").Frame, ids: string[]) =>
+    p.evaluate((ids) => ids.map((id) => (document.getElementById(id) as HTMLInputElement).value), ids);
+
+  await step("inline menu: focusing the username lists site matches; picking one fills", async () => {
+    await unlockIfLocked();
+    await loginPage.goto(`${SITE}/login`);
+    await loginPage.click("#u");
+    const menu = await frameOf(loginPage, "menu.html");
+    await menu.getByRole("button", { name: "Fill Local app" }).click();
+    await loginPage.waitForFunction(() => (document.getElementById("p") as HTMLInputElement).value !== "");
+    assert.deepEqual(await fieldValues(), ["local-user", "local-pass-2"]);
+    await loginPage.waitForTimeout(300);
+    assert.equal(await loginPage.locator("plugwarden-menu").count(), 0, "menu reopened after the fill");
+  });
+
+  await step("inline menu: fields in an open shadow root and in an iframe", async () => {
+    await loginPage.goto(`${SITE}/shadow`);
+    await loginPage.locator("#u").click(); // Playwright pierces open shadow roots
+    await (await frameOf(loginPage, "menu.html")).getByRole("button", { name: "Fill Local app" }).click();
+    await loginPage.waitForFunction(() => (document.getElementById("host")!.shadowRoot!.getElementById("p") as HTMLInputElement).value !== "");
+    await loginPage.goto(`${SITE}/framed`);
+    const inner = loginPage.frameLocator("#f");
+    await inner.locator("#u").click();
+    await (await frameOf(loginPage, "menu.html")).getByRole("button", { name: "Fill Local app" }).click();
+    const f = loginPage.frames().find((x) => x.url() === `${SITE}/login`)!;
+    await f.waitForFunction(() => (document.getElementById("p") as HTMLInputElement).value !== "");
+    assert.deepEqual(await values(f, ["u", "p"]), ["local-user", "local-pass-2"]);
+  });
+
+  await step("inline menu: card fields list cards and fill name, number, expiry and code", async () => {
+    await loginPage.goto(`${SITE}/card`);
+    await loginPage.click("#cc");
+    await (await frameOf(loginPage, "menu.html")).getByRole("button", { name: "Fill Visa" }).click();
+    await loginPage.waitForFunction(() => (document.getElementById("cc") as HTMLInputElement).value !== "");
+    assert.deepEqual(await values(loginPage, ["cn", "cc", "m", "y", "cvc"]), ["Ada L", "4111111111111111", "01", "2030", "123"]);
+  });
+
+  await step("save bar: a submitted new login is offered and saved", async () => {
+    await loginPage.goto(`${SITE}/login`);
+    await loginPage.fill("#u", "bar-user");
+    await loginPage.fill("#p", "bar-pass");
+    await loginPage.keyboard.press("Escape");
+    await loginPage.click("#show"); // type="button": not a submit, must not offer anything
+    await loginPage.waitForTimeout(600);
+    assert.equal(await loginPage.locator("plugwarden-bar").count(), 0, "a non-submit button triggered the save bar");
+    await loginPage.getByRole("button", { name: "Sign in" }).click();
+    const bar = await frameOf(loginPage, "bar.html");
+    await bar.getByText("Save this login in Plugwarden?").waitFor();
+    await bar.getByRole("button", { name: "Save", exact: true }).click();
+    await loginPage.waitForFunction(() => !document.querySelector("plugwarden-bar"));
+    const s = await apiSession(vaultUser);
+    const c = (await s.ciphers()).find((x) => x.login?.username === "bar-user" && !x.deletedDate);
+    s.done();
+    assert.deepEqual([c?.login.password, c?.login.uris[0].uri], ["bar-pass", SITE]);
+  });
+
+  await step("save bar: a changed password is offered as an update and keeps history", async () => {
+    await loginPage.goto(`${SITE}/login`);
+    await loginPage.fill("#u", "bar-user");
+    await loginPage.fill("#p", "bar-pass-2");
+    await loginPage.keyboard.press("Escape");
+    await loginPage.getByRole("button", { name: "Sign in" }).click();
+    const bar = await frameOf(loginPage, "bar.html");
+    await bar.getByText("Update the saved password?").waitFor();
+    await bar.getByRole("button", { name: "Update" }).click();
+    await loginPage.waitForFunction(() => !document.querySelector("plugwarden-bar"));
+    const s = await apiSession(vaultUser);
+    const c = (await s.ciphers()).find((x) => x.login?.username === "bar-user" && !x.deletedDate);
+    s.done();
+    assert.deepEqual([c?.login.password, c?.passwordHistory?.[0]?.password], ["bar-pass-2", "bar-pass"]);
+  });
+
+  await step("save bar: change-password form offers the new password, not the current one", async () => {
+    await loginPage.goto(`${SITE}/change`);
+    for (const [id, v] of [["u", "bar-user"], ["cur", "bar-pass-2"], ["new", "bar-pass-3"], ["rep", "bar-pass-3"]] as const) await loginPage.fill(`#${id}`, v);
+    await loginPage.keyboard.press("Escape");
+    await loginPage.click("button");
+    const bar = await frameOf(loginPage, "bar.html");
+    await bar.getByRole("button", { name: "Update" }).click();
+    await loginPage.waitForFunction(() => !document.querySelector("plugwarden-bar"));
+    const s = await apiSession(vaultUser);
+    const c = (await s.ciphers()).find((x) => x.login?.username === "bar-user" && !x.deletedDate);
+    s.done();
+    assert.equal(c?.login.password, "bar-pass-3");
+  });
+
+  await step("inline menu: a fill for an item not offered for this field is refused", async () => {
+    const s = await apiSession(vaultUser);
+    const github = (await s.ciphers()).find((x) => x.name === "GitHub")!; // saved for github.com, not this site
+    s.done();
+    await loginPage.goto(`${SITE}/login`);
+    await loginPage.click("#u");
+    const menu = await frameOf(loginPage, "menu.html");
+    const r = await menu.evaluate((id) => chrome.runtime.sendMessage({ type: "inlineFill", id }), github.id);
+    assert.deepEqual([r.ok, r.error], [false, "item not available here"]);
+    assert.deepEqual(await fieldValues(), ["", ""]);
+  });
+
+  await step("default password manager: Chrome's own password saving off, then handed back", async () => {
+    const set = (enabled: boolean) => page.evaluate((e) => chrome.runtime.sendMessage({ type: "setDefaultManager", enabled: e }), enabled);
+    const prefs = () =>
+      sw.evaluate(async () => {
+        const s = chrome.privacy.services;
+        const all = { passwordSaving: s.passwordSavingEnabled, address: s.autofillAddressEnabled, card: s.autofillCreditCardEnabled };
+        return Object.fromEntries(await Promise.all(Object.entries(all).map(async ([k, p]) => [k, await p.get({})])));
+      });
+    const before = await prefs();
+    const ours = Object.keys(before).filter((k) => before[k].levelOfControl === "controllable_by_this_extension");
+    console.log(`    controllable here: ${ours.join(", ") || "none"} (${Object.entries(before).map(([k, v]) => `${k}=${v.levelOfControl}`).join(", ")})`);
+    assert.ok(ours.length, "no Chrome autofill preference is controllable in this browser");
+    assert.equal((await set(true)).ok, true);
+    const on = await prefs();
+    for (const k of ours) assert.deepEqual([k, on[k].value, on[k].levelOfControl], [k, false, "controlled_by_this_extension"]);
+    assert.equal((await set(false)).ok, true);
+    const off = await prefs();
+    for (const k of ours) assert.equal(off[k].levelOfControl, "controllable_by_this_extension", k);
   });
 
   // ---------- Phase 4: passkeys ----------

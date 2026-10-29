@@ -2,7 +2,7 @@
 import { AUTO_LOCK_CHOICES, TWO_FACTOR } from "../shared/constants.ts";
 import type { Request, State } from "../shared/messages.ts";
 import { normalizeServerUrl, originPattern } from "../shared/url.ts";
-import { type Child, h, inPanel, send, t } from "./dom.ts";
+import { applyTheme, type Child, h, inPanel, savedTheme, send, t, THEMES } from "./dom.ts";
 import { icon, type IconName } from "./icons.ts";
 import { passkeyRequestId, passkeyScreen } from "./passkey.ts";
 import { resetSend, sendScreen } from "./send.ts";
@@ -442,10 +442,31 @@ function settingsTab(s: State): HTMLElement {
       );
     },
   });
+  const toggle = (label: string, checked: boolean, onchange: (box: HTMLInputElement) => void) =>
+    h("span", { class: "switch" }, h("input", { type: "checkbox", checked, "aria-label": label, onchange: (e: Event) => onchange(e.target as HTMLInputElement) }), h("span"));
+  const defaultManager = (box: HTMLInputElement) => {
+    if (!box.checked) return void act({ type: "setDefaultManager", enabled: false });
+    // The optional "privacy" permission must be requested inside the click.
+    chrome.permissions.request({ permissions: ["privacy"] }).then(
+      (granted) => (granted ? void act({ type: "setDefaultManager", enabled: true }) : ((box.checked = false), (ui.error = t("errPermissionDenied")), render())),
+      (err: unknown) => ((box.checked = false), (ui.error = String(err)), render()),
+    );
+  };
   return h(
     "div",
     { class: "page" },
     h("div", { class: "top" }, h("h1", {}, t("settings"))),
+    h("h2", { class: "section-title" }, t("autofill")),
+    h(
+      "div",
+      { class: "group" },
+      row("home", t("inlineMenu"), t("inlineMenuHint"), toggle(t("inlineMenu"), s.settings.inlineMenu, (b) => void act({ type: "setSettings", inlineMenu: b.checked }))),
+      row("plus", t("savePrompt"), t("savePromptHint"), toggle(t("savePrompt"), s.settings.savePrompt, (b) => void act({ type: "setSettings", savePrompt: b.checked }))),
+      s.settings.neverSave.length
+        ? row("globe", t("neverSaveSites", String(s.settings.neverSave.length)), s.settings.neverSave.join(", "), h("button", { type: "button", class: "btn text small", onclick: () => void act({ type: "setSettings", clearNeverSave: true }) }, t("clear")))
+        : null,
+      row("shield", t("defaultManager"), t("defaultManagerHint"), toggle(t("defaultManager"), s.settings.defaultManager, defaultManager)),
+    ),
     h("h2", { class: "section-title" }, t("account")),
     h(
       "div",
@@ -458,6 +479,22 @@ function settingsTab(s: State): HTMLElement {
       "div",
       { class: "group" },
       row("timer", t("autoLock"), undefined, select),
+      row(
+        "eye",
+        t("theme"),
+        undefined,
+        h(
+          "select",
+          {
+            "aria-label": t("theme"),
+            onchange: (e: Event) => {
+              localStorage.setItem("theme", (e.target as HTMLSelectElement).value);
+              applyTheme();
+            },
+          },
+          ...THEMES.map((v) => h("option", { value: v, selected: v === savedTheme() }, t(`theme_${v}`))),
+        ),
+      ),
       row("lock", t("lockOnSystemLock"), undefined, h("span", { class: "switch" }, sysLock, h("span"))),
       row("key", t("passkeys"), t("passkeysHint"), h("span", { class: "switch" }, passkeys, h("span"))),
     ),
@@ -535,7 +572,7 @@ if (!inPanel) void chrome.windows.getCurrent().then((w) => (windowId = w.id));
 void send<State>({ type: "getState" }).then((res) => {
   if (res.ok) state = res.data;
   else {
-    state = { phase: "setup", settings: { autoLockMinutes: 15, lockOnSystemLock: true, passkeys: false } };
+    state = { phase: "setup", settings: { autoLockMinutes: 15, lockOnSystemLock: true, passkeys: false, inlineMenu: true, savePrompt: true, neverSave: [], defaultManager: false } };
     ui.error = res.error;
   }
   draft.email = state.email ?? "";

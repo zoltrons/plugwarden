@@ -32,7 +32,9 @@ export async function setPasskeys(enabled: boolean): Promise<void> {
   await chrome.scripting.unregisterContentScripts({ ids: SCRIPT_IDS }).catch(() => undefined);
   if (enabled) {
     // WebAuthn needs a secure context: https, or localhost during development.
-    const matches = ((await chrome.permissions.getAll()).origins ?? []).filter((o) => o.startsWith("https://") || /^http:\/\/localhost[:/]/.test(o));
+    const granted = (await chrome.permissions.getAll()).origins ?? [];
+    const matches = granted.filter((o) => o.startsWith("https://"));
+    if (granted.some((o) => o === "http://*/*" || /^http:\/\/localhost[:/]/.test(o))) matches.push("http://localhost/*");
     if (!matches.length) throw new UserError("permission", "Access to websites was not granted");
     await chrome.scripting.registerContentScripts([
       { id: SCRIPT_IDS[0]!, js: ["passkey-page.js"], matches, runAt: "document_start", world: "MAIN" },

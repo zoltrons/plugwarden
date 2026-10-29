@@ -16,13 +16,26 @@ export type Request =
   | { type: "unlock"; password: string }
   | { type: "lock" }
   | { type: "logout" }
-  | { type: "setSettings"; autoLockMinutes?: number; lockOnSystemLock?: boolean }
+  | {
+      type: "setSettings";
+      autoLockMinutes?: number;
+      lockOnSystemLock?: boolean;
+      inlineMenu?: boolean;
+      savePrompt?: boolean;
+      /** Only clearing the list is offered. */
+      clearNeverSave?: boolean;
+    }
+  | { type: "setDefaultManager"; enabled: boolean }
   // vault (unlocked only)
   | { type: "vaultList" }
   | { type: "sync"; force: boolean }
   | { type: "getItem"; id: string }
   | { type: "saveItem"; item: Record<string, unknown> }
   | { type: "deleteItem"; id: string }
+  | { type: "restoreItem"; id: string }
+  | { type: "purgeItem"; id: string }
+  | { type: "saveFolder"; name: string; id?: string }
+  | { type: "deleteFolder"; id: string }
   | { type: "totp"; id: string }
   | { type: "generate"; options: Record<string, unknown> }
   | { type: "clipboardCopied" }
@@ -51,7 +64,14 @@ const requestValidators: { [K in Request["type"]]: Validator<Extract<Request, { 
   lock: obj({ type: literal("lock") }),
   logout: obj({ type: literal("logout") }),
   setSettings: (v, p) => {
-    const s = obj({ type: literal("setSettings"), autoLockMinutes: opt(num), lockOnSystemLock: opt(bool) })(v, p);
+    const s = obj({
+      type: literal("setSettings"),
+      autoLockMinutes: opt(num),
+      lockOnSystemLock: opt(bool),
+      inlineMenu: opt(bool),
+      savePrompt: opt(bool),
+      clearNeverSave: opt(bool),
+    })(v, p);
     if (s.autoLockMinutes !== undefined && !(AUTO_LOCK_CHOICES as readonly number[]).includes(s.autoLockMinutes))
       throw new ValidationError("autoLockMinutes: not an allowed choice");
     return s;
@@ -61,13 +81,17 @@ const requestValidators: { [K in Request["type"]]: Validator<Extract<Request, { 
   getItem: obj({ type: literal("getItem"), id: str }),
   saveItem: (v, p) => {
     const s = obj({ type: literal("saveItem"), item: record })(v, p);
-    // Phase 2 edits personal Login (1) and Secure note (2) items only.
-    if (![1, 2].includes(s.item.type as number)) throw new ValidationError("item.type: only login and note can be edited");
+    // Login, secure note, card, identity. SSH keys (5) are view-only.
+    if (![1, 2, 3, 4].includes(s.item.type as number)) throw new ValidationError("item.type: this item type cannot be edited");
     if (typeof s.item.name !== "string" || !s.item.name.trim()) throw new ValidationError("item.name: required");
     if (s.item.organizationId) throw new ValidationError("organization items are read-only");
     return s;
   },
   deleteItem: obj({ type: literal("deleteItem"), id: str }),
+  restoreItem: obj({ type: literal("restoreItem"), id: str }),
+  purgeItem: obj({ type: literal("purgeItem"), id: str }),
+  saveFolder: obj({ type: literal("saveFolder"), name: str, id: opt(str) }),
+  deleteFolder: obj({ type: literal("deleteFolder"), id: str }),
   totp: obj({ type: literal("totp"), id: str }),
   generate: obj({ type: literal("generate"), options: record }),
   clipboardCopied: obj({ type: literal("clipboardCopied") }),
@@ -80,6 +104,7 @@ const requestValidators: { [K in Request["type"]]: Validator<Extract<Request, { 
   },
   deleteSend: obj({ type: literal("deleteSend"), id: str }),
   setPasskeys: obj({ type: literal("setPasskeys"), enabled: bool }),
+  setDefaultManager: obj({ type: literal("setDefaultManager"), enabled: bool }),
   passkeyPrompt: obj({ type: literal("passkeyPrompt"), id: str }),
   passkeyDecision: obj({ type: literal("passkeyDecision"), id: str, action: literal("use", "fallback"), itemId: opt(str), credentialId: opt(str) }),
   pageMatches: obj({ type: literal("pageMatches") }),
@@ -107,6 +132,14 @@ export interface Settings {
   lockOnSystemLock: boolean;
   /** Answer websites' passkey requests (needs site access; content scripts registered). */
   passkeys: boolean;
+  /** Show the inline menu under login, card and identity fields. */
+  inlineMenu: boolean;
+  /** Offer to save / update logins after a form is submitted. */
+  savePrompt: boolean;
+  /** Hosts the user chose "never save" for. */
+  neverSave: string[];
+  /** Chrome's own password saving and address/card autofill are turned off (privacy permission). */
+  defaultManager: boolean;
 }
 
 export interface State {
@@ -148,6 +181,7 @@ export interface Folder {
 export interface VaultList {
   items: VaultItem[];
   folders: Folder[];
+  trash: VaultItem[];
   syncedAt?: number;
 }
 
@@ -225,6 +259,7 @@ export type CoreRequest =
   | { op: "generate"; options: Record<string, unknown> }
   | { op: "matchUri"; url: string }
   | { op: "fillData"; id: string }
+  | { op: "formValues"; id: string }
   // Send
   | { op: "listSends" }
   | { op: "prepareSend"; send: Record<string, unknown> }
@@ -264,6 +299,7 @@ const coreValidators: { [K in CoreRequest["op"]]: Validator<Extract<CoreRequest,
   generate: obj({ op: literal("generate"), options: record }),
   matchUri: obj({ op: literal("matchUri"), url: str }),
   fillData: obj({ op: literal("fillData"), id: str }),
+  formValues: obj({ op: literal("formValues"), id: str }),
   listSends: obj({ op: literal("listSends") }),
   prepareSend: obj({ op: literal("prepareSend"), send: record }),
   encryptSendFile: obj({ op: literal("encryptSendFile"), key: str, data: str }),
@@ -313,4 +349,64 @@ export function parsePasskeyCall(v: unknown): PasskeyCall {
       options: obj({ rpId: opt(str), rpName: str, user, challenge: str, exclude: arr(str), discoverable: bool }),
     })(v, "");
   return obj({ kind: literal("get"), options: obj({ rpId: opt(str), challenge: str, allow: arr(str) }) })(v, "");
+}
+
+// ---------- content script (every page) and our menu.html / bar.html iframes -> service worker ----------
+
+export type FieldKind = "login" | "card" | "identity";
+
+/** From the content script. Sender tab, frame and URL come from the browser (sender), never from here. */
+export type PageRequest =
+  | { type: "inlineFocus"; kind: FieldKind }
+  | { type: "loginSubmitted"; username: string; password: string };
+
+const pageValidators: { [K in PageRequest["type"]]: Validator<Extract<PageRequest, { type: K }>> } = {
+  inlineFocus: obj({ type: literal("inlineFocus"), kind: literal("login", "card", "identity") }),
+  loginSubmitted: obj({ type: literal("loginSubmitted"), username: str, password: str }),
+};
+
+/** From menu.html / bar.html, which run as extension pages inside the website's tab. */
+export type FrameRequest =
+  | { type: "inlineList" }
+  | { type: "inlineFill"; id: string }
+  | { type: "inlineUnlock" }
+  | { type: "barInfo" }
+  | { type: "barAction"; action: "save" | "never" | "close" };
+
+const frameValidators: { [K in FrameRequest["type"]]: Validator<Extract<FrameRequest, { type: K }>> } = {
+  inlineList: obj({ type: literal("inlineList") }),
+  inlineFill: obj({ type: literal("inlineFill"), id: str }),
+  inlineUnlock: obj({ type: literal("inlineUnlock") }),
+  barInfo: obj({ type: literal("barInfo") }),
+  barAction: obj({ type: literal("barAction"), action: literal("save", "never", "close") }),
+};
+
+const parseBy =
+  <T>(validators: Record<string, Validator<unknown>>) =>
+  (v: unknown): T => {
+    const type = (v as { type?: unknown } | null)?.type;
+    if (typeof type !== "string" || !Object.hasOwn(validators, type)) throw new ValidationError("unknown message type");
+    return validators[type]!(v, "") as T;
+  };
+
+export const parsePageRequest = parseBy<PageRequest>(pageValidators);
+export const parseFrameRequest = parseBy<FrameRequest>(frameValidators);
+
+export interface MenuItem {
+  id: string;
+  type: number;
+  name: string;
+  sub: string;
+}
+
+export interface MenuData {
+  kind: FieldKind;
+  locked: boolean;
+  items: MenuItem[];
+}
+
+export interface BarInfo {
+  kind: "add" | "update";
+  host: string;
+  username: string;
 }

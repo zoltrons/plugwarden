@@ -1,6 +1,6 @@
 // Service worker entry. Stateless: listeners are registered synchronously at top level, every
 // handler reads its state from chrome.storage.
-import { type ErrorCode, PASSKEY_PORT, parseRequest, type Request, type Response, type State } from "../shared/messages.ts";
+import { type ErrorCode, PASSKEY_PORT, parseFrameRequest, parsePageRequest, parseRequest, type Request, type Response, type State } from "../shared/messages.ts";
 import { ValidationError } from "../shared/validate.ts";
 import { getServerInfo } from "../transport/config.ts";
 import { normalizeServerUrl, originPattern } from "../shared/url.ts";
@@ -22,13 +22,16 @@ import {
   getLocal,
   getSession,
   getSettings,
+  clearTabState,
   restrictStorageAccess,
+  setDefaultManager,
   setLocal,
   updateSession,
 } from "./store.ts";
+import { handleFrame, handlePage, showBar } from "./inline.ts";
 import { onPasskeyPort, onWindowRemoved, passkeyDecision, passkeyPrompt, setPasskeys } from "./passkey.ts";
 import { AUTOFILL_COMMAND, autofillFromGesture, CONTEXT_MENU_ID, fillActiveTab, pageMatches, readPageLogin } from "./autofill.ts";
-import { CLIPBOARD_ALARM, clearClipboard, deleteSend, list as vaultList, requireUnlocked, save, saveSend, sendList, sync, trash } from "./vault.ts";
+import { CLIPBOARD_ALARM, clearClipboard, deleteFolder, deleteSend, purge, restore, saveFolder, list as vaultList, requireUnlocked, save, saveSend, sendList, sync, trash } from "./vault.ts";
 
 async function getState(): Promise<State> {
   const [server, account, session, settings] = await Promise.all([
@@ -78,6 +81,10 @@ async function handle(req: Request): Promise<unknown> {
     case "getItem":
     case "saveItem":
     case "deleteItem":
+    case "restoreItem":
+    case "purgeItem":
+    case "saveFolder":
+    case "deleteFolder":
     case "totp":
     case "generate":
     case "sendList":
@@ -90,6 +97,10 @@ async function handle(req: Request): Promise<unknown> {
       if (req.type === "getItem") return coreCall({ op: "getCipher", id: req.id });
       if (req.type === "saveItem") return save(req.item);
       if (req.type === "deleteItem") return trash(req.id);
+      if (req.type === "restoreItem") return restore(req.id);
+      if (req.type === "purgeItem") return purge(req.id);
+      if (req.type === "saveFolder") return saveFolder(req.name, req.id);
+      if (req.type === "deleteFolder") return deleteFolder(req.id);
       if (req.type === "totp") return coreCall({ op: "totp", id: req.id });
       if (req.type === "sendList") return sendList();
       if (req.type === "saveSend") return saveSend(req.send, req.file);
@@ -149,9 +160,15 @@ async function handle(req: Request): Promise<unknown> {
         ...current,
         autoLockMinutes: req.autoLockMinutes ?? current.autoLockMinutes,
         lockOnSystemLock: req.lockOnSystemLock ?? current.lockOnSystemLock,
+        inlineMenu: req.inlineMenu ?? current.inlineMenu,
+        savePrompt: req.savePrompt ?? current.savePrompt,
+        neverSave: req.clearNeverSave ? [] : current.neverSave,
       });
       break;
     }
+    case "setDefaultManager":
+      await setDefaultManager(req.enabled);
+      break;
   }
   const state = await getState();
   if (state.phase === "unlocked") await touchAutoLock();
@@ -171,6 +188,7 @@ function toError(e: unknown): Response<unknown> {
 }
 
 const UI_URLS = ["popup.html", "sidepanel.html"].map((p) => chrome.runtime.getURL(p));
+const FRAME_URLS = ["menu.html", "bar.html"].map((p) => chrome.runtime.getURL(p));
 
 // Serialize state-changing requests so e.g. a double-clicked "Log in" cannot interleave.
 let queue: Promise<unknown> = Promise.resolve();
@@ -183,7 +201,34 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, reply: (r: Response<
     return false;
   }
   // URL check is enough: our pages are not web-accessible, so only the extension can load them (also when opened in a tab).
-  if (sender.id !== chrome.runtime.id || !UI_URLS.some((u) => sender.url?.startsWith(u))) return false;
+  if (sender.id !== chrome.runtime.id) return false;
+  const tabId = sender.tab?.id;
+  // Our menu/bar iframes inside a website tab, and the content script on that website.
+  const frame = FRAME_URLS.some((u) => sender.url?.startsWith(u));
+  if (tabId !== undefined && (frame || /^https?:/.test(sender.url ?? ""))) {
+    let run: () => Promise<unknown>;
+    let read: boolean;
+    try {
+      if (frame) {
+        const req = parseFrameRequest(msg);
+        run = () => handleFrame(req, tabId);
+        read = req.type === "inlineList" || req.type === "barInfo";
+      } else {
+        const req = parsePageRequest(msg);
+        run = () => handlePage(req, sender);
+        read = req.type === "inlineFocus";
+      }
+    } catch (e) {
+      reply(toError(e));
+      return false;
+    }
+    const go = () => run().then((data) => reply({ ok: true, data } as Response<unknown>), (e: unknown) => reply(toError(e)));
+    // Menu reads must not wait behind an unlock (Argon2id) or a sync; fills and saves stay in order.
+    if (read) void go();
+    else queue = queue.then(go, go);
+    return true;
+  }
+  if (!UI_URLS.some((u) => sender.url?.startsWith(u))) return false;
   if ((msg as { target?: unknown } | null)?.target !== undefined) return false; // offscreen traffic
   let req: Request;
   try {
@@ -209,6 +254,13 @@ chrome.runtime.onConnect.addListener((port) => {
 });
 
 chrome.windows.onRemoved.addListener(onWindowRemoved);
+
+chrome.tabs.onRemoved.addListener((tabId) => void clearTabState(tabId));
+
+// A login is usually submitted right before a navigation: show the save bar once the next page is there.
+chrome.tabs.onUpdated.addListener((tabId, info) => {
+  if (info.status === "complete") void showBar(tabId);
+});
 
 chrome.idle.onStateChanged.addListener((state) => void onIdleStateChanged(state));
 

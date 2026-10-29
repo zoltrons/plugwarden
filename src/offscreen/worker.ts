@@ -58,6 +58,8 @@ function run(req: CoreRequest): unknown {
       return vault.matchUri(req.url);
     case "fillData":
       return vault.fillData(req.id);
+    case "formValues":
+      return vault.formValues(req.id);
     case "listSends":
       return vault.listSends();
     case "prepareSend":

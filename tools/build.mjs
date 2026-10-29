@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 // Builds the extension into dist/ext. Run tools/build-wasm.sh first (dist/wasm).
 //   node tools/build.mjs [--watch] [--dev] [--e2e-host=http://localhost:8080]
-// --e2e-host adds a *required* host permission for that origin so automated tests do not hit the
-// runtime permission prompt. Never use it for a release build.
+// --e2e-host compiles in the test-only hooks (the origins are informational). Never use it for a release build.
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -27,12 +26,14 @@ mkdirSync(out, { recursive: true });
 
 function copyStatic() {
   const manifest = JSON.parse(readFileSync(join(root, "src/manifest.json"), "utf8"));
-  if (e2eHosts) manifest.host_permissions = e2eHosts.map((h) => `${new URL(h).origin}/*`);
+  // Tests cannot click permission prompts: grant the optional permissions up front in e2e builds.
+  if (e2eHosts) manifest.permissions.push(...(manifest.optional_permissions ?? []));
   writeFileSync(join(out, "manifest.json"), JSON.stringify(manifest, null, 2));
   cpSync(join(root, "src/ui/popup.html"), join(out, "popup.html"));
   // Same UI in the side panel; the body class switches it to a fluid layout.
   writeFileSync(join(out, "sidepanel.html"), readFileSync(join(root, "src/ui/popup.html"), "utf8").replace("<body>", '<body class="panel">'));
   cpSync(join(root, "src/ui/popup.css"), join(out, "popup.css"));
+  for (const f of ["menu.html", "bar.html"]) cpSync(join(root, "src/ui", f), join(out, f));
   cpSync(join(root, "src/offscreen/offscreen.html"), join(out, "offscreen.html"));
   cpSync(join(wasmDir, "core_wasm_bg.wasm"), join(out, "core_wasm_bg.wasm"));
   if (!existsSync(join(root, "dist/psl.json"))) throw new Error("dist/psl.json missing: run `node tools/fetch-psl.mjs`");
@@ -47,6 +48,8 @@ const options = {
     offscreen: "src/offscreen/offscreen.ts",
     worker: "src/offscreen/worker.ts",
     popup: "src/ui/popup.ts",
+    menu: "src/ui/menu.ts",
+    bar: "src/ui/bar.ts",
   },
   outdir: out,
   entryNames: "[name]",
@@ -67,6 +70,7 @@ const contentScripts = {
     "passkey-page": "src/autofill/passkey-page.ts",
     "passkey-relay": "src/autofill/passkey-relay.ts",
     "sso-callback": "src/autofill/sso-callback.ts",
+    content: "src/autofill/content.ts",
   },
   format: "iife",
 };
@@ -77,6 +81,6 @@ if (watch) {
   console.log("watching…");
 } else {
   await Promise.all([esbuild.build(options), esbuild.build(contentScripts)]);
-  for (const f of ["background.js", "offscreen.js", "worker.js", "popup.js", "popup.css", "passkey-page.js", "passkey-relay.js", "core_wasm_bg.wasm"])
+  for (const f of ["background.js", "offscreen.js", "worker.js", "popup.js", "popup.css", "content.js", "menu.js", "bar.js", "passkey-page.js", "passkey-relay.js", "core_wasm_bg.wasm"])
     console.log(f.padEnd(20), String(statSync(join(out, f)).size).padStart(8), "B");
 }

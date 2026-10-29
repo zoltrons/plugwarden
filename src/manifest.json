@@ -10,7 +10,14 @@
   "action": { "default_popup": "popup.html", "default_title": "Plugwarden" },
   "permissions": ["storage", "alarms", "idle", "offscreen", "clipboardWrite", "activeTab", "scripting", "contextMenus", "sidePanel"],
   "side_panel": { "default_path": "sidepanel.html" },
-  "optional_host_permissions": ["https://*/*", "http://*/*"],
+  "host_permissions": ["https://*/*", "http://*/*"],
+  "optional_permissions": ["privacy"],
+  "content_scripts": [
+    { "matches": ["https://*/*", "http://*/*"], "js": ["content.js"], "all_frames": true, "run_at": "document_idle" }
+  ],
+  "web_accessible_resources": [
+    { "resources": ["menu.html", "bar.html"], "matches": ["https://*/*", "http://*/*"] }
+  ],
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
   },
