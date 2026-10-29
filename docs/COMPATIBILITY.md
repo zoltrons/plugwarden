@@ -85,6 +85,34 @@ on 2026-10-29 by `spike/vw-flow.mjs`, unless marked otherwise.
 * Unauthenticated endpoints (register, prelogin, send-email-login) share
   `UNAUTHENTICATED_RATELIMIT_*` (default burst 50 / 60 s); the test compose relaxes it.
 
+## Phase 4 (verified against 1.37.4, web vault 2026.7.0)
+
+* **WebAuthn 2FA** (provider `7`): the challenge is `TwoFactorProviders2["7"]` (webauthn-rs request
+  options, base64url). Vaultwarden deletes it on every attempt, so a failed try needs a fresh password
+  grant to get a new one. The assertion is produced by the server's own
+  `webauthn-connector.html` in an iframe (v2 `data` param, `parent` = our page): `*connector.html`
+  is served without CSP/X-Frame-Options, so an extension may frame it. The token is the connector's
+  JSON (`clientDataJson` spelling). The legacy U2F `appid` extension must be https: on plain-http
+  servers browsers reject the whole request ("invalid domain"), so we drop it there.
+* **Send**: secret = 16 random bytes, wrapped with the user key in `key`; content key =
+  `derive_shareable_key(secret, "send", Some("send"))`; link = `<server>/#/send/<accessId>/<base64url
+  secret>`; password = base64 PBKDF2-SHA256(password, secret, 100000). File sends:
+  `POST /api/sends/file/v2` (with `fileLength` of the ciphertext) then multipart
+  `POST /api/sends/<id>/file/<fileId>`, field `data`, filename = the **encrypted** file name.
+  Recipients use `grant_type=send_access` (`send_id` = accessId, `password_hash_b64`) and then
+  `POST /api/sends/access` with that bearer token. The web vault refuses plain-http servers
+  ("Insecure URL not allowed"), so it cannot open links on the http test server.
+* **Passkeys**: stored in `login.fido2Credentials[]` like the official clients (all fields EncStrings
+  except `creationDate`; GUID credential ids; base64url PKCS#8 `keyValue`; counter `"0"`). Saved
+  through the normal cipher PUT/POST; Vaultwarden keeps them.
+* **SSO** (`SSO_ENABLED`): `GET /identity/sso/prevalidate` fails when off. `/identity/connect/authorize`
+  with `client_id=browser` always redirects to `<DOMAIN>/sso-connector.html` (any `redirect_uri` is
+  ignored) and needs the `VW_SSO_BINDING` cookie from the same browser. Code + PKCE verifier go to
+  `grant_type=authorization_code`; the response matches the password grant (Key, KDF,
+  `UserDecryptionOptions.HasMasterPassword`). An existing password user is linked by email on first
+  SSO login (`SSO_SIGNUPS_MATCH_EMAIL` default). A `:clientId=browser` suffix on `state` keeps the
+  connector page from starting a web vault login.
+
 ## Not yet verified
 
 * Organization ciphers / org keys against a real server (decapsulation code exists, untested on VW).

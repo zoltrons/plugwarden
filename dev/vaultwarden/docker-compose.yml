@@ -10,6 +10,7 @@ services:
     restart: "no"
     ports:
       - "127.0.0.1:${VW_PORT:-8080}:80"
+      - "127.0.0.1:9090:9090" # mock IdP (shares this network namespace)
     environment:
       DOMAIN: "http://localhost:${VW_PORT:-8080}"
       SIGNUPS_ALLOWED: "true"
@@ -22,8 +23,21 @@ services:
       UNAUTHENTICATED_RATELIMIT_MAX_BURST: "1000" # registration / prelogin / send-email-login
       UNAUTHENTICATED_RATELIMIT_SECONDS: "1"
       LOG_LEVEL: "warn"
+      # SSO against the mock IdP below (password login stays available: SSO_ONLY is false).
+      SSO_ENABLED: "true"
+      SSO_AUTHORITY: "http://localhost:9090"
+      SSO_CLIENT_ID: "vaultwarden"
+      SSO_CLIENT_SECRET: "test-only-secret"
     volumes:
       - vw-data:/data
+
+  mock-idp:
+    image: node:24-alpine
+    restart: "no"
+    network_mode: "service:vaultwarden" # same localhost as the server, so one issuer URL works for both
+    command: ["node", "/idp/mock-idp.mjs"]
+    volumes:
+      - ./mock-idp.mjs:/idp/mock-idp.mjs:ro
 
 volumes:
   vw-data:

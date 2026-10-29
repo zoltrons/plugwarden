@@ -1,13 +1,15 @@
 // Service worker entry. Stateless: listeners are registered synchronously at top level, every
 // handler reads its state from chrome.storage.
-import { type ErrorCode, parseRequest, type Request, type Response, type State } from "../shared/messages.ts";
+import { type ErrorCode, PASSKEY_PORT, parseRequest, type Request, type Response, type State } from "../shared/messages.ts";
 import { ValidationError } from "../shared/validate.ts";
 import { getServerInfo } from "../transport/config.ts";
 import { normalizeServerUrl, originPattern } from "../shared/url.ts";
 import { NetworkError } from "../transport/http.ts";
 import {
   cancelTwoFactor,
+  finishSso,
   login,
+  startSso,
   logout,
   sendTwoFactorEmail,
   submitTwoFactor,
@@ -24,8 +26,9 @@ import {
   setLocal,
   updateSession,
 } from "./store.ts";
+import { onPasskeyPort, onWindowRemoved, passkeyDecision, passkeyPrompt, setPasskeys } from "./passkey.ts";
 import { AUTOFILL_COMMAND, autofillFromGesture, CONTEXT_MENU_ID, fillActiveTab, pageMatches, readPageLogin } from "./autofill.ts";
-import { CLIPBOARD_ALARM, clearClipboard, list as vaultList, requireUnlocked, save, sync, trash } from "./vault.ts";
+import { CLIPBOARD_ALARM, clearClipboard, deleteSend, list as vaultList, requireUnlocked, save, saveSend, sendList, sync, trash } from "./vault.ts";
 
 async function getState(): Promise<State> {
   const [server, account, session, settings] = await Promise.all([
@@ -34,7 +37,7 @@ async function getState(): Promise<State> {
     getSession(),
     getSettings(),
   ]);
-  const base = { settings, serverUrl: server?.url, serverVersion: server?.version };
+  const base = { settings, serverUrl: server?.url, serverVersion: server?.version, ...(session.ssoError ? { ssoError: session.ssoError } : {}) };
   if (!server) return { phase: "setup", ...base };
   if (session.pending && session.pending.expiresAt > Date.now())
     return { phase: "twoFactor", ...base, email: session.pending.email, twoFactor: session.pending.challenge };
@@ -76,7 +79,10 @@ async function handle(req: Request): Promise<unknown> {
     case "saveItem":
     case "deleteItem":
     case "totp":
-    case "generate": {
+    case "generate":
+    case "sendList":
+    case "saveSend":
+    case "deleteSend": {
       await requireUnlocked();
       await touchAutoLock();
       if (req.type === "vaultList") return vaultList();
@@ -85,6 +91,9 @@ async function handle(req: Request): Promise<unknown> {
       if (req.type === "saveItem") return save(req.item);
       if (req.type === "deleteItem") return trash(req.id);
       if (req.type === "totp") return coreCall({ op: "totp", id: req.id });
+      if (req.type === "sendList") return sendList();
+      if (req.type === "saveSend") return saveSend(req.send, req.file);
+      if (req.type === "deleteSend") return deleteSend(req.id);
       return coreCall({ op: "generate", options: req.options });
     }
     case "pageMatches":
@@ -115,6 +124,9 @@ async function handle(req: Request): Promise<unknown> {
     case "twoFactorCancel":
       await cancelTwoFactor();
       break;
+    case "ssoStart":
+      await startSso();
+      break;
     case "unlock":
       await unlock(req.password);
       break;
@@ -124,9 +136,17 @@ async function handle(req: Request): Promise<unknown> {
     case "logout":
       await logout();
       break;
+    case "setPasskeys":
+      await setPasskeys(req.enabled);
+      break;
+    case "passkeyPrompt":
+      return passkeyPrompt(req.id);
+    case "passkeyDecision":
+      return passkeyDecision(req.id, req.action, req.itemId, req.credentialId);
     case "setSettings": {
       const current = await getSettings();
       await setLocal("settings", {
+        ...current,
         autoLockMinutes: req.autoLockMinutes ?? current.autoLockMinutes,
         lockOnSystemLock: req.lockOnSystemLock ?? current.lockOnSystemLock,
       });
@@ -150,14 +170,20 @@ function toError(e: unknown): Response<unknown> {
   return { ok: false, error, ...(code ? { code } : {}) };
 }
 
-const POPUP_URL = chrome.runtime.getURL("popup.html");
+const UI_URLS = ["popup.html", "sidepanel.html"].map((p) => chrome.runtime.getURL(p));
 
 // Serialize state-changing requests so e.g. a double-clicked "Log in" cannot interleave.
 let queue: Promise<unknown> = Promise.resolve();
 
 chrome.runtime.onMessage.addListener((msg: unknown, sender, reply: (r: Response<unknown>) => void) => {
-  // URL check is enough: popup.html is not web-accessible, so only our own page can have it (also when opened in a tab).
-  if (sender.id !== chrome.runtime.id || !sender.url?.startsWith(POPUP_URL)) return false;
+  // The SSO callback content script (registered only for <server>/sso-connector.html during a login).
+  if (sender.id === chrome.runtime.id && sender.tab?.id !== undefined && sender.url && (msg as { type?: unknown } | null)?.type === "ssoCallback") {
+    const [url, tabId] = [sender.url, sender.tab.id];
+    queue = queue.then(() => finishSso(url, tabId)).catch((e: unknown) => console.error(e));
+    return false;
+  }
+  // URL check is enough: our pages are not web-accessible, so only the extension can load them (also when opened in a tab).
+  if (sender.id !== chrome.runtime.id || !UI_URLS.some((u) => sender.url?.startsWith(u))) return false;
   if ((msg as { target?: unknown } | null)?.target !== undefined) return false; // offscreen traffic
   let req: Request;
   try {
@@ -168,7 +194,7 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, reply: (r: Response<
   }
   const run = () => handle(req).then((data) => reply({ ok: true, data } as Response<unknown>), (e: unknown) => reply(toError(e)));
   // Reads run immediately; anything that changes state or talks to the server is queued.
-  if (["getState", "vaultList", "getItem", "totp", "generate", "pageMatches", "readPageLogin"].includes(req.type)) void run();
+  if (["getState", "vaultList", "getItem", "totp", "generate", "pageMatches", "readPageLogin", "sendList", "passkeyPrompt"].includes(req.type)) void run();
   else queue = queue.then(run, run);
   return true;
 });
@@ -177,6 +203,12 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === AUTOLOCK_ALARM) void lockNow();
   if (alarm.name === CLIPBOARD_ALARM) void clearClipboard();
 });
+
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name === PASSKEY_PORT) onPasskeyPort(port);
+});
+
+chrome.windows.onRemoved.addListener(onWindowRemoved);
 
 chrome.idle.onStateChanged.addListener((state) => void onIdleStateChanged(state));
 

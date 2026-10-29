@@ -39,7 +39,7 @@ function run(req: CoreRequest): unknown {
     case "status":
       return { unlocked: core.isUnlocked() };
     case "loadVault":
-      return vault.loadVault(req.ciphers, req.folders, req.orgKeys);
+      return vault.loadVault(req.ciphers, req.folders, req.sends, req.orgKeys);
     case "upsertCipher":
       return vault.upsertCipher(req.cipher);
     case "removeCipher":
@@ -58,6 +58,22 @@ function run(req: CoreRequest): unknown {
       return vault.matchUri(req.url);
     case "fillData":
       return vault.fillData(req.id);
+    case "listSends":
+      return vault.listSends();
+    case "prepareSend":
+      return vault.prepareSend(req.send);
+    case "encryptSendFile":
+      return vault.encryptSendFile(req.key, req.data);
+    case "upsertSend":
+      return vault.upsertSend(req.send);
+    case "removeSend":
+      return vault.removeSend(req.id);
+    case "passkeyCandidates":
+      return vault.passkeyCandidates(req.rpId, req.origin, req.ids);
+    case "passkeyAssert":
+      return vault.passkeyAssert(req.itemId, req.credentialId, req.rpId, req.origin, req.challenge);
+    case "passkeyCreate":
+      return vault.passkeyCreate(req.input);
   }
 }
 

@@ -4,7 +4,7 @@
 //   node tools/fetch-psl.mjs && node tools/build.mjs --e2e-host=http://localhost:8080,http://localhost:8099,http://127.0.0.1:8099
 //   CHROME_PATH=<chromium-based browser that honours --load-extension> npm run test:e2e
 import assert from "node:assert/strict";
-import { randomBytes } from "node:crypto";
+import { createDecipheriv, createHash, createHmac, createPublicKey, pbkdf2Sync, randomBytes, verify } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
@@ -268,6 +268,144 @@ try {
     await expectUnlocked();
   });
 
+  // ---------- Phase 4: WebAuthn two-step login ----------
+  const keyUser = await register("webauthn", [0, 600000, 0, 0]);
+  // Virtual authenticator on a page of the server origin registers the key like the web vault would.
+  const regPage = await ctx.newPage();
+  await regPage.goto(`${BASE}/alive`);
+  const regCdp = await ctx.newCDPSession(regPage);
+  await regCdp.send("WebAuthn.enable", { enableUI: false });
+  const authenticator = {
+    protocol: "ctap2" as const, transport: "usb" as const, hasResidentKey: true, hasUserVerification: true,
+    isUserVerified: true, automaticPresenceSimulation: true,
+  };
+  const { authenticatorId: regAuth } = await regCdp.send("WebAuthn.addVirtualAuthenticator", { options: authenticator });
+  {
+    const tok = await passwordToken(BASE, { email: keyUser.email, authHash: authHash(keyUser), deviceId: crypto.randomUUID() });
+    const json = { masterPasswordHash: authHash(keyUser) };
+    const challenge = await call(BASE, "POST", "/api/two-factor/get-webauthn-challenge", { token: tok.access_token, json });
+    const deviceResponse = await regPage.evaluate(async (opts: any) => {
+      const bytes = (s: string) => Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));
+      const b64u = (b: ArrayBuffer) => btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+      opts.challenge = bytes(opts.challenge);
+      opts.user.id = bytes(opts.user.id);
+      opts.excludeCredentials = (opts.excludeCredentials ?? []).map((c: any) => ({ ...c, id: bytes(c.id) }));
+      const c = (await navigator.credentials.create({ publicKey: opts })) as PublicKeyCredential;
+      const r = c.response as AuthenticatorAttestationResponse;
+      return { id: c.id, rawId: b64u(c.rawId), type: c.type, response: { attestationObject: b64u(r.attestationObject), clientDataJson: b64u(r.clientDataJSON) } };
+    }, challenge);
+    await call(BASE, "POST", "/api/two-factor/webauthn", { token: tok.access_token, json: { ...json, id: 1, name: "e2e key", deviceResponse } });
+  }
+  const { credentials } = await regCdp.send("WebAuthn.getCredentials", { authenticatorId: regAuth });
+  await regPage.close();
+
+  await step("WebAuthn two-step login through the server's connector page", async () => {
+    const cdp = await ctx.newCDPSession(page);
+    await cdp.send("WebAuthn.enable", { enableUI: false });
+    const { authenticatorId } = await cdp.send("WebAuthn.addVirtualAuthenticator", { options: authenticator });
+    await cdp.send("WebAuthn.addCredential", { authenticatorId, credential: credentials[0]! });
+    await logout();
+    // The virtual key answers at once, so the 2FA screen may be gone before we look; watch the connector frame instead.
+    const connector = page.waitForEvent("framenavigated", (f) => f.url().startsWith(`${BASE}/webauthn-connector.html`));
+    await loginAs(keyUser);
+    await connector;
+    await expectUnlocked();
+    await cdp.detach();
+  });
+
+  await step("side panel: same UI, fluid width, offered from settings", async () => {
+    assert.equal((await sw.evaluate(() => chrome.sidePanel.getOptions({}))).path, "sidepanel.html");
+    const panel = await ctx.newPage();
+    await panel.setViewportSize({ width: 520, height: 800 });
+    await panel.goto(`chrome-extension://${id}/sidepanel.html`);
+    await panel.getByRole("searchbox", { name: "Search vault" }).waitFor();
+    assert.equal(await panel.evaluate(() => document.body.getBoundingClientRect().width), 520);
+    await panel.getByRole("button", { name: "Settings" }).click();
+    assert.equal(await panel.getByRole("button", { name: "Open in side panel" }).count(), 0);
+    await panel.close();
+    await page.getByRole("button", { name: "Settings" }).click();
+    await page.getByRole("button", { name: "Open in side panel" }).waitFor();
+    await page.getByRole("button", { name: "Vault" }).click();
+  });
+
+  // ---------- Phase 4: Send ----------
+  const openSendTab = async () => {
+    await page.getByRole("navigation").getByRole("button", { name: "Send" }).click();
+    await page.getByRole("heading", { name: "Send", exact: true }).waitFor();
+  };
+  // A recipient opens the link. The web vault refuses plain-http servers, so this is the recipient
+  // flow over the API, decrypted with node:crypto (written from the spec, independent of core-wasm).
+  const receive = async (link: string, password?: string) => {
+    const m = /^(.+)\/#\/send\/([\w-]+)\/([\w-]+)$/.exec(link);
+    assert.ok(m && m[1] === BASE, link);
+    const [accessId, urlKey] = [m[2]!, m[3]!];
+    const secret = Buffer.from(urlKey, "base64url");
+    const prk = createHmac("sha256", "bitwarden-send").update(secret).digest();
+    const t1 = createHmac("sha256", prk).update(Buffer.from("send\x01")).digest(); // HKDF-Expand, info "send"
+    const t2 = createHmac("sha256", prk).update(Buffer.concat([t1, Buffer.from("send\x02")])).digest();
+    const open = (iv: Buffer, mac: Buffer, ct: Buffer) => {
+      assert.ok(createHmac("sha256", t2).update(Buffer.concat([iv, ct])).digest().equals(mac), "send MAC mismatch");
+      const d = createDecipheriv("aes-256-cbc", t1, iv);
+      return Buffer.concat([d.update(ct), d.final()]);
+    };
+    const str = (enc: string) => {
+      const [iv, ct, mac] = enc.slice(2).split("|").map((b) => Buffer.from(b, "base64"));
+      assert.equal(enc.slice(0, 2), "2.");
+      return open(iv!, mac!, ct!).toString("utf8");
+    };
+    const form: Record<string, string> = { grant_type: "send_access", client_id: "web", send_id: accessId };
+    if (password) form.password_hash_b64 = pbkdf2Sync(password, secret, 100_000, 32, "sha256").toString("base64");
+    const { access_token: token } = (await call(BASE, "POST", "/identity/connect/token", { form })) as { access_token: string };
+    const s = (await call(BASE, "POST", "/api/sends/access", { token })) as any;
+    let file: Buffer | undefined;
+    if (s.file) {
+      const { url } = (await call(BASE, "POST", `/api/sends/access/file/${s.file.id}`, { token })) as { url: string };
+      const b = Buffer.from(await (await fetch(url)).arrayBuffer());
+      assert.equal(b[0], 2);
+      file = open(b.subarray(1, 17), b.subarray(17, 49), b.subarray(49));
+    }
+    return { name: str(s.name), text: s.text?.text ? str(s.text.text) : undefined, fileName: s.file ? str(s.file.fileName) : undefined, file };
+  };
+
+  await step("Send: text send link decrypts for a recipient", async () => {
+    await openSendTab();
+    await page.getByRole("button", { name: "New Send" }).click();
+    await fill("Name", "Wifi for guests");
+    await page.getByLabel("Text", { exact: true }).fill("guest-wifi-pass-42");
+    await page.getByRole("button", { name: "Create and copy link" }).click();
+    await page.getByRole("listitem").filter({ hasText: "Wifi for guests" }).waitFor();
+    const r = await receive(await readClipboard());
+    assert.deepEqual([r.name, r.text], ["Wifi for guests", "guest-wifi-pass-42"]);
+  });
+
+  await step("Send: password-protected file send; server checks our password hash", async () => {
+    await page.getByRole("button", { name: "New Send" }).click();
+    await fill("Name", "Report");
+    await page.getByRole("button", { name: "File", exact: true }).click();
+    await page.getByLabel("File", { exact: true }).setInputFiles({ name: "report.txt", mimeType: "text/plain", buffer: Buffer.from("quarterly numbers\n") });
+    await fill("Password (optional)", "s3nd-pw");
+    await page.getByRole("button", { name: "Create and copy link" }).click();
+    await page.getByRole("listitem").filter({ hasText: "Report" }).waitFor();
+    const link = await readClipboard();
+    await assert.rejects(receive(link, "wrong-pw"));
+    const r = await receive(link, "s3nd-pw");
+    assert.deepEqual([r.name, r.fileName, r.file?.toString("utf8")], ["Report", "report.txt", "quarterly numbers\n"]);
+  });
+
+  await step("Send: delete removes it on the server", async () => {
+    await page.getByRole("button", { name: "Delete Wifi for guests" }).click();
+    await page.getByRole("button", { name: "Tap again to delete" }).click();
+    await page.getByRole("status").filter({ hasText: "Send deleted" }).waitFor();
+    // Full sync from the server, then a fresh popup that reads the list from the worker again.
+    await sw.evaluate(() => chrome.storage.local.remove("vault"));
+    await open();
+    await expectUnlocked();
+    await openSendTab();
+    await page.getByRole("listitem").filter({ hasText: "Report" }).waitFor();
+    assert.equal(await page.getByRole("listitem").filter({ hasText: "Wifi for guests" }).count(), 0);
+    assert.equal(await page.getByRole("listitem").filter({ hasText: "Report" }).count(), 1);
+  });
+
   // ---------- Phase 2: vault ----------
   const vaultUser = await register("vault", [1, 3, 64, 4]);
   const api = await apiSession(vaultUser);
@@ -477,6 +615,132 @@ try {
     s.done();
     assert.equal(c?.login.password, "local-pass-2");
     assert.equal(c?.passwordHistory?.[0]?.password, "local-pass");
+  });
+
+  // ---------- Phase 4: passkeys ----------
+  // The page calls WebAuthn; our approval window opens as a new page; Node verifies the results.
+  const approve = async (action: (w: Page) => Promise<void>) => {
+    const w = await ctx.waitForEvent("page", { predicate: (p) => p.url().includes("popup.html?passkey=") });
+    await w.waitForLoadState();
+    await action(w);
+  };
+  const challenge = randomBytes(32);
+  let spki = "";
+
+  await step("passkeys: opt-in registers the page scripts", async () => {
+    await unlockIfLocked();
+    const r = await page.evaluate(() => chrome.runtime.sendMessage({ type: "setPasskeys", enabled: true }));
+    assert.equal(r.ok, true, JSON.stringify(r));
+    const scripts = await sw.evaluate(() => chrome.scripting.getRegisteredContentScripts());
+    assert.deepEqual(scripts.map((s) => s.id).sort(), ["pw-passkey-page", "pw-passkey-relay"]);
+    await loginPage.reload(); // registered scripts apply to new documents
+  });
+
+  await step("passkeys: create on a site, saved to the vault, attestation valid", async () => {
+    const created = loginPage.evaluate(async (ch) => {
+      const c = (await navigator.credentials.create({
+        publicKey: {
+          rp: { name: "Local app" }, user: { id: new Uint8Array([1, 2, 3, 4]), name: "pk-user", displayName: "PK User" },
+          challenge: Uint8Array.from(ch), pubKeyCredParams: [{ type: "public-key", alg: -7 }], authenticatorSelection: { residentKey: "required" },
+        },
+      })) as PublicKeyCredential;
+      const r = c.response as AuthenticatorAttestationResponse;
+      const b = (x: ArrayBuffer) => btoa(String.fromCharCode(...new Uint8Array(x)));
+      return { proto: c instanceof PublicKeyCredential, id: c.id, clientData: new TextDecoder().decode(r.clientDataJSON), authData: b(r.getAuthenticatorData()), spki: b(r.getPublicKey()!) };
+    }, [...challenge]);
+    await approve(async (w) => {
+      await w.getByText("Save a passkey for pk-user on Local app?").waitFor();
+      await w.getByRole("button", { name: "Save passkey" }).click();
+    });
+    const c = await created;
+    assert.ok(c.proto, "not a PublicKeyCredential");
+    const cd = JSON.parse(c.clientData);
+    assert.deepEqual([cd.type, cd.origin, cd.challenge], ["webauthn.create", SITE, challenge.toString("base64url")]);
+    const ad = Buffer.from(c.authData, "base64");
+    assert.ok(ad.subarray(0, 32).equals(createHash("sha256").update("localhost").digest()), "rpIdHash");
+    assert.equal(ad[32]! & 0x45, 0x45, "UP, UV and AT flags");
+    spki = c.spki;
+    const s = await apiSession(vaultUser);
+    const item = (await s.ciphers()).find((x) => x.login?.fido2Credentials?.length && !x.deletedDate);
+    s.done();
+    assert.equal(item?.login.fido2Credentials[0].rpId, "localhost");
+    assert.equal(item?.login.username, "pk-user");
+  });
+
+  await step("passkeys: sign in with the stored passkey, signature verifies", async () => {
+    const got = loginPage.evaluate(async (ch) => {
+      const c = (await navigator.credentials.get({ publicKey: { challenge: Uint8Array.from(ch), rpId: "localhost" } })) as PublicKeyCredential;
+      const r = c.response as AuthenticatorAssertionResponse;
+      const b = (x: ArrayBuffer) => btoa(String.fromCharCode(...new Uint8Array(x)));
+      return { clientData: b(r.clientDataJSON), authData: b(r.authenticatorData), sig: b(r.signature), user: b(r.userHandle!) };
+    }, [...challenge]);
+    await approve(async (w) => {
+      await w.getByRole("listitem").filter({ hasText: "pk-user" }).click();
+    });
+    const g = await got;
+    const clientData = Buffer.from(g.clientData, "base64");
+    assert.equal(JSON.parse(clientData.toString()).type, "webauthn.get");
+    const signed = Buffer.concat([Buffer.from(g.authData, "base64"), createHash("sha256").update(clientData).digest()]);
+    const key = createPublicKey({ key: Buffer.from(spki, "base64"), format: "der", type: "spki" });
+    assert.ok(verify("sha256", signed, key, Buffer.from(g.sig, "base64")), "assertion signature");
+    assert.deepEqual([...Buffer.from(g.user, "base64")], [1, 2, 3, 4]);
+  });
+
+  await step("passkeys: closing the window hands the call back to the browser", async () => {
+    // An empty virtual authenticator without UI makes the browser's own WebAuthn fail at once (headless
+    // Chromium otherwise sometimes waits for UI that never comes).
+    const cdp = await ctx.newCDPSession(loginPage);
+    await cdp.send("WebAuthn.enable", { enableUI: false });
+    await cdp.send("WebAuthn.addVirtualAuthenticator", { options: authenticator });
+    const got = loginPage.evaluate(async (ch) => {
+      try {
+        await navigator.credentials.get({ publicKey: { challenge: Uint8Array.from(ch), rpId: "localhost", timeout: 1000 } });
+        return "resolved";
+      } catch (e) {
+        return (e as DOMException).name;
+      }
+    }, [...challenge]);
+    await approve((w) => w.close());
+    // The browser's own WebAuthn (the virtual authenticator has no credential) refuses.
+    assert.equal(await got, "NotAllowedError");
+    await cdp.detach();
+  });
+
+  // ---------- Phase 4: SSO (mock IdP from docker-compose.yml) ----------
+  const ssoUser = await register("sso", [1, 3, 64, 4]);
+
+  await step("SSO: IdP login, connector tab closes itself, vault unlocks with the master password", async () => {
+    await fetch("http://localhost:9090/_next", { method: "POST", body: JSON.stringify({ email: ssoUser.email }) });
+    await logout();
+    const tab = ctx.waitForEvent("page") // the SSO tab (its URL is still about:blank or mid-redirect here);
+    await click("Log in with SSO");
+    const t = await tab;
+    await t.waitForEvent("close", { timeout: 20_000 }); // finishSso closes it after redeeming the code
+    await open();
+    await page.getByRole("heading", { name: "Vault locked" }).waitFor();
+    assert.ok((await page.locator("#app").innerText()).includes(ssoUser.email));
+    await fill("Master password", ssoUser.password);
+    await click("Unlock");
+    await expectUnlocked();
+    const session = await sw.evaluate(() => chrome.storage.session.get("session"));
+    assert.equal((session.session as { sso?: unknown }).sso, undefined, "SSO state left behind");
+    assert.equal((await sw.evaluate(() => chrome.scripting.getRegisteredContentScripts({ ids: ["pw-sso-callback"] }))).length, 0);
+  });
+
+  await step("SSO: a callback with a foreign state is refused", async () => {
+    await logout();
+    const tab = ctx.waitForEvent("page") // the SSO tab (its URL is still about:blank or mid-redirect here);
+    await click("Log in with SSO");
+    const t = await tab;
+    // Replace our pending state, as if the callback belonged to someone else's login.
+    await sw.evaluate(async () => {
+      const s = (await chrome.storage.session.get("session")).session as Record<string, any>;
+      await chrome.storage.session.set({ session: { ...s, sso: { ...s.sso, state: "other:clientId=browser" } } });
+    });
+    await t.waitForEvent("close", { timeout: 20_000 });
+    await open();
+    await page.getByRole("heading", { name: "Log in" }).waitFor();
+    await page.getByRole("alert").filter({ hasText: "did not come from this browser" }).waitFor();
   });
 
   console.log(`\n${passed.length} steps passed (${await ctx.browser()?.version() ?? "persistent context"})`);

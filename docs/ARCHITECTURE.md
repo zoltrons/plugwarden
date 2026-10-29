@@ -92,6 +92,18 @@ scripts may only send a whitelisted subset of message types).
 for the server. It is requested at setup for that one origin only (`chrome.permissions.request`).
 `activeTab`, `scripting`, `contextMenus` (Phase 3): fill on user gesture only; no `<all_urls>` and no
 persistent content script, so there is no automatic "save login" bar (a popup button reads the form instead).
+`sidePanel` (Phase 4): the popup UI also opens in the side panel (`sidepanel.html`, same bundle).
+
+Content scripts are only ever registered at runtime (`chrome.scripting.registerContentScripts`):
+
+* **Passkeys** (opt-in in Settings): asks for `https://*/*` from the optional host permissions, then
+  registers a MAIN-world shim (`passkey-page.js`, wraps `navigator.credentials.create/get`) and an
+  isolated relay (`passkey-relay.js`) on the granted origins, top frames only. Each call opens an
+  approval window (`popup.html?passkey=<id>`); the origin comes from `port.sender.origin`, the RP ID is
+  checked against it (with the PSL) in the worker, and keys are signed there (WebCrypto ES256).
+  Closing the window or "use another device" hands the call back to the browser.
+* **SSO**: `sso-callback.js` is registered for `<server>/sso-connector.html*` only while a login is in
+  progress and reports `sender.url` (code + state) back; the SW checks the state and the PKCE verifier.
 
 ## Storage and lock model
 

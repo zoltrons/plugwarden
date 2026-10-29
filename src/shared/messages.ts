@@ -12,6 +12,7 @@ export type Request =
   | { type: "twoFactorSubmit"; provider: number; token: string; remember: boolean }
   | { type: "twoFactorSendEmail" }
   | { type: "twoFactorCancel" }
+  | { type: "ssoStart" }
   | { type: "unlock"; password: string }
   | { type: "lock" }
   | { type: "logout" }
@@ -25,6 +26,14 @@ export type Request =
   | { type: "totp"; id: string }
   | { type: "generate"; options: Record<string, unknown> }
   | { type: "clipboardCopied" }
+  // Send
+  | { type: "sendList" }
+  | { type: "saveSend"; send: Record<string, unknown>; file?: { name: string; data: string } }
+  | { type: "deleteSend"; id: string }
+  // passkeys: opt-in, and the approval window opened for a website request
+  | { type: "setPasskeys"; enabled: boolean }
+  | { type: "passkeyPrompt"; id: string }
+  | { type: "passkeyDecision"; id: string; action: "use" | "fallback"; itemId?: string; credentialId?: string }
   // autofill on the active tab (activeTab is granted by opening the popup)
   | { type: "pageMatches" }
   | { type: "fill"; id: string }
@@ -37,6 +46,7 @@ const requestValidators: { [K in Request["type"]]: Validator<Extract<Request, { 
   twoFactorSubmit: obj({ type: literal("twoFactorSubmit"), provider: num, token: str, remember: bool }),
   twoFactorSendEmail: obj({ type: literal("twoFactorSendEmail") }),
   twoFactorCancel: obj({ type: literal("twoFactorCancel") }),
+  ssoStart: obj({ type: literal("ssoStart") }),
   unlock: obj({ type: literal("unlock"), password: str }),
   lock: obj({ type: literal("lock") }),
   logout: obj({ type: literal("logout") }),
@@ -61,6 +71,17 @@ const requestValidators: { [K in Request["type"]]: Validator<Extract<Request, { 
   totp: obj({ type: literal("totp"), id: str }),
   generate: obj({ type: literal("generate"), options: record }),
   clipboardCopied: obj({ type: literal("clipboardCopied") }),
+  sendList: obj({ type: literal("sendList") }),
+  saveSend: (v, p) => {
+    const s = obj({ type: literal("saveSend"), send: record, file: opt(obj({ name: str, data: str })) })(v, p);
+    if (typeof s.send.name !== "string" || !s.send.name.trim()) throw new ValidationError("send.name: required");
+    if (s.send.id !== undefined) throw new ValidationError("send.id: editing sends is not supported");
+    return s;
+  },
+  deleteSend: obj({ type: literal("deleteSend"), id: str }),
+  setPasskeys: obj({ type: literal("setPasskeys"), enabled: bool }),
+  passkeyPrompt: obj({ type: literal("passkeyPrompt"), id: str }),
+  passkeyDecision: obj({ type: literal("passkeyDecision"), id: str, action: literal("use", "fallback"), itemId: opt(str), credentialId: opt(str) }),
   pageMatches: obj({ type: literal("pageMatches") }),
   fill: obj({ type: literal("fill"), id: str }),
   readPageLogin: obj({ type: literal("readPageLogin") }),
@@ -77,11 +98,15 @@ export type Phase = "setup" | "loggedOut" | "twoFactor" | "locked" | "unlocked";
 export interface TwoFactorChallenge {
   providers: number[];
   emailHint?: string;
+  /** WebAuthn request options (JSON) for the server's webauthn-connector.html. */
+  webauthn?: string;
 }
 
 export interface Settings {
   autoLockMinutes: number;
   lockOnSystemLock: boolean;
+  /** Answer websites' passkey requests (needs site access; content scripts registered). */
+  passkeys: boolean;
 }
 
 export interface State {
@@ -90,6 +115,8 @@ export interface State {
   serverVersion?: string;
   email?: string;
   twoFactor?: TwoFactorChallenge;
+  /** The last SSO login failed (it finishes in the background, after the popup closed). */
+  ssoError?: string;
   settings: Settings;
 }
 
@@ -124,6 +151,38 @@ export interface VaultList {
   syncedAt?: number;
 }
 
+export interface PasskeyCandidate {
+  itemId: string;
+  name: string;
+  userName: string;
+  /** base64url */
+  credentialId: string;
+}
+
+/** What the approval window shows for a pending website passkey request. */
+export interface PasskeyPrompt {
+  kind: "create" | "get";
+  origin: string;
+  rpId: string;
+  rpName?: string;
+  userName?: string;
+  candidates: PasskeyCandidate[];
+}
+
+/** Decrypted send for the list. `link` carries the decryption secret in its fragment. */
+export interface SendItem {
+  id: string;
+  type: number;
+  name: string;
+  link: string;
+  deletionDate: string;
+  hasPassword: boolean;
+  disabled: boolean;
+  accessCount: number;
+  maxAccessCount?: number;
+  failed?: boolean;
+}
+
 export type Response<T = State> = { ok: true; data: T } | { ok: false; error: string; code?: ErrorCode };
 
 export type ErrorCode =
@@ -156,7 +215,7 @@ export type CoreRequest =
   | { op: "lock" }
   | { op: "status" }
   // vault: the worker keeps the decrypted vault in memory
-  | { op: "loadVault"; ciphers: unknown[]; folders: unknown[]; orgKeys: Record<string, string> }
+  | { op: "loadVault"; ciphers: unknown[]; folders: unknown[]; sends: unknown[]; orgKeys: Record<string, string> }
   | { op: "upsertCipher"; cipher: Record<string, unknown> }
   | { op: "removeCipher"; id: string }
   | { op: "listVault" }
@@ -166,6 +225,16 @@ export type CoreRequest =
   | { op: "generate"; options: Record<string, unknown> }
   | { op: "matchUri"; url: string }
   | { op: "fillData"; id: string }
+  // Send
+  | { op: "listSends" }
+  | { op: "prepareSend"; send: Record<string, unknown> }
+  | { op: "encryptSendFile"; key: string; data: string }
+  | { op: "upsertSend"; send: Record<string, unknown> }
+  | { op: "removeSend"; id: string }
+  // passkeys (all ids and binary values base64url)
+  | { op: "passkeyCandidates"; rpId: string; origin: string; ids: string[] }
+  | { op: "passkeyAssert"; itemId: string; credentialId: string; rpId: string; origin: string; challenge: string }
+  | { op: "passkeyCreate"; input: PasskeyCreateInput }
   // handled by the offscreen document itself, not the worker
   | { op: "clearClipboard" };
 
@@ -175,6 +244,9 @@ export const OFFSCREEN_TARGET = "plugwarden-offscreen";
 
 export const kdfParams: Validator<KdfParams> = obj({ type: num, iterations: num, memory: num, parallelism: num });
 
+const user = obj({ id: str, name: str, displayName: str });
+const passkeyCreateInput: Validator<PasskeyCreateInput> = obj({ origin: str, rpId: str, rpName: str, challenge: str, user, discoverable: bool });
+
 const coreValidators: { [K in CoreRequest["op"]]: Validator<Extract<CoreRequest, { op: K }>> } = {
   prepareKey: obj({ op: literal("prepareKey"), email: str, password: str, kdf: kdfParams }),
   authHash: obj({ op: literal("authHash"), handle: num }),
@@ -182,7 +254,7 @@ const coreValidators: { [K in CoreRequest["op"]]: Validator<Extract<CoreRequest,
   freeKey: obj({ op: literal("freeKey"), handle: num }),
   lock: obj({ op: literal("lock") }),
   status: obj({ op: literal("status") }),
-  loadVault: obj({ op: literal("loadVault"), ciphers: arr(unknownValue), folders: arr(unknownValue), orgKeys: record as Validator<Record<string, string>> }),
+  loadVault: obj({ op: literal("loadVault"), ciphers: arr(unknownValue), folders: arr(unknownValue), sends: arr(unknownValue), orgKeys: record as Validator<Record<string, string>> }),
   upsertCipher: obj({ op: literal("upsertCipher"), cipher: record }),
   removeCipher: obj({ op: literal("removeCipher"), id: str }),
   listVault: obj({ op: literal("listVault") }),
@@ -192,6 +264,14 @@ const coreValidators: { [K in CoreRequest["op"]]: Validator<Extract<CoreRequest,
   generate: obj({ op: literal("generate"), options: record }),
   matchUri: obj({ op: literal("matchUri"), url: str }),
   fillData: obj({ op: literal("fillData"), id: str }),
+  listSends: obj({ op: literal("listSends") }),
+  prepareSend: obj({ op: literal("prepareSend"), send: record }),
+  encryptSendFile: obj({ op: literal("encryptSendFile"), key: str, data: str }),
+  upsertSend: obj({ op: literal("upsertSend"), send: record }),
+  removeSend: obj({ op: literal("removeSend"), id: str }),
+  passkeyCandidates: obj({ op: literal("passkeyCandidates"), rpId: str, origin: str, ids: arr(str) }),
+  passkeyAssert: obj({ op: literal("passkeyAssert"), itemId: str, credentialId: str, rpId: str, origin: str, challenge: str }),
+  passkeyCreate: obj({ op: literal("passkeyCreate"), input: passkeyCreateInput }),
   clearClipboard: obj({ op: literal("clearClipboard") }),
 };
 
@@ -199,4 +279,38 @@ export function parseCoreRequest(v: unknown): CoreRequest {
   const op = (v as { op?: unknown } | null)?.op;
   if (typeof op !== "string" || !Object.hasOwn(coreValidators, op)) throw new ValidationError("unknown core op");
   return coreValidators[op as CoreRequest["op"]](v, "");
+}
+
+// ---------- page (passkey shim) -> isolated relay -> service worker, over a "passkey" port ----------
+
+export const PASSKEY_PORT = "plugwarden-passkey";
+
+export interface PasskeyCreateInput {
+  origin: string;
+  rpId: string;
+  rpName: string;
+  challenge: string;
+  user: { id: string; name: string; displayName: string };
+  discoverable: boolean;
+}
+
+/** Sent by the relay. The origin is never taken from here: the service worker uses port.sender.origin. */
+export type PasskeyCall =
+  | {
+      kind: "create";
+      options: { rpId?: string; rpName: string; user: { id: string; name: string; displayName: string }; challenge: string; exclude: string[]; discoverable: boolean };
+    }
+  | { kind: "get"; options: { rpId?: string; challenge: string; allow: string[] } };
+
+/** Credential fields (base64url) or a reason to let the browser handle the call. */
+export type PasskeyResult = { credential: Record<string, unknown> } | { fallback: true } | { error: { name: string; message: string } };
+
+export function parsePasskeyCall(v: unknown): PasskeyCall {
+  const kind = (v as { kind?: unknown } | null)?.kind;
+  if (kind === "create")
+    return obj({
+      kind: literal("create"),
+      options: obj({ rpId: opt(str), rpName: str, user, challenge: str, exclude: arr(str), discoverable: bool }),
+    })(v, "");
+  return obj({ kind: literal("get"), options: obj({ rpId: opt(str), challenge: str, allow: arr(str) }) })(v, "");
 }

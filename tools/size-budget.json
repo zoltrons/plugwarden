@@ -1,4 +1,7 @@
 {
   "dist/wasm/core_wasm_bg.wasm": 716800,
-  "dist/wasm/core_wasm.js": 24576
+  "dist/wasm/core_wasm.js": 24576,
+  "dist/ext/passkey-page.js": 10240,
+  "dist/ext/passkey-relay.js": 10240,
+  "dist/ext/sso-callback.js": 10240
 }

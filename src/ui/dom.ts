@@ -2,6 +2,9 @@ import type { Request, Response } from "../shared/messages.ts";
 
 export const t = (key: string, ...subs: string[]): string => chrome.i18n.getMessage(key, subs) || key;
 
+/** True in the side panel (sidepanel.html), false in the action popup or a tab. */
+export const inPanel = document.body.classList.contains("panel");
+
 export type Child = Node | string | false | null | undefined;
 
 export function h<K extends keyof HTMLElementTagNameMap>(

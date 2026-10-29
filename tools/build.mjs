@@ -30,6 +30,8 @@ function copyStatic() {
   if (e2eHosts) manifest.host_permissions = e2eHosts.map((h) => `${new URL(h).origin}/*`);
   writeFileSync(join(out, "manifest.json"), JSON.stringify(manifest, null, 2));
   cpSync(join(root, "src/ui/popup.html"), join(out, "popup.html"));
+  // Same UI in the side panel; the body class switches it to a fluid layout.
+  writeFileSync(join(out, "sidepanel.html"), readFileSync(join(root, "src/ui/popup.html"), "utf8").replace("<body>", '<body class="panel">'));
   cpSync(join(root, "src/ui/popup.css"), join(out, "popup.css"));
   cpSync(join(root, "src/offscreen/offscreen.html"), join(out, "offscreen.html"));
   cpSync(join(wasmDir, "core_wasm_bg.wasm"), join(out, "core_wasm_bg.wasm"));
@@ -58,13 +60,23 @@ const options = {
   define: { E2E: String(!!e2eHosts) },
 };
 
+// Registered content scripts are classic scripts: bundle them as IIFEs.
+const contentScripts = {
+  ...options,
+  entryPoints: {
+    "passkey-page": "src/autofill/passkey-page.ts",
+    "passkey-relay": "src/autofill/passkey-relay.ts",
+    "sso-callback": "src/autofill/sso-callback.ts",
+  },
+  format: "iife",
+};
+
 copyStatic();
 if (watch) {
-  const ctx = await esbuild.context(options);
-  await ctx.watch();
+  for (const o of [options, contentScripts]) await (await esbuild.context(o)).watch();
   console.log("watching…");
 } else {
-  await esbuild.build(options);
-  for (const f of ["background.js", "offscreen.js", "worker.js", "popup.js", "popup.css", "core_wasm_bg.wasm"])
+  await Promise.all([esbuild.build(options), esbuild.build(contentScripts)]);
+  for (const f of ["background.js", "offscreen.js", "worker.js", "popup.js", "popup.css", "passkey-page.js", "passkey-relay.js", "core_wasm_bg.wasm"])
     console.log(f.padEnd(20), String(statSync(join(out, f)).size).padStart(8), "B");
 }

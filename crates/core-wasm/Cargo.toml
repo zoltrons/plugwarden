@@ -16,6 +16,8 @@ default = []
 register = []
 
 [dependencies]
+# base64 and zeroize are already in the tree through bitwarden-crypto (no size cost).
+base64 = { version = "0.23", default-features = false, features = ["alloc"] }
 # Pinned to upstream.lock [sdk-internal].rev. Bump only via tools/sync-upstream + CI.
 bitwarden-crypto = { git = "https://github.com/bitwarden/sdk-internal", rev = "d7ab9964cd0b10db346d0418dba065969663bdcb", default-features = false }
 getrandom = { version = "0.4", features = ["wasm_js"] }
@@ -24,6 +26,7 @@ serde_json = { version = "1", default-features = false, features = ["std"] }
 sha1 = "0.11.0"
 sha2 = "0.11.0"
 wasm-bindgen = { version = "=0.2.114", default-features = false }
+zeroize = "1"
 
 # bitwarden-crypto does not compile for wasm32 without its `wasm` feature (stream/large_memory_buffer.rs uses js-sys).
 [target.'cfg(target_arch = "wasm32")'.dependencies]

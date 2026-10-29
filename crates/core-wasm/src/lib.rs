@@ -6,6 +6,7 @@
 pub mod api;
 mod cipher;
 mod generator;
+mod send;
 mod totp;
 
 use wasm_bindgen::prelude::*;
@@ -82,6 +83,23 @@ pub fn encrypt_cipher(cipher_json: &str) -> Result<String, JsError> {
 #[wasm_bindgen(js_name = decryptFolders)]
 pub fn decrypt_folders(folders_json: &str) -> Result<String, JsError> {
     api::decrypt_folders(folders_json).map_err(js)
+}
+
+/// Input: JSON array of sends from `/api/sync`. Output: `{"sends": [...], "failed": [...]}`, each with `urlKey`.
+#[wasm_bindgen(js_name = decryptSendList)]
+pub fn decrypt_send_list(sends_json: &str) -> Result<String, JsError> {
+    api::decrypt_send_list(sends_json).map_err(js)
+}
+
+#[wasm_bindgen(js_name = encryptSend)]
+pub fn encrypt_send(send_json: &str) -> Result<String, JsError> {
+    api::encrypt_send(send_json).map_err(js)
+}
+
+/// `wrappedKey`: the send's `key` field. Returns the encrypted file body to upload.
+#[wasm_bindgen(js_name = encryptSendFile)]
+pub fn encrypt_send_file(wrapped_key: &str, data: &[u8]) -> Result<Vec<u8>, JsError> {
+    api::encrypt_send_file(wrapped_key, data).map_err(js)
 }
 
 /// `input`: base32 secret, `otpauth://` or `steam://` URI. Returns `{"code","period","remaining"}`.

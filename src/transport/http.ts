@@ -20,6 +20,8 @@ export class NetworkError extends Error {
 export interface CallOptions {
   json?: unknown;
   form?: Record<string, string>;
+  /** multipart/form-data (file uploads); the browser sets the boundary header. */
+  data?: FormData;
   token?: string;
   signal?: AbortSignal;
 }
@@ -50,7 +52,7 @@ export async function call(base: string, method: string, path: string, opts: Cal
   } else if (opts.form) {
     headers["Content-Type"] = "application/x-www-form-urlencoded; charset=utf-8";
     body = new URLSearchParams(opts.form);
-  }
+  } else if (opts.data) body = opts.data;
   let res: Response;
   try {
     res = await fetch(base + path, {

@@ -55,7 +55,12 @@ export function parseTwoFactorChallenge(body: unknown): TwoFactorChallenge | und
   const p2 = ci(body, "TwoFactorProviders2");
   const emailInfo = ci(p2, String(TWO_FACTOR.Email));
   const emailHint = ci(emailInfo, "Email");
-  return { providers: ids, ...(typeof emailHint === "string" ? { emailHint } : {}) };
+  const webauthn = ci(p2, String(TWO_FACTOR.WebAuthn));
+  return {
+    providers: ids,
+    ...(typeof emailHint === "string" ? { emailHint } : {}),
+    ...(webauthn && typeof webauthn === "object" ? { webauthn: JSON.stringify(webauthn) } : {}),
+  };
 }
 
 export interface PasswordGrant {
@@ -65,22 +70,35 @@ export interface PasswordGrant {
   twoFactor?: { provider: number; token: string; remember: boolean };
 }
 
+const deviceForm = (deviceId: string) => ({
+  scope: "api offline_access",
+  client_id: CLIENT_NAME,
+  deviceType: String(DEVICE_TYPE),
+  deviceIdentifier: deviceId,
+  deviceName: DEVICE_NAME,
+});
+
 export async function passwordToken(base: string, g: PasswordGrant): Promise<TokenResponse> {
-  const form: Record<string, string> = {
-    grant_type: "password",
-    username: g.email,
-    password: g.authHash,
-    scope: "api offline_access",
-    client_id: CLIENT_NAME,
-    deviceType: String(DEVICE_TYPE),
-    deviceIdentifier: g.deviceId,
-    deviceName: DEVICE_NAME,
-  };
+  const form: Record<string, string> = { grant_type: "password", username: g.email, password: g.authHash, ...deviceForm(g.deviceId) };
   if (g.twoFactor) {
     form.twoFactorProvider = String(g.twoFactor.provider);
     form.twoFactorToken = g.twoFactor.token;
     form.twoFactorRemember = g.twoFactor.remember ? "1" : "0";
   }
+  return grant(base, form);
+}
+
+/** SSO: redeems the code Vaultwarden handed to `redirectUri` (PKCE). */
+export async function authorizationCodeToken(base: string, code: string, verifier: string, redirectUri: string, deviceId: string): Promise<TokenResponse> {
+  return grant(base, { grant_type: "authorization_code", code, code_verifier: verifier, redirect_uri: redirectUri, ...deviceForm(deviceId) });
+}
+
+/** Errors unless Vaultwarden has SSO turned on. */
+export async function ssoPrevalidate(base: string): Promise<void> {
+  await call(base, "GET", "/identity/sso/prevalidate");
+}
+
+async function grant(base: string, form: Record<string, string>): Promise<TokenResponse> {
   try {
     return parse(tokenResponse, await call(base, "POST", "/identity/connect/token", { form }));
   } catch (e) {
@@ -109,13 +127,15 @@ export async function revisionDate(base: string, token: string): Promise<number>
 }
 
 /** JWT payload `sub` (user id). The token is not verified here; the server does that. */
-export function jwtSubject(token: string): string | undefined {
+export const jwtSubject = (token: string): string | undefined => jwtClaim(token, "sub");
+
+export function jwtClaim(token: string, name: string): string | undefined {
   try {
     const part = token.split(".")[1];
     if (!part) return undefined;
     const json = atob(part.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(part.length / 4) * 4, "="));
-    const sub = (JSON.parse(json) as { sub?: unknown }).sub;
-    return typeof sub === "string" ? sub : undefined;
+    const v = (JSON.parse(json) as Record<string, unknown>)[name];
+    return typeof v === "string" ? v : undefined;
   } catch {
     return undefined;
   }

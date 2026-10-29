@@ -28,6 +28,8 @@ const paths = {
   folder: "M3 6h6l2 2h10v11H3z",
   note: "M5 4h14v16H5z M8 9h8 M8 13h8 M8 17h5",
   dice: "M4 4h16v16H4z M8.5 8.5h.01 M15.5 8.5h.01 M12 12h.01 M8.5 15.5h.01 M15.5 15.5h.01",
+  send: "M3 11l18-8-8 18-2-8z M11 13l10-10",
+  panel: "M4 4h16v16H4z M15 4v16",
   attach: "M20 11l-8 8a5 5 0 0 1-7-7l8-8a3.5 3.5 0 0 1 5 5l-8 8a2 2 0 0 1-3-3l7-7",
 } as const;
 

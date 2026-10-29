@@ -8,7 +8,8 @@
   "minimum_chrome_version": "156",
   "background": { "service_worker": "background.js", "type": "module" },
   "action": { "default_popup": "popup.html", "default_title": "Plugwarden" },
-  "permissions": ["storage", "alarms", "idle", "offscreen", "clipboardWrite", "activeTab", "scripting", "contextMenus"],
+  "permissions": ["storage", "alarms", "idle", "offscreen", "clipboardWrite", "activeTab", "scripting", "contextMenus", "sidePanel"],
+  "side_panel": { "default_path": "sidepanel.html" },
   "optional_host_permissions": ["https://*/*", "http://*/*"],
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"

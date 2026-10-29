@@ -360,5 +360,128 @@
   },
   "fillFailed": {
     "message": "Could not find a login form to fill"
+  },
+  "openSidePanel": {
+    "message": "Open in side panel"
+  },
+  "providerWebAuthn": {
+    "message": "Security key"
+  },
+  "useSecurityKey": {
+    "message": "Use security key"
+  },
+  "openInTab": {
+    "message": "Open in a new tab"
+  },
+  "send": {
+    "message": "Send"
+  },
+  "newSend": {
+    "message": "New Send"
+  },
+  "noSends": {
+    "message": "No Sends yet"
+  },
+  "sendDeleted": {
+    "message": "Send deleted"
+  },
+  "sendDeletes": {
+    "message": "Deletes $P1$",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "sendDisabled": {
+    "message": "Disabled"
+  },
+  "copyLink": {
+    "message": "Copy link"
+  },
+  "delete": {
+    "message": "Delete"
+  },
+  "tapAgainToDelete": {
+    "message": "Tap again to delete"
+  },
+  "chooseFile": {
+    "message": "Choose a file"
+  },
+  "fileTooLarge": {
+    "message": "The file is too large (max 25 MB)"
+  },
+  "sendType": {
+    "message": "Send type"
+  },
+  "sendText": {
+    "message": "Text"
+  },
+  "sendFile": {
+    "message": "File"
+  },
+  "hideText": {
+    "message": "Hide text by default"
+  },
+  "deleteAfter": {
+    "message": "Delete after"
+  },
+  "days": {
+    "message": "$P1$ days",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "sendPasswordOptional": {
+    "message": "Password (optional)"
+  },
+  "maxAccessOptional": {
+    "message": "Maximum access count (optional)"
+  },
+  "createSendCopyLink": {
+    "message": "Create and copy link"
+  },
+  "passkeys": {
+    "message": "Passkeys"
+  },
+  "passkeysHint": {
+    "message": "Save and use website passkeys with Plugwarden (needs access to websites)"
+  },
+  "passkeySaveTitle": {
+    "message": "Save passkey"
+  },
+  "passkeySignInTitle": {
+    "message": "Sign in with passkey"
+  },
+  "passkeySaveFor": {
+    "message": "Save a passkey for $P1$ on $P2$?",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      },
+      "p2": {
+        "content": "$2"
+      }
+    }
+  },
+  "passkeySave": {
+    "message": "Save passkey"
+  },
+  "passkeyNone": {
+    "message": "No passkey for this site in your vault"
+  },
+  "passkeyUseBrowser": {
+    "message": "Use another device or browser"
+  },
+  "logInSso": {
+    "message": "Log in with SSO"
+  },
+  "busyOpeningSso": {
+    "message": "Opening your identity provider…"
+  },
+  "ssoHint": {
+    "message": "SSO signs you in; you still unlock the vault with your master password."
   }
 }

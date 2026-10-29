@@ -178,6 +178,21 @@ pub fn decrypt_folders(folders_json: &str) -> Result<String> {
     with_session(|s| Ok(crate::cipher::decrypt_folders(s, folders).to_string()))
 }
 
+pub fn decrypt_send_list(sends_json: &str) -> Result<String> {
+    let sends: Vec<Value> = serde_json::from_str(sends_json).map_err(err)?;
+    with_session(|s| Ok(crate::send::decrypt_list(s, sends).to_string()))
+}
+
+pub fn encrypt_send(send_json: &str) -> Result<String> {
+    let mut send: Value = serde_json::from_str(send_json).map_err(err)?;
+    with_session(|s| crate::send::encrypt(s, &mut send))?;
+    Ok(send.to_string())
+}
+
+pub fn encrypt_send_file(wrapped_key: &str, data: &[u8]) -> Result<Vec<u8>> {
+    with_session(|s| crate::send::encrypt_file(s, wrapped_key, data))
+}
+
 /// Registration material for a new account: protected user key + RSA key pair.
 #[cfg(feature = "register")]
 pub fn make_registration_keys(handle: u32) -> Result<String> {

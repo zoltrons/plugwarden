@@ -76,13 +76,13 @@ function hue(s: string): number {
   return x % 360;
 }
 
-function tile(name: string, type: number): HTMLElement {
+export function tile(name: string, type: number): HTMLElement {
   const letter = name.trim().slice(0, 1).toUpperCase();
   const fallback: IconName = type === 2 ? "note" : type === 4 ? "user" : "key";
   return h("span", { class: "tile", style: `--h:${hue(name)}`, "aria-hidden": "true" }, letter || icon(fallback));
 }
 
-function toast(ctx: Ctx, text: string) {
+export function toast(ctx: Ctx, text: string) {
   st.toast = text;
   ctx.rerender();
   setTimeout(() => {
@@ -93,13 +93,13 @@ function toast(ctx: Ctx, text: string) {
   }, 1800);
 }
 
-async function copy(ctx: Ctx, value: string) {
+export async function copy(ctx: Ctx, value: string) {
   await navigator.clipboard.writeText(value);
   void send({ type: "clipboardCopied" }); // schedules clearing
   toast(ctx, t("copied"));
 }
 
-function iconButton(ic: IconName, label: string, onclick: () => void, extra: Record<string, unknown> = {}) {
+export function iconButton(ic: IconName, label: string, onclick: () => void, extra: Record<string, unknown> = {}) {
   return h("button", { type: "button", class: "icon-btn", "aria-label": label, title: label, onclick, ...extra }, icon(ic));
 }
 

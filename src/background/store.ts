@@ -34,6 +34,10 @@ export interface Session {
   accessToken?: string;
   accessExpiresAt?: number;
   pending?: PendingLogin;
+  /** SSO login in progress: PKCE verifier and the state we sent. */
+  sso?: { state: string; verifier: string; expiresAt: number };
+  /** Why the last SSO login failed (shown when the popup opens next). */
+  ssoError?: string;
 }
 
 /** /api/sync data exactly as the server sent it (encrypted). */
@@ -43,6 +47,8 @@ export interface VaultCache {
   syncedAt: number;
   ciphers: unknown[];
   folders: unknown[];
+  /** Absent in caches written before Phase 4. */
+  sends?: unknown[];
   orgKeys: Record<string, string>;
 }
 
@@ -84,7 +90,7 @@ export async function updateSession(patch: Partial<Session>): Promise<Session> {
 export const clearSession = () => chrome.storage.session.remove("session");
 
 export async function getSettings(): Promise<Settings> {
-  return { autoLockMinutes: DEFAULT_AUTO_LOCK_MINUTES, lockOnSystemLock: true, ...(await getLocal("settings")) };
+  return { autoLockMinutes: DEFAULT_AUTO_LOCK_MINUTES, lockOnSystemLock: true, passkeys: false, ...(await getLocal("settings")) };
 }
 
 export async function getDeviceId(): Promise<string> {
