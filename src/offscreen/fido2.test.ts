@@ -13,6 +13,7 @@ test("passkey RP ID: the origin's host or a registrable parent of it", () => {
   ok("example.com", "https://login.example.com");
   ok("login.example.com", "https://login.example.com:8443");
   ok("localhost", "http://localhost:8099");
+  ok("127.0.0.1", "http://127.0.0.1:8099");
 });
 
 test("passkey RP ID: refused for other sites, public suffixes and insecure origins", () => {

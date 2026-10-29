@@ -435,12 +435,6 @@
   "createSendCopyLink": {
     "message": "Create and copy link"
   },
-  "passkeys": {
-    "message": "Passkeys"
-  },
-  "passkeysHint": {
-    "message": "Save and use website passkeys with Plugwarden"
-  },
   "passkeySaveTitle": {
     "message": "Save passkey"
   },
@@ -868,5 +862,119 @@
         "content": "$1"
       }
     }
+  },
+  "favorites": {
+    "message": "Favorites"
+  },
+  "sort": {
+    "message": "Sort"
+  },
+  "sortNameAsc": {
+    "message": "Name (A–Z)"
+  },
+  "sortNameDesc": {
+    "message": "Name (Z–A)"
+  },
+  "sortUpdated": {
+    "message": "Recently edited"
+  },
+  "sortCreated": {
+    "message": "Recently created"
+  },
+  "clearSearch": {
+    "message": "Clear search"
+  },
+  "openWebsite": {
+    "message": "Open website"
+  },
+  "fillThisSite": {
+    "message": "Fill this site"
+  },
+  "copyUserNameShort": {
+    "message": "Copy user"
+  },
+  "passwordStrength": {
+    "message": "Password strength"
+  },
+  "itemActions": {
+    "message": "Item actions"
+  },
+  "unsavedChanges": {
+    "message": "Unsaved changes — save to keep them"
+  },
+  "discardChanges": {
+    "message": "Discard changes"
+  },
+  "keepEditing": {
+    "message": "Keep editing"
+  },
+  "selectFolder": {
+    "message": "Folder"
+  },
+  "noFolderHint": {
+    "message": "No folder"
+  },
+  "itemTypeHint": {
+    "message": "Pick a type"
+  },
+  "searchHint": {
+    "message": "Search names, usernames and websites"
+  },
+  "showItem": {
+    "message": "Open $P1$",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "moreActions": {
+    "message": "More actions"
+  },
+  "dismiss": {
+    "message": "Dismiss"
+  },
+  "trashEmpty": {
+    "message": "Trash is empty"
+  },
+  "favoritesEmpty": {
+    "message": "No favorites yet — tap the star on an item"
+  },
+  "clearFilters": {
+    "message": "Clear filters"
+  },
+  "copiedShort": {
+    "message": "Copied"
+  },
+  "totpNow": {
+    "message": "One-time code, $P1$ seconds left",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "sidebarTheme": {
+    "message": "Appearance"
+  },
+  "about": {
+    "message": "About"
+  },
+  "sectionAll": {
+    "message": "All items"
+  },
+  "syncHint": {
+    "message": "Last sync $P1$",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "loading": {
+    "message": "Loading…"
+  },
+  "strengthShort": {
+    "message": "Strength"
   }
 }

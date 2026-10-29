@@ -39,6 +39,10 @@ let host: HTMLElement | undefined;
 let frame: HTMLIFrameElement | undefined;
 let anchor: HTMLInputElement | undefined;
 let dismissed: HTMLInputElement | undefined;
+/** Focus generation: an in-flight open() must not reopen the menu after a newer focus or close. */
+let gen = 0;
+/** Last login field focused, also when the menu had nothing to offer: a later passkey request reopens it. */
+let focusedLogin: HTMLInputElement | undefined;
 /** The fill itself focuses fields: do not reopen the menu right away. */
 let quietUntil = 0;
 
@@ -50,6 +54,7 @@ function place() {
 }
 
 function close() {
+  gen++;
   host?.remove();
   host = frame = anchor = undefined;
   removeEventListener("scroll", place, true);
@@ -57,10 +62,12 @@ function close() {
 }
 
 async function open(el: HTMLInputElement, kind: Kind) {
+  if (kind === "login") focusedLogin = el;
   if (anchor === el || dismissed === el || Date.now() < quietUntil) return;
+  const mine = ++gen;
   const r = ((await chrome.runtime.sendMessage({ type: "inlineFocus", kind }).catch(() => undefined)) as { data?: { rows: number } } | undefined)?.data;
   // rows = 0: nothing to offer (no matches, or not logged in), so stay out of the way.
-  if (!r?.rows || active() !== el || Date.now() < quietUntil) return;
+  if (mine !== gen || !r?.rows || active() !== el || Date.now() < quietUntil) return;
   close();
   anchor = el;
   host = document.createElement("plugwarden-menu");
@@ -148,6 +155,16 @@ chrome.runtime.onMessage.addListener((msg: { type?: string }) => {
   if (msg.type === "inlineClose") {
     quietUntil = Date.now() + 1000;
     close();
+  }
+  // A website waiting on a conditional passkey request appeared (or went away): refresh the menu. The
+  // field may not have had a menu yet (no matching logins when it was focused), so fall back to it.
+  if (msg.type === "passkeyAvailable") {
+    const el = anchor ?? (focusedLogin && active() === focusedLogin ? focusedLogin : undefined);
+    const kind = el && kindOf(el);
+    if (el && kind) {
+      close();
+      void open(el, kind);
+    }
   }
   if (msg.type === "barShow" && window === top && !bar) {
     bar = document.createElement("plugwarden-bar");

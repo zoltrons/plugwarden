@@ -17,10 +17,24 @@ async function render() {
   const d = r.data;
   if (d.locked)
     return app.replaceChildren(h("div", { class: "group" }, row(icon("lock"), t("unlockToFill"), t("appName"), () => void ask({ type: "inlineUnlock" }))));
+  // A website waiting on a conditional passkey request: the stored passkey is one click away.
+  const passkey = d.passkey
+    ? row(
+        icon("key"),
+        t("passkeySignInTitle"),
+        t("appName"),
+        async () => {
+          const p = await ask({ type: "inlinePasskey" });
+          if (!p.ok) app.replaceChildren(h("div", { class: "note" }, p.error));
+        },
+        t("passkeySignInTitle"),
+      )
+    : null;
   app.replaceChildren(
     h(
       "div",
       { class: "group", role: "list", "aria-label": t("appName") },
+      passkey,
       ...d.items.map((i) =>
         row(tile(i.name, i.type), i.name || t("untitled"), i.sub, async () => {
           const f = await ask({ type: "inlineFill", id: i.id });

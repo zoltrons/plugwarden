@@ -120,7 +120,10 @@ export async function updateSession(patch: Partial<Session>): Promise<Session> {
 export const clearSession = () => chrome.storage.session.remove("session");
 
 export async function getSettings(): Promise<Settings> {
-  return { autoLockMinutes: DEFAULT_AUTO_LOCK_MINUTES, timeoutAction: "lock", lockOnSystemLock: true, passkeys: false, inlineMenu: true, savePrompt: true, neverSave: [], defaultManager: false, favicons: true, autoCopyTotp: true, ...(await getLocal("settings")) };
+  // Older builds stored a `passkeys` toggle; passkeys are always on now, so drop it.
+  const stored = ((await getLocal("settings")) ?? {}) as Settings & { passkeys?: boolean };
+  const { passkeys: _ignored, ...settings } = stored;
+  return { autoLockMinutes: DEFAULT_AUTO_LOCK_MINUTES, timeoutAction: "lock", lockOnSystemLock: true, inlineMenu: true, savePrompt: true, neverSave: [], defaultManager: false, favicons: true, autoCopyTotp: true, ...(settings as Partial<Settings>) };
 }
 
 export async function getDeviceId(): Promise<string> {

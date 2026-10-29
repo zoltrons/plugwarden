@@ -111,11 +111,16 @@ closes: `inline:<tabId>` (frame, URL and kind of the field the open menu belongs
 
 Other content scripts are registered at runtime (`chrome.scripting.registerContentScripts`):
 
-* **Passkeys** (opt-in in Settings): registers a MAIN-world shim (`passkey-page.js`, wraps `navigator.credentials.create/get`) and an
-  isolated relay (`passkey-relay.js`) on the granted origins, top frames only. Each call opens an
-  approval window (`popup.html?passkey=<id>`); the origin comes from `port.sender.origin`, the RP ID is
-  checked against it (with the PSL) in the worker, and keys are signed there (WebCrypto ES256).
-  Closing the window or "use another device" hands the call back to the browser.
+* **Passkeys** (always on, no setting): registers a MAIN-world shim (`passkey-page.js`, wraps
+  `navigator.credentials.create/get`) and an isolated relay (`passkey-relay.js`) on every secure
+  origin (`https`, `localhost`), top frames only. A `get`/`create` a stored passkey can answer opens an
+  approval window (`popup.html?passkey=<id>`); anything else (no matching passkey, not logged in) is
+  handed straight back to the browser without a window. Conditional mediation (passkey autofill) is
+  raced against the browser's native UI, and while such a request waits the inline menu offers
+  "Sign in with passkey" (the request is continued, not restarted). The origin comes from
+  `port.sender.origin`, the RP ID is checked against it (with the PSL) in the worker, and keys are
+  signed there (WebCrypto ES256). Closing the window or "use another device" hands the call back to
+  the browser; an `AbortSignal` from the page drops the pending request.
 * **SSO**: `sso-callback.js` is registered for `<server>/sso-connector.html*` only while a login is in
   progress and reports `sender.url` (code + state) back; the SW checks the state and the PKCE verifier.
 

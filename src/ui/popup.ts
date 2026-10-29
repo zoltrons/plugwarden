@@ -449,12 +449,6 @@ function settingsTab(s: State): HTMLElement {
     "aria-label": t("lockOnSystemLock"),
     onchange: (e: Event) => void act({ type: "setSettings", lockOnSystemLock: (e.target as HTMLInputElement).checked }),
   });
-  const passkeys = h("input", {
-    type: "checkbox",
-    checked: s.settings.passkeys,
-    "aria-label": t("passkeys"),
-    onchange: (e: Event) => void act({ type: "setPasskeys", enabled: (e.target as HTMLInputElement).checked }),
-  });
   const toggle = (label: string, checked: boolean, onchange: (box: HTMLInputElement) => void) =>
     h("span", { class: "switch" }, h("input", { type: "checkbox", checked, "aria-label": label, onchange: (e: Event) => onchange(e.target as HTMLInputElement) }), h("span"));
   const defaultManager = (box: HTMLInputElement) => {
@@ -545,7 +539,6 @@ function settingsTab(s: State): HTMLElement {
             h("button", { type: "submit", class: "btn tonal small" }, t("setPin")),
           )
         : null,
-      row("key", t("passkeys"), t("passkeysHint"), h("span", { class: "switch" }, passkeys, h("span"))),
     ),
     h("h2", { class: "section-title" }, t("vault")),
     h(
@@ -681,7 +674,7 @@ if (!inPanel) void chrome.windows.getCurrent().then((w) => (windowId = w.id));
 void send<State>({ type: "getState" }).then((res) => {
   if (res.ok) state = res.data;
   else {
-    state = { phase: "setup", settings: { autoLockMinutes: 15, timeoutAction: "lock", lockOnSystemLock: true, passkeys: false, inlineMenu: true, savePrompt: true, neverSave: [], defaultManager: false, favicons: true, autoCopyTotp: true } };
+    state = { phase: "setup", settings: { autoLockMinutes: 15, timeoutAction: "lock", lockOnSystemLock: true, inlineMenu: true, savePrompt: true, neverSave: [], defaultManager: false, favicons: true, autoCopyTotp: true } };
     ui.error = res.error;
   }
   draft.email = state.email ?? "";

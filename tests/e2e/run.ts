@@ -1155,13 +1155,11 @@ try {
   const challenge = randomBytes(32);
   let spki = "";
 
-  await step("passkeys: opt-in registers the page scripts", async () => {
+  await step("passkeys: page shim and relay are registered on every secure site", async () => {
     await unlockIfLocked();
-    const r = await page.evaluate(() => chrome.runtime.sendMessage({ type: "setPasskeys", enabled: true }));
-    assert.equal(r.ok, true, JSON.stringify(r));
     const scripts = await sw.evaluate(() => chrome.scripting.getRegisteredContentScripts());
     assert.deepEqual(scripts.map((s) => s.id).sort(), ["pw-passkey-page", "pw-passkey-relay"]);
-    await loginPage.reload(); // registered scripts apply to new documents
+    await loginPage.reload(); // the shim applies to new documents
   });
 
   await step("passkeys: create on a site, saved to the vault, attestation valid", async () => {
@@ -1205,6 +1203,37 @@ try {
     await approve(async (w) => {
       await w.getByRole("listitem").filter({ hasText: "pk-user" }).click();
     });
+    const g = await got;
+    const clientData = Buffer.from(g.clientData, "base64");
+    assert.equal(JSON.parse(clientData.toString()).type, "webauthn.get");
+    const signed = Buffer.concat([Buffer.from(g.authData, "base64"), createHash("sha256").update(clientData).digest()]);
+    const key = createPublicKey({ key: Buffer.from(spki, "base64"), format: "der", type: "spki" });
+    assert.ok(verify("sha256", signed, key, Buffer.from(g.sig, "base64")), "assertion signature");
+    assert.deepEqual([...Buffer.from(g.user, "base64")], [1, 2, 3, 4]);
+  });
+
+  await step("passkeys: conditional mediation offers the passkey in the inline menu and signs in", async () => {
+    // A passkey form: the site starts a conditional get (passkey autofill) and focuses the username field.
+    await loginPage.goto(`${SITE}/login`);
+    const got = loginPage.evaluate(async (ch) => {
+      const pending = navigator.credentials.get({
+        mediation: "conditional",
+        publicKey: { challenge: Uint8Array.from(ch), rpId: "localhost" },
+      }) as Promise<PublicKeyCredential>;
+      (document.getElementById("u") as HTMLInputElement).focus();
+      const c = await pending;
+      const r = c.response as AuthenticatorAssertionResponse;
+      const b = (x: ArrayBuffer) => btoa(String.fromCharCode(...new Uint8Array(x)));
+      return { clientData: b(r.clientDataJSON), authData: b(r.authenticatorData), sig: b(r.signature), user: b(r.userHandle!) };
+    }, [...challenge]);
+    const menu = await frameOf(loginPage, "menu.html");
+    const entry = menu.getByRole("button", { name: "Sign in with passkey" });
+    await entry.waitFor();
+    const approval = approve(async (w) => {
+      await w.getByRole("listitem").filter({ hasText: "pk-user" }).click();
+    });
+    await entry.click();
+    await approval;
     const g = await got;
     const clientData = Buffer.from(g.clientData, "base64");
     assert.equal(JSON.parse(clientData.toString()).type, "webauthn.get");

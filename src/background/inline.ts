@@ -5,6 +5,7 @@ import { type FillResult, fillForm, fillLogin } from "../autofill/page.ts";
 import type { BarInfo, FieldKind, FrameRequest, MenuData, MenuItem, PageRequest, VaultItem } from "../shared/messages.ts";
 import { coreAlive, coreCall } from "./core.ts";
 import { touchAutoLock } from "./lock.ts";
+import { conditionalReady, openConditional } from "./passkey.ts";
 import { getLocal, getSession, getSettings, getTabState, setLocal, setTabState } from "./store.ts";
 import { copyToClipboard, list, save } from "./vault.ts";
 
@@ -49,7 +50,10 @@ export async function handlePage(req: PageRequest, sender: chrome.runtime.Messag
     if (!(await getSettings()).inlineMenu || !(await getLocal("account"))) return { rows: 0 };
     await setTabState("inline", tabId, { frameId: sender.frameId, url, kind: req.kind });
     if (!(await unlocked())) return { rows: 1 }; // "Unlock to fill"
-    return { rows: (await items(req.kind, url)).length };
+    const logins = (await items(req.kind, url)).length;
+    // A website waiting on a conditional passkey request gets one extra row for it.
+    const passkey = req.kind === "login" && (await conditionalReady(tabId, sender.frameId));
+    return { rows: logins + (passkey ? 1 : 0) };
   }
   await loginSubmitted(tabId, url, req.username, req.password);
   return null;
@@ -110,10 +114,15 @@ export async function handleFrame(req: FrameRequest, tabId: number): Promise<unk
     await chrome.action.openPopup().catch(() => undefined);
     return null;
   }
-  if (!(await unlocked())) return { kind: ctx.kind, locked: true, items: [] } satisfies MenuData;
+  if (req.type === "inlinePasskey") {
+    await openConditional(tabId, ctx.frameId);
+    return null;
+  }
+  if (!(await unlocked())) return { kind: ctx.kind, locked: true, items: [], passkey: false } satisfies MenuData;
   await touchAutoLock();
   const available = await items(ctx.kind, ctx.url);
-  if (req.type === "inlineList") return { kind: ctx.kind, locked: false, items: available } satisfies MenuData;
+  const passkey = ctx.kind === "login" && (await conditionalReady(tabId, ctx.frameId));
+  if (req.type === "inlineList") return { kind: ctx.kind, locked: false, items: available, passkey } satisfies MenuData;
 
   // inlineFill: only an item offered for this field and frame.
   if (!available.some((i) => i.id === req.id)) throw new Error("item not available here");

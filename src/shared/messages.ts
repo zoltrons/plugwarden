@@ -57,8 +57,7 @@ export type Request =
   | { type: "sendList" }
   | { type: "saveSend"; send: Record<string, unknown>; file?: { name: string; data: string } }
   | { type: "deleteSend"; id: string }
-  // passkeys: opt-in, and the approval window opened for a website request
-  | { type: "setPasskeys"; enabled: boolean }
+  // passkeys: the approval window opened for a website request
   | { type: "passkeyPrompt"; id: string }
   | { type: "passkeyDecision"; id: string; action: "use" | "fallback"; itemId?: string; credentialId?: string }
   // autofill on the active tab (host permissions cover every http(s) tab)
@@ -134,7 +133,6 @@ const requestValidators: { [K in Request["type"]]: Validator<Extract<Request, { 
     return s;
   },
   deleteSend: obj({ type: literal("deleteSend"), id: str }),
-  setPasskeys: obj({ type: literal("setPasskeys"), enabled: bool }),
   setDefaultManager: obj({ type: literal("setDefaultManager"), enabled: bool }),
   passkeyPrompt: obj({ type: literal("passkeyPrompt"), id: str }),
   passkeyDecision: obj({ type: literal("passkeyDecision"), id: str, action: literal("use", "fallback"), itemId: opt(str), credentialId: opt(str) }),
@@ -163,8 +161,6 @@ export interface Settings {
   /** What auto-lock, system lock and a browser restart do: lock, or log out (forget the account). */
   timeoutAction: "lock" | "logout";
   lockOnSystemLock: boolean;
-  /** Answer websites' passkey requests (needs site access; content scripts registered). */
-  passkeys: boolean;
   /** Show the inline menu under login, card and identity fields. */
   inlineMenu: boolean;
   /** Offer to save / update logins after a form is submitted. */
@@ -205,6 +201,9 @@ export interface VaultItem {
   favorite: boolean;
   readOnly: boolean;
   hasTotp: boolean;
+  /** epoch ms; used by the list's "recently edited / created" sorting. */
+  revisionDate?: number;
+  creationDate?: number;
   failed?: boolean;
 }
 
@@ -414,7 +413,7 @@ export type PasskeyCall =
       kind: "create";
       options: { rpId?: string; rpName: string; user: { id: string; name: string; displayName: string }; challenge: string; exclude: string[]; discoverable: boolean };
     }
-  | { kind: "get"; options: { rpId?: string; challenge: string; allow: string[] } };
+  | { kind: "get"; conditional: boolean; options: { rpId?: string; challenge: string; allow: string[] } };
 
 /** Credential fields (base64url) or a reason to let the browser handle the call. */
 export type PasskeyResult = { credential: Record<string, unknown> } | { fallback: true } | { error: { name: string; message: string } };
@@ -426,7 +425,7 @@ export function parsePasskeyCall(v: unknown): PasskeyCall {
       kind: literal("create"),
       options: obj({ rpId: opt(str), rpName: str, user, challenge: str, exclude: arr(str), discoverable: bool }),
     })(v, "");
-  return obj({ kind: literal("get"), options: obj({ rpId: opt(str), challenge: str, allow: arr(str) }) })(v, "");
+  return obj({ kind: literal("get"), conditional: bool, options: obj({ rpId: opt(str), challenge: str, allow: arr(str) }) })(v, "");
 }
 
 // ---------- content script (every page) and our menu.html / bar.html iframes -> service worker ----------
@@ -447,6 +446,7 @@ const pageValidators: { [K in PageRequest["type"]]: Validator<Extract<PageReques
 export type FrameRequest =
   | { type: "inlineList" }
   | { type: "inlineFill"; id: string }
+  | { type: "inlinePasskey" }
   | { type: "inlineUnlock" }
   | { type: "barInfo" }
   | { type: "barAction"; action: "save" | "never" | "close" };
@@ -454,6 +454,7 @@ export type FrameRequest =
 const frameValidators: { [K in FrameRequest["type"]]: Validator<Extract<FrameRequest, { type: K }>> } = {
   inlineList: obj({ type: literal("inlineList") }),
   inlineFill: obj({ type: literal("inlineFill"), id: str }),
+  inlinePasskey: obj({ type: literal("inlinePasskey") }),
   inlineUnlock: obj({ type: literal("inlineUnlock") }),
   barInfo: obj({ type: literal("barInfo") }),
   barAction: obj({ type: literal("barAction"), action: literal("save", "never", "close") }),
@@ -481,6 +482,8 @@ export interface MenuData {
   kind: FieldKind;
   locked: boolean;
   items: MenuItem[];
+  /** A website's conditional passkey sign-in is waiting: offer "Sign in with a passkey". */
+  passkey: boolean;
 }
 
 export interface BarInfo {

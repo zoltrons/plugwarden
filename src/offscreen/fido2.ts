@@ -1,6 +1,11 @@
 // Passkey authenticator, run in the crypto worker. Credentials live in Login items as
-// `login.fido2Credentials[]` in Bitwarden's format (clients: libs/common/src/platform/services/fido2),
-// so they sync with the official clients. ECDSA P-256 via WebCrypto; private keys never leave the worker.
+// `login.fido2Credentials[]`, using exactly the fields of the SDK's CipherFido2CredentialModel
+// (bitwarden-api-api) so the SDK and the official clients read and write the same records:
+// credentialId, keyType, keyAlgorithm, keyCurve, keyValue, rpId, rpName, userHandle, userName,
+// userDisplayName, counter, discoverable, creationDate (all EncStrings except creationDate).
+// The SDK at the pinned rev has no WebAuthn authenticator (the official browser extension
+// implements WebAuthn in TypeScript as well), so ES256 lives here: ECDSA P-256 via WebCrypto, and the
+// private key never leaves the worker.
 import { ci } from "../shared/validate.ts";
 
 type Json = Record<string, unknown>;
@@ -20,8 +25,9 @@ export function credentialIdBytes(id: string): Uint8Array {
 /** WebAuthn: the RP ID must be the origin's host or a registrable parent of it, on a secure origin. */
 export function checkRpId(rpId: string, origin: string, isPublicSuffix: (d: string) => boolean): void {
   const u = new URL(origin);
-  const secure = u.protocol === "https:" || u.hostname === "localhost";
   const host = u.hostname.toLowerCase();
+  // WebAuthn treats loopback as a secure context (dev servers on http).
+  const secure = u.protocol === "https:" || host === "localhost" || host === "127.0.0.1" || host === "[::1]";
   const id = rpId.toLowerCase();
   if (!secure || !(host === id || host.endsWith(`.${id}`)) || (id !== host && isPublicSuffix(id)))
     throw new Error("SecurityError: the relying party id is not valid for this origin");
@@ -112,6 +118,8 @@ export async function createCredential(i: CreateInput) {
       publicKey: b64u(new Uint8Array(await crypto.subtle.exportKey("spki", pair.publicKey))),
       publicKeyAlgorithm: -7,
       transports: ["internal", "hybrid"],
+      // Reported back through getClientExtensionResults(): tells the site the passkey is discoverable.
+      credProps: { rk: i.discoverable },
     },
   };
 }

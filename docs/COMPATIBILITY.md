@@ -103,9 +103,14 @@ on 2026-10-29 by `spike/vw-flow.mjs`, unless marked otherwise.
   Recipients use `grant_type=send_access` (`send_id` = accessId, `password_hash_b64`) and then
   `POST /api/sends/access` with that bearer token. The web vault refuses plain-http servers
   ("Insecure URL not allowed"), so it cannot open links on the http test server.
-* **Passkeys**: stored in `login.fido2Credentials[]` like the official clients (all fields EncStrings
-  except `creationDate`; GUID credential ids; base64url PKCS#8 `keyValue`; counter `"0"`). Saved
-  through the normal cipher PUT/POST; Vaultwarden keeps them.
+* **Passkeys**: always on (no setting), like the official extension. Stored in
+  `login.fido2Credentials[]` with the SDK's `CipherFido2CredentialModel` field names (all fields
+  EncStrings except `creationDate`; GUID credential ids; base64url PKCS#8 `keyValue`; base64url
+  `userHandle`; counter `"0"`). Saved through the normal cipher PUT/POST; Vaultwarden keeps them.
+  WebAuthn calls are intercepted on every secure origin: a call a stored passkey can answer opens
+  Plugwarden's approval window, anything else goes straight to the browser. Conditional mediation
+  (passkey autofill) is raced against the browser and additionally shows "Sign in with passkey" in
+  the inline menu.
 * **SSO** (`SSO_ENABLED`): `GET /identity/sso/prevalidate` fails when off. `/identity/connect/authorize`
   with `client_id=browser` always redirects to `<DOMAIN>/sso-connector.html` (any `redirect_uri` is
   ignored) and needs the `VW_SSO_BINDING` cookie from the same browser. Code + PKCE verifier go to

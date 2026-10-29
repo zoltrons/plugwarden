@@ -31,7 +31,7 @@ import {
   updateSession,
 } from "./store.ts";
 import { handleFrame, handlePage, showBar } from "./inline.ts";
-import { onPasskeyPort, onWindowRemoved, passkeyDecision, passkeyPrompt, setPasskeys } from "./passkey.ts";
+import { ensurePasskeyScripts, onPasskeyPort, onWindowRemoved, passkeyDecision, passkeyPrompt } from "./passkey.ts";
 import { AUTOFILL_COMMAND, autofillFromGesture, fillActiveTab, onContextMenu, pageMatches, readPageLogin, updateTabUi } from "./autofill.ts";
 import { addAttachment, addGeneratorHistory, CLIPBOARD_ALARM, downloadAttachment, exportVault, importVault, clearClipboard, clearGeneratorHistory, deleteFolder, generatorHistory, deleteSend, purge, restore, saveFolder, list as vaultList, requireUnlocked, save, saveSend, sendList, sync, trash } from "./vault.ts";
 
@@ -170,9 +170,6 @@ async function handle(req: Request): Promise<unknown> {
       break;
     case "logout":
       await logout();
-      break;
-    case "setPasskeys":
-      await setPasskeys(req.enabled);
       break;
     case "passkeyPrompt":
       return passkeyPrompt(req.id);
@@ -315,6 +312,7 @@ chrome.contextMenus.onClicked.addListener((info, tab) => void onContextMenu(info
 
 chrome.runtime.onInstalled.addListener(() => {
   void restrictStorageAccess();
+  void ensurePasskeyScripts(); // passkeys are always on, like the official clients
   void updateTabUi();
 });
 
@@ -323,6 +321,11 @@ declare const E2E: boolean;
 if (E2E) Object.assign(globalThis, { plugwardenTest: { autofillFromGesture, onContextMenu } });
 chrome.runtime.onStartup.addListener(() => {
   void restrictStorageAccess();
+  void ensurePasskeyScripts();
   // The restart already locked the vault (session storage is gone); "log out" goes one step further.
   void timeout();
 });
+
+// Also on a plain service-worker start (registration is idempotent): covers a fresh install where the
+// worker was already running, and browsers that drop registered scripts.
+void ensurePasskeyScripts().catch((e: unknown) => console.error(e));
