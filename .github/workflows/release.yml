@@ -31,7 +31,8 @@ jobs:
           test -n "$CRX_KEY" || { echo "::error::CRX_KEY secret is not set"; exit 1; }
           printf '%s\n' "$CRX_KEY" > "$RUNNER_TEMP/key.pem"
           chrome="$(node -p "require('playwright-core').chromium.executablePath()")"
-          xvfb-run -a "$chrome" --pack-extension="$PWD/dist/ext" --pack-extension-key="$RUNNER_TEMP/key.pem" --no-message-box
+          # Ubuntu runners block the user namespaces Chromium's sandbox needs; packing loads no web content.
+          xvfb-run -a "$chrome" --no-sandbox --pack-extension="$PWD/dist/ext" --pack-extension-key="$RUNNER_TEMP/key.pem" --no-message-box
           rm "$RUNNER_TEMP/key.pem"
           mv dist/ext.crx "plugwarden-$GITHUB_REF_NAME.crx"
           (cd dist/ext && zip -qr "../../plugwarden-$GITHUB_REF_NAME.zip" .)
