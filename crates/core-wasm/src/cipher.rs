@@ -11,10 +11,16 @@
 //!   `bankAccount`, `driversLicense`, `passport`, `fields[]`, `passwordHistory[]`
 //! - `attachments[].fileName`
 //! - `key` (cipher key): an EncString wrapping a symmetric key, used for all of the above.
+//!
+//! Attachment bodies are encrypted with their own key (`attachments[].key`, wrapped like the fields).
 
 use std::str::FromStr;
 
-use bitwarden_crypto::{EncString, KeyDecryptable, KeyEncryptable, SymmetricCryptoKey};
+use base64::{Engine, engine::general_purpose::STANDARD};
+use bitwarden_crypto::{
+    EncString, KeyDecryptable, KeyEncryptable, OctetStreamBytes, SymmetricCryptoKey,
+    SymmetricKeyAlgorithm,
+};
 use serde_json::{Map, Value, json};
 
 use crate::api::{Result, Session, decrypt_symmetric_key, err};
@@ -148,6 +154,56 @@ pub fn encrypt(s: &Session, cipher: &mut Value) -> Result<()> {
     })
 }
 
+/// Decrypts a downloaded attachment body (EncArrayBuffer). `cipher` may be the decrypted or the
+/// encrypted cipher JSON: only `organizationId` and the wrapped keys are read.
+pub fn decrypt_attachment(s: &Session, cipher: &Value, id: &str, data: &[u8]) -> Result<Vec<u8>> {
+    let obj = cipher.as_object().ok_or("cipher is not an object")?;
+    let (base, item) = cipher_keys(s, obj)?;
+    let att = get_ci(obj, "attachments")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_object)
+        .find(|a| str_ci(a, "id") == Some(id))
+        .ok_or("attachment not found")?;
+    // shortcut: attachments from before per-attachment keys (no `key`) are not supported; add if a vault has them.
+    let wrapped = str_ci(att, "key").ok_or("attachment has no key")?;
+    let key = decrypt_symmetric_key(item.as_ref().unwrap_or(base), wrapped)?;
+    EncString::from_buffer(data)
+        .map_err(err)?
+        .decrypt_with_key(&key)
+        .map_err(err)
+}
+
+/// A new attachment for `cipher`: a fresh key wrapped like the fields, the encrypted file name,
+/// and the encrypted body (base64) for POST /api/ciphers/<id>/attachment/v2.
+pub fn encrypt_attachment(
+    s: &Session,
+    cipher: &Value,
+    file_name: &str,
+    data: &[u8],
+) -> Result<Value> {
+    let obj = cipher.as_object().ok_or("cipher is not an object")?;
+    let (base, item) = cipher_keys(s, obj)?;
+    let wrapping = item.as_ref().unwrap_or(base);
+    let key = SymmetricCryptoKey::make(SymmetricKeyAlgorithm::Aes256CbcHmac);
+    let wrapped = (&OctetStreamBytes::from(key.to_encoded().to_vec()))
+        .encrypt_with_key(wrapping)
+        .map_err(err)?;
+    let name: EncString = file_name
+        .to_owned()
+        .encrypt_with_key(wrapping)
+        .map_err(err)?;
+    let body = (&OctetStreamBytes::from(data.to_vec()))
+        .encrypt_with_key(&key)
+        .map_err(err)?
+        .to_buffer()
+        .map_err(err)?;
+    Ok(
+        json!({ "key": wrapped.to_string(), "fileName": name.to_string(), "data": STANDARD.encode(body) }),
+    )
+}
+
 fn id_of(v: &Value) -> Value {
     v.as_object()
         .and_then(|o| get_ci(o, "id"))
@@ -168,15 +224,29 @@ pub fn decrypt_list(s: &Session, ciphers: Vec<Value>) -> Value {
     json!({ "ciphers": ok, "failed": failed })
 }
 
+/// Folders, and collections (whose names use their organization's key).
 pub fn decrypt_folders(s: &Session, folders: Vec<Value>) -> Value {
     let mut ok = Vec::with_capacity(folders.len());
     let mut failed = Vec::new();
     for mut f in folders {
         let r = match f.as_object_mut() {
-            Some(obj) => match obj.iter_mut().find(|(k, _)| k.eq_ignore_ascii_case("name")) {
-                Some((_, name)) => walk(name, &mut |v| decrypt_str(&s.user, v)),
-                None => Ok(()),
-            },
+            Some(obj) => {
+                let key = match str_ci(obj, "organizationId") {
+                    Some(org) => s
+                        .orgs
+                        .get(&org.to_ascii_lowercase())
+                        .ok_or("missing organization key"),
+                    None => Ok(&s.user),
+                };
+                match (
+                    key,
+                    obj.iter_mut().find(|(k, _)| k.eq_ignore_ascii_case("name")),
+                ) {
+                    (Ok(key), Some((_, name))) => walk(name, &mut |v| decrypt_str(key, v)),
+                    (Err(e), _) => Err(e.into()),
+                    (Ok(_), None) => Ok(()),
+                }
+            }
             None => Err("folder is not an object".into()),
         };
         match r {

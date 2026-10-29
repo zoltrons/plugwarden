@@ -72,7 +72,8 @@ on 2026-10-29 by `spike/vw-flow.mjs`, unless marked otherwise.
 
 * **CORS allows only `DOMAIN`, `file://` and the desktop origin**, never `chrome-extension://`
   (`src/util.rs` `Cors::get_allowed_origin`). The extension therefore needs a host permission for the
-  server; it is requested per origin at setup.
+  server; since the parity work the `https://*/*` / `http://*/*` host permissions are required at
+  install, which covers it.
 * 2FA challenge: HTTP 400 `{"error":"invalid_grant","TwoFactorProviders":["0"],
   "TwoFactorProviders2":{"0":null,"1":{"Email":"a***@x"}}}`. Provider ids arrive as strings.
 * Retry with form fields `twoFactorProvider`, `twoFactorToken`, `twoFactorRemember=1`; success adds
@@ -113,9 +114,37 @@ on 2026-10-29 by `spike/vw-flow.mjs`, unless marked otherwise.
   SSO login (`SSO_SIGNUPS_MATCH_EMAIL` default). A `:clientId=browser` suffix on `state` keeps the
   connector page from starting a web vault login.
 
+## Parity work (verified against 1.37.4 by the e2e suite unless marked otherwise)
+
+* **YubiKey OTP 2FA** (provider `3`): a typed 44-character code sent as `twoFactorToken`. Vaultwarden
+  checks it with Yubico's servers (`YUBICO_CLIENT_ID`/`YUBICO_SECRET_KEY`), so the e2e test stands in
+  for the server's 2FA answer and only checks what we send. **Not verified with a real key.**
+* **Send edit**: `PUT /api/sends/<id>` takes the full `SendData` again with the same `key` (the link
+  stays valid). A missing `password` keeps the current one (`/remove-password` exists, not used);
+  text sends must carry `text`; a file send's `file` is ignored (immutable). `disabled: true` makes
+  `send_access` fail.
+* **Website icons**: `GET <server>/icons/<host>/icon.png` answers 200 `image/png` for any host,
+  falling back to a generic icon (also for `localhost`).
+* **Attachments**: `GET /api/ciphers/<id>/attachment/<attId>` → `{url}` (signed, absolute, no bearer
+  needed); the body is an EncArrayBuffer under the attachment's own key (`attachments[].key`, wrapped
+  with the cipher key, else the org/user key); `fileName` uses the cipher's field key. Upload:
+  `POST /api/ciphers/<id>/attachment/v2 {key, fileName, fileSize}` → `{attachmentId, …}`, then
+  multipart `POST /api/ciphers/<id>/attachment/<attachmentId>` with field `data`.
+* **Organizations**: `profile.organizations[]` carries `key` (type 4, RSA-OAEP-SHA1 to the user's
+  public key) and the plain `name`; `collections[]` names are EncStrings under the org key. The test
+  harness creates an org with `POST /api/organizations {name, billingEmail, planType: 0,
+  collectionName, key, keys{publicKey, encryptedPrivateKey}}` and an org item with
+  `POST /api/ciphers/create {cipher (with encryptedFor), collectionIds}`; the extension decrypts both.
+* **Import**: `POST /api/ciphers/import {ciphers[] (each with encryptedFor), folders[{name}],
+  folderRelationships[{key: cipherIndex, value: folderIndex}]}`; folder ids the user does not own
+  become new folders. **Export** re-checks the master password with
+  `POST /api/accounts/verify-password {masterPasswordHash}` (400 when wrong).
+* **PIN**: client-only (bitwarden-crypto `PinKey`: the PIN through the account KDF with the email as
+  salt, stretched; wraps the user key). Nothing goes to the server.
+
 ## Not yet verified
 
-* Organization ciphers / org keys against a real server (decapsulation code exists, untested on VW).
+* Organization items are read-only in Plugwarden; editing them (collection permissions) is untested.
 * Cipher key encryption (`key` on new ciphers) and V2 "blob" ciphers (`data` =
   `{"format_version":1,"wrapped_cek":...}`): present in sdk-internal test vectors; whether Vaultwarden
   1.37.4 stores/returns blob ciphers is unknown.

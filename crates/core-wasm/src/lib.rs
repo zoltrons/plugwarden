@@ -49,6 +49,43 @@ pub fn unlock_user_key(
     api::unlock_user_key(handle, protected_user_key, encrypted_private_key.as_deref()).map_err(js)
 }
 
+/// The unlocked user key wrapped with a key derived from `pin` (account KDF, email salt).
+#[wasm_bindgen(js_name = pinProtectUserKey)]
+pub fn pin_protect_user_key(
+    pin: &str,
+    email: &str,
+    kdf_type: u8,
+    iterations: u32,
+    memory: u32,
+    parallelism: u32,
+) -> Result<String, JsError> {
+    let kdf = api::kdf_from_params(kdf_type, iterations, memory, parallelism).map_err(js)?;
+    api::pin_protect_user_key(pin, email, &kdf).map_err(js)
+}
+
+#[wasm_bindgen(js_name = unlockWithPin)]
+#[allow(clippy::too_many_arguments)]
+pub fn unlock_with_pin(
+    pin: &str,
+    email: &str,
+    kdf_type: u8,
+    iterations: u32,
+    memory: u32,
+    parallelism: u32,
+    pin_protected_user_key: &str,
+    encrypted_private_key: Option<String>,
+) -> Result<(), JsError> {
+    let kdf = api::kdf_from_params(kdf_type, iterations, memory, parallelism).map_err(js)?;
+    api::unlock_with_pin(
+        pin,
+        email,
+        &kdf,
+        pin_protected_user_key,
+        encrypted_private_key.as_deref(),
+    )
+    .map_err(js)
+}
+
 #[wasm_bindgen(js_name = setOrgKeys)]
 pub fn set_org_keys(org_keys_json: &str) -> Result<usize, JsError> {
     api::set_org_keys(org_keys_json).map_err(js)
@@ -94,6 +131,22 @@ pub fn decrypt_send_list(sends_json: &str) -> Result<String, JsError> {
 #[wasm_bindgen(js_name = encryptSend)]
 pub fn encrypt_send(send_json: &str) -> Result<String, JsError> {
     api::encrypt_send(send_json).map_err(js)
+}
+
+/// `cipherJson`: the cipher holding attachment `id`. Returns the decrypted file.
+#[wasm_bindgen(js_name = decryptAttachment)]
+pub fn decrypt_attachment(cipher_json: &str, id: &str, data: &[u8]) -> Result<Vec<u8>, JsError> {
+    api::decrypt_attachment(cipher_json, id, data).map_err(js)
+}
+
+/// Output: `{"key", "fileName", "data"}` (data: encrypted body, base64).
+#[wasm_bindgen(js_name = encryptAttachment)]
+pub fn encrypt_attachment(
+    cipher_json: &str,
+    file_name: &str,
+    data: &[u8],
+) -> Result<String, JsError> {
+    api::encrypt_attachment(cipher_json, file_name, data).map_err(js)
 }
 
 /// `wrappedKey`: the send's `key` field. Returns the encrypted file body to upload.

@@ -34,6 +34,7 @@ const paths = {
   close: "M6 6l12 12 M18 6L6 18",
   panel: "M4 4h16v16H4z M15 4v16",
   attach: "M20 11l-8 8a5 5 0 0 1-7-7l8-8a3.5 3.5 0 0 1 5 5l-8 8a2 2 0 0 1-3-3l7-7",
+  download: "M12 4v11 M7 10l5 5 5-5 M5 20h14",
 } as const;
 
 export type IconName = keyof typeof paths;

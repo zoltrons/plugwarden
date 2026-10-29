@@ -54,5 +54,5 @@ jobs:
       - uses: actions/download-artifact@v4
         with: { name: wasm, path: dist/wasm }
       - run: npm i -g binaryen@132.0.0 && bash tools/build-wasm.sh --features register --out dist/wasm-register
-      - run: node tools/fetch-psl.mjs && node tools/build.mjs --e2e-host=http://localhost:8080,http://localhost:8099,http://127.0.0.1:8099
+      - run: node tools/fetch-psl.mjs && node tools/build.mjs --e2e
       - run: npm run test:e2e

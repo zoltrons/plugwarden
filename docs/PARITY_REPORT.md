@@ -1,0 +1,90 @@
+# Parity report: audit findings 7–9 and the official extension's remaining features
+
+Date: 2026-10-29. Helium 156.0.8078.47 (headless) against Vaultwarden 1.37.4. Follows
+`PHASE4_REPORT.md` and the parity commit `8010209` (inline menu, save bar, editing, trash, folders).
+
+## Audit findings
+
+* **7 – stale architecture text.** `ARCHITECTURE.md` now describes the current model: required
+  `https://*/*` + `http://*/*` host permissions, the idle `content.js`, the web-accessible `menu.html` /
+  `bar.html` frames, the optional `privacy` permission, the per-tab session keys `inline:<tabId>` /
+  `save:<tabId>`, plus the PIN / timeout-action / generator-history storage added below.
+* **8 – redundant permission requests.** `activeTab` is gone from the manifest (fills use
+  `chrome.scripting` and `tabs.query` URLs, both covered by the host permissions; the e2e fill,
+  shortcut and context-menu paths pass without it). The passkeys toggle no longer asks for
+  `https://*/*`.
+* **9 – build flag.** `--e2e-host=<origins>` is now `--e2e` (the origins were never used); the e2e
+  header, CI and build comment are updated.
+* Found on the way: the settings switches did not react to mouse clicks (the decorative `span` sat on
+  top of the invisible checkbox); `pointer-events: none` fixes it. Keyboard and the generator's
+  label-wrapped switches were not affected.
+
+## Parity items done
+
+| Item | How | Test |
+|---|---|---|
+| Timeout action "log out" | Setting next to auto-lock; the auto-lock alarm, system lock and browser start log out instead of locking | e2e |
+| YubiKey OTP 2FA (provider 3) | "YubiKey" chip, text field (no numeric keypad, the key types + Enter) | e2e with the server's 2FA answer stubbed in the SW |
+| Website icons | `<server>/icons/<host>/icon.png` on login tiles (list, "On this site", item view); "Show website icons" setting, on by default like the official client | e2e |
+| TOTP copy after fill | Popup fill, Ctrl+Shift+L, context menu and inline menu copy the current code (cleared like any copy); setting, on by default | e2e |
+| Action badge | Number of logins for the active tab; cleared on every tab when locked | e2e |
+| Context-menu submenu | "Fill with Plugwarden" lists the tab's logins; locked or no match: the bare entry opens the popup | e2e (via the click handler; Chrome has no API to open a context menu) |
+| Send edit / disable | Edit name, deletion date, max access count, new password, disabled; same key so the link keeps working | e2e (recipient flow with node:crypto) |
+| Username generator | Random word (EFF list, capitalize, 4 digits), plus-addressed email (account email by default), catch-all | e2e |
+| Generator history | Copied generator values, encrypted with the user key, newest 100, clearable; removed on logout | e2e (incl. "not in clear in storage") |
+| PIN unlock | bitwarden-crypto `PinKey` over the account KDF; wrapped key in `storage.session`, PIN itself encrypted with the user key so the first master-password unlock after a restart re-arms it; 5 wrong PINs log out | Rust unit + e2e |
+| Attachments | List, download (decrypted in the worker, saved through a blob link), upload for personal items | Rust unit + e2e (server copy checked) |
+| Organization / collection names | Item details show them; collection names decrypted with the org key | e2e with an org created through the API using node:crypto |
+| Import / export | Bitwarden JSON (unencrypted). Export: personal items and folders, after the server re-checks the master password. Import: validated and encrypted in the worker, `POST /api/ciphers/import`, unknown item types skipped | e2e |
+
+No new permissions and no new dependencies. Rust: `PinKey`, `OctetStreamBytes` and
+`SymmetricKeyAlgorithm` come from the already pinned `bitwarden-crypto`.
+
+## Verified
+
+* Rust unit 8/8 (new: `pin_unlock_roundtrip`, `attachment_roundtrip`). JS unit 8/8. Typecheck clean.
+* sdk-internal test vectors still pass. `npm run size` passes (with the glue budget change below).
+* E2E 58/58 (13 new steps, several existing ones extended), two full runs in a row; popup first
+  render 21.8 ms. The release manifest has no `activeTab`, `privacy` stays optional.
+
+## Sizes (release)
+
+| file | raw | brotli |
+|---|---:|---:|
+| background.js | 45.4 KiB | 13.1 KiB |
+| popup.js + popup.css | 48.8 + 16.3 KiB | 13.8 + 3.4 KiB |
+| worker.js + offscreen.js | 30.7 + 7.2 KiB | 8.7 + 2.4 KiB |
+| content.js (all pages, idle until focus) | 3.8 KiB | — |
+| core_wasm_bg.wasm | 655.8 KiB (was 635.3) | 206.1 KiB |
+| core_wasm.js (wasm-bindgen glue, bundled into worker.js) | 28.6 KiB | 3.7 KiB |
+
+The WASM grew by 20.5 KiB (PIN key derivation path, attachment encrypt/decrypt). The glue file went
+from about 23.4 KiB to 28.6 KiB (four new exports, ~1.5 KiB of unminified glue each) and passed its
+24 KiB budget, so **`tools/size-budget.json` now allows 30 KiB for `core_wasm.js`**. That file is not
+shipped as is: it is bundled, minified, into `worker.js`. All other budgets unchanged and met.
+
+## Not done / not verified
+
+* **YubiKey OTP** never reached a real Yubico validation (no key, no Yubico API credentials).
+* **PIN**: only the "require the master password after a browser restart" mode (the official
+  default); a PIN that survives restarts is not offered. Restart itself is simulated by emptying the
+  session key, not by restarting the browser.
+* **Timeout "log out" on browser start** is not tested (the test cannot restart the browser); it logs
+  out on every browser start, whatever the timeout length.
+* **Attachments**: no delete, no attachments on organization items, files up to 25 MB (base64 through
+  two message hops, like Send). Attachments without their own key (very old vaults) are refused.
+* **Send edit**: the text of a text send and "hide text" cannot be changed after creation; removing
+  a password is not offered.
+* **Import / export**: only unencrypted Bitwarden JSON. No CSV, no password-protected or
+  account-encrypted JSON, no other managers' formats; organization items are not exported (like the
+  official individual export); attachments are not part of either.
+* **Badge / context menu** follow the active tab only (`tabs.onActivated`, `onUpdated` complete,
+  window focus, and after popup actions). A login saved from the save bar updates them on the next tab
+  event. The context menu itself was not opened (no automation API), only its entries and click handler.
+* **Username generator** is not offered inside the item editor (only in the Generator tab); no
+  forwarded-email services (out of scope).
+* Generator history records values when copied from the Generator tab, not when the editor's
+  "Generate password" fills a field.
+* Organization items stay read-only.
+* Not touched: the setup screen still calls `chrome.permissions.request` for the server origin;
+  with required host permissions this is a no-op prompt-wise and was left as is.

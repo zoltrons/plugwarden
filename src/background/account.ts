@@ -93,6 +93,7 @@ async function completeLogin(email: string, kdf: KdfParams, handle: number, t: T
     accessExpiresAt: tokens.expiresAt,
     pending: undefined,
     ssoError: undefined,
+    pin: undefined,
   });
   await touchAutoLock();
 }
@@ -211,12 +212,62 @@ export async function unlock(password: string): Promise<void> {
   }
   await updateSession({ unlocked: true });
   await touchAutoLock();
+  // After a browser restart the PIN-wrapped key is gone: re-arm it from the stored PIN.
+  const { pin } = await getSession();
+  if (account.protectedPin && pin?.email !== account.email) {
+    const [plain] = await coreCall<string[]>({ op: "decryptText", values: [account.protectedPin] });
+    if (plain) await armPin(account, plain);
+  } else if (pin?.attempts) await updateSession({ pin: { ...pin, attempts: 0 } });
+}
+
+// ---------- PIN (Bitwarden "unlock with PIN", locked with the master password on browser restart) ----------
+
+const PIN_MAX_ATTEMPTS = 5;
+
+async function armPin(account: Account, pin: string): Promise<void> {
+  const key = await coreCall<string>({ op: "pinProtect", pin, email: account.email, kdf: account.kdf });
+  await updateSession({ pin: { email: account.email, key, attempts: 0 } });
+}
+
+/** Turns PIN unlock on, or off without `pin`. Needs the unlocked vault. */
+export async function setPin(pin?: string): Promise<void> {
+  const account = await getLocal("account");
+  if (!account) throw new UserError("wrongPhase", "Not logged in");
+  if (pin === undefined) {
+    const { protectedPin: _, ...rest } = account;
+    await setLocal("account", rest);
+    await updateSession({ pin: undefined });
+    return;
+  }
+  const [protectedPin] = await coreCall<string[]>({ op: "encryptText", values: [pin] });
+  await armPin(account, pin);
+  await setLocal("account", { ...account, protectedPin: protectedPin! });
+}
+
+export async function unlockWithPin(pin: string): Promise<void> {
+  const account = await getLocal("account");
+  const { pin: p } = await getSession();
+  if (!account?.protectedPin || !p || p.email !== account.email) throw new UserError("wrongPhase", "Unlock with the master password");
+  try {
+    await coreCall({ op: "unlockPin", pin, email: account.email, kdf: account.kdf, protectedUserKey: p.key, encryptedPrivateKey: account.encryptedPrivateKey });
+  } catch (e) {
+    if (!(e instanceof CoreError)) throw e;
+    // Like the official clients: a few wrong PINs end the session instead of allowing a slow brute force.
+    if (p.attempts + 1 >= PIN_MAX_ATTEMPTS) {
+      await logout();
+      throw new UserError("wrongPassword", "Too many wrong PINs, you have been logged out");
+    }
+    await updateSession({ pin: { ...p, attempts: p.attempts + 1 } });
+    throw new UserError("wrongPassword", "Wrong PIN");
+  }
+  await updateSession({ unlocked: true, pin: { ...p, attempts: 0 } });
+  await touchAutoLock();
 }
 
 export async function logout(): Promise<void> {
   await lockNow();
-  await removeLocal("account", "vault");
-  await updateSession({ accessToken: undefined, accessExpiresAt: undefined });
+  await removeLocal("account", "vault", "genHistory");
+  await updateSession({ accessToken: undefined, accessExpiresAt: undefined, pin: undefined });
 }
 
 /** Returns a valid access token, refreshing it when it expires within a minute. */
@@ -310,7 +361,7 @@ export async function finishSso(url: string, tabId: number): Promise<void> {
       encryptedPrivateKey: t.PrivateKey,
       refreshToken: tokens.refreshToken,
     });
-    await updateSession({ sso: undefined, accessToken: tokens.accessToken, accessExpiresAt: tokens.expiresAt });
+    await updateSession({ sso: undefined, pin: undefined, accessToken: tokens.accessToken, accessExpiresAt: tokens.expiresAt });
   } catch (e) {
     await updateSession({ sso: undefined, ssoError: e instanceof Error ? e.message : String(e) });
     if (!(e instanceof UserError)) throw e;

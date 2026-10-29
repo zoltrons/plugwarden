@@ -258,14 +258,6 @@
   "folder": {
     "message": "Folder"
   },
-  "attachmentsCount": {
-    "message": "$P1$ attachment(s) — download from the web vault",
-    "placeholders": {
-      "p1": {
-        "content": "$1"
-      }
-    }
-  },
   "username": {
     "message": "Username"
   },
@@ -447,7 +439,7 @@
     "message": "Passkeys"
   },
   "passkeysHint": {
-    "message": "Save and use website passkeys with Plugwarden (needs access to websites)"
+    "message": "Save and use website passkeys with Plugwarden"
   },
   "passkeySaveTitle": {
     "message": "Save passkey"
@@ -758,5 +750,123 @@
   },
   "theme_dark": {
     "message": "Dark"
+  },
+  "timeoutAction": {
+    "message": "Timeout action"
+  },
+  "lock": {
+    "message": "Lock"
+  },
+  "providerYubiKey": {
+    "message": "YubiKey"
+  },
+  "yubiKeyHint": {
+    "message": "Touch your YubiKey (it types the code)"
+  },
+  "favicons": {
+    "message": "Show website icons"
+  },
+  "faviconsHint": {
+    "message": "Loaded through your server's icon service"
+  },
+  "autoCopyTotp": {
+    "message": "Copy one-time code after filling"
+  },
+  "autoCopyTotpHint": {
+    "message": "For logins with a TOTP key"
+  },
+  "editSend": {
+    "message": "Edit Send"
+  },
+  "disableSend": {
+    "message": "Disable this Send"
+  },
+  "newPasswordOptional": {
+    "message": "New password (optional)"
+  },
+  "usernameType": {
+    "message": "Username type"
+  },
+  "usernameWord": {
+    "message": "Random word"
+  },
+  "usernamePlus": {
+    "message": "Plus-addressed email"
+  },
+  "usernameCatchAll": {
+    "message": "Catch-all email"
+  },
+  "domain": {
+    "message": "Domain"
+  },
+  "generatorHistory": {
+    "message": "Generator history"
+  },
+  "generatorHistoryEmpty": {
+    "message": "Copied values show up here"
+  },
+  "pin": {
+    "message": "PIN"
+  },
+  "unlockWithPin": {
+    "message": "Unlock with PIN"
+  },
+  "unlockWithPinHint": {
+    "message": "The master password is still needed after a browser restart"
+  },
+  "setPin": {
+    "message": "Set PIN"
+  },
+  "useMasterPassword": {
+    "message": "Use master password"
+  },
+  "usePin": {
+    "message": "Use PIN"
+  },
+  "attachments": {
+    "message": "Attachments"
+  },
+  "download": {
+    "message": "Download"
+  },
+  "addAttachment": {
+    "message": "Add attachment"
+  },
+  "organization": {
+    "message": "Organization"
+  },
+  "collections": {
+    "message": "Collections"
+  },
+  "exportVault": {
+    "message": "Export vault"
+  },
+  "exportHint": {
+    "message": "Unencrypted Bitwarden JSON: keep the file safe"
+  },
+  "exportConfirm": {
+    "message": "Export"
+  },
+  "importVault": {
+    "message": "Import items"
+  },
+  "importHint": {
+    "message": "From a Bitwarden JSON export (unencrypted)"
+  },
+  "imported": {
+    "message": "Imported $P1$ item(s).",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "importSkipped": {
+    "message": "Skipped $P1$ unsupported item(s).",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
   }
 }

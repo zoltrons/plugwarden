@@ -9,15 +9,17 @@ import {
   cancelTwoFactor,
   finishSso,
   login,
+  setPin,
   startSso,
   logout,
   sendTwoFactorEmail,
   submitTwoFactor,
   unlock,
+  unlockWithPin,
   UserError,
 } from "./account.ts";
 import { coreAlive, coreCall } from "./core.ts";
-import { AUTOLOCK_ALARM, lockNow, onIdleStateChanged, touchAutoLock } from "./lock.ts";
+import { AUTOLOCK_ALARM, lockNow, touchAutoLock } from "./lock.ts";
 import {
   getLocal,
   getSession,
@@ -30,8 +32,8 @@ import {
 } from "./store.ts";
 import { handleFrame, handlePage, showBar } from "./inline.ts";
 import { onPasskeyPort, onWindowRemoved, passkeyDecision, passkeyPrompt, setPasskeys } from "./passkey.ts";
-import { AUTOFILL_COMMAND, autofillFromGesture, CONTEXT_MENU_ID, fillActiveTab, pageMatches, readPageLogin } from "./autofill.ts";
-import { CLIPBOARD_ALARM, clearClipboard, deleteFolder, deleteSend, purge, restore, saveFolder, list as vaultList, requireUnlocked, save, saveSend, sendList, sync, trash } from "./vault.ts";
+import { AUTOFILL_COMMAND, autofillFromGesture, fillActiveTab, onContextMenu, pageMatches, readPageLogin, updateTabUi } from "./autofill.ts";
+import { addAttachment, addGeneratorHistory, CLIPBOARD_ALARM, downloadAttachment, exportVault, importVault, clearClipboard, clearGeneratorHistory, deleteFolder, generatorHistory, deleteSend, purge, restore, saveFolder, list as vaultList, requireUnlocked, save, saveSend, sendList, sync, trash } from "./vault.ts";
 
 async function getState(): Promise<State> {
   const [server, account, session, settings] = await Promise.all([
@@ -51,7 +53,8 @@ async function getState(): Promise<State> {
     await updateSession({ unlocked: false });
     unlocked = false;
   }
-  return { phase: unlocked ? "unlocked" : "locked", ...base, email: account.email };
+  const pin = { pinSet: !!account.protectedPin, pinUnlock: !!account.protectedPin && session.pin?.email === account.email };
+  return { phase: unlocked ? "unlocked" : "locked", ...base, ...pin, email: account.email };
 }
 
 async function setServer(input: string): Promise<void> {
@@ -83,10 +86,17 @@ async function handle(req: Request): Promise<unknown> {
     case "deleteItem":
     case "restoreItem":
     case "purgeItem":
+    case "downloadAttachment":
+    case "addAttachment":
+    case "exportVault":
+    case "importVault":
     case "saveFolder":
     case "deleteFolder":
     case "totp":
     case "generate":
+    case "generatorHistory":
+    case "generatorHistoryAdd":
+    case "generatorHistoryClear":
     case "sendList":
     case "saveSend":
     case "deleteSend": {
@@ -99,9 +109,16 @@ async function handle(req: Request): Promise<unknown> {
       if (req.type === "deleteItem") return trash(req.id);
       if (req.type === "restoreItem") return restore(req.id);
       if (req.type === "purgeItem") return purge(req.id);
+      if (req.type === "downloadAttachment") return downloadAttachment(req.cipherId, req.attachmentId);
+      if (req.type === "addAttachment") return addAttachment(req.cipherId, req.file);
+      if (req.type === "exportVault") return exportVault(req.password);
+      if (req.type === "importVault") return importVault(req.text);
       if (req.type === "saveFolder") return saveFolder(req.name, req.id);
       if (req.type === "deleteFolder") return deleteFolder(req.id);
       if (req.type === "totp") return coreCall({ op: "totp", id: req.id });
+      if (req.type === "generatorHistory") return generatorHistory();
+      if (req.type === "generatorHistoryAdd") return addGeneratorHistory(req.value);
+      if (req.type === "generatorHistoryClear") return clearGeneratorHistory();
       if (req.type === "sendList") return sendList();
       if (req.type === "saveSend") return saveSend(req.send, req.file);
       if (req.type === "deleteSend") return deleteSend(req.id);
@@ -141,6 +158,13 @@ async function handle(req: Request): Promise<unknown> {
     case "unlock":
       await unlock(req.password);
       break;
+    case "unlockPin":
+      await unlockWithPin(req.pin);
+      break;
+    case "setPin":
+      await requireUnlocked();
+      await setPin(req.pin);
+      break;
     case "lock":
       await lockNow();
       break;
@@ -159,9 +183,12 @@ async function handle(req: Request): Promise<unknown> {
       await setLocal("settings", {
         ...current,
         autoLockMinutes: req.autoLockMinutes ?? current.autoLockMinutes,
+        timeoutAction: req.timeoutAction ?? current.timeoutAction,
         lockOnSystemLock: req.lockOnSystemLock ?? current.lockOnSystemLock,
         inlineMenu: req.inlineMenu ?? current.inlineMenu,
         savePrompt: req.savePrompt ?? current.savePrompt,
+        favicons: req.favicons ?? current.favicons,
+        autoCopyTotp: req.autoCopyTotp ?? current.autoCopyTotp,
         neverSave: req.clearNeverSave ? [] : current.neverSave,
       });
       break;
@@ -238,14 +265,21 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, reply: (r: Response<
     return false;
   }
   const run = () => handle(req).then((data) => reply({ ok: true, data } as Response<unknown>), (e: unknown) => reply(toError(e)));
-  // Reads run immediately; anything that changes state or talks to the server is queued.
-  if (["getState", "vaultList", "getItem", "totp", "generate", "pageMatches", "readPageLogin", "sendList", "passkeyPrompt"].includes(req.type)) void run();
-  else queue = queue.then(run, run);
+  // Reads run immediately; anything that changes state or talks to the server is queued, and may
+  // change what the badge and the context menu show (unlock, lock, sync, edits).
+  if (["getState", "vaultList", "getItem", "totp", "generate", "generatorHistory", "downloadAttachment", "pageMatches", "readPageLogin", "sendList", "passkeyPrompt"].includes(req.type)) void run();
+  else queue = queue.then(run, run).then(updateTabUi);
   return true;
 });
 
+/** Auto-lock, system lock and browser restart: lock, or log out if the user chose that. */
+const timeout = async () => {
+  await ((await getSettings()).timeoutAction === "logout" ? logout() : lockNow());
+  await updateTabUi();
+};
+
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === AUTOLOCK_ALARM) void lockNow();
+  if (alarm.name === AUTOLOCK_ALARM) void timeout();
   if (alarm.name === CLIPBOARD_ALARM) void clearClipboard();
 });
 
@@ -258,26 +292,37 @@ chrome.windows.onRemoved.addListener(onWindowRemoved);
 chrome.tabs.onRemoved.addListener((tabId) => void clearTabState(tabId));
 
 // A login is usually submitted right before a navigation: show the save bar once the next page is there.
-chrome.tabs.onUpdated.addListener((tabId, info) => {
-  if (info.status === "complete") void showBar(tabId);
+chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
+  if (info.status !== "complete") return;
+  void showBar(tabId);
+  if (tab.active) void updateTabUi();
 });
 
-chrome.idle.onStateChanged.addListener((state) => void onIdleStateChanged(state));
+chrome.tabs.onActivated.addListener(() => void updateTabUi());
+chrome.windows.onFocusChanged.addListener((windowId) => {
+  if (windowId !== chrome.windows.WINDOW_ID_NONE) void updateTabUi();
+});
+
+chrome.idle.onStateChanged.addListener(async (state) => {
+  if (state === "locked" && (await getSettings()).lockOnSystemLock) await timeout();
+});
 
 chrome.commands.onCommand.addListener((command, tab) => {
   if (command === AUTOFILL_COMMAND) void autofillFromGesture(tab);
 });
 
-chrome.contextMenus.onClicked.addListener((info, tab) => {
-  if (info.menuItemId === CONTEXT_MENU_ID) void autofillFromGesture(tab);
-});
+chrome.contextMenus.onClicked.addListener((info, tab) => void onContextMenu(info, tab));
 
 chrome.runtime.onInstalled.addListener(() => {
   void restrictStorageAccess();
-  chrome.contextMenus.create({ id: CONTEXT_MENU_ID, title: chrome.i18n.getMessage("ctxAutofill"), contexts: ["editable"] });
+  void updateTabUi();
 });
 
 // Test-only hook (commands and context menus cannot be triggered from automation); compiled out otherwise.
 declare const E2E: boolean;
-if (E2E) Object.assign(globalThis, { plugwardenTest: { autofillFromGesture } });
-chrome.runtime.onStartup.addListener(() => void restrictStorageAccess());
+if (E2E) Object.assign(globalThis, { plugwardenTest: { autofillFromGesture, onContextMenu } });
+chrome.runtime.onStartup.addListener(() => {
+  void restrictStorageAccess();
+  // The restart already locked the vault (session storage is gone); "log out" goes one step further.
+  void timeout();
+});

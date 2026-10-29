@@ -9,7 +9,7 @@
 use std::{cell::RefCell, collections::HashMap, num::NonZeroU32, str::FromStr};
 
 use bitwarden_crypto::{
-    BitwardenLegacyKeyBytes, EncString, HashPurpose, Kdf, KeyDecryptable, MasterKey,
+    BitwardenLegacyKeyBytes, EncString, HashPurpose, Kdf, KeyDecryptable, MasterKey, PinKey,
     Pkcs8PrivateKeyBytes, PrivateKey, SymmetricCryptoKey, UnsignedSharedKey,
 };
 use serde_json::Value;
@@ -88,6 +88,34 @@ pub fn unlock_user_key(
         mk.decrypt_user_key(EncString::from_str(protected_user_key).map_err(err)?)
             .map_err(err)
     })?;
+    open_session(user, encrypted_private_key)?;
+    free_master_key(handle);
+    Ok(())
+}
+
+/// Bitwarden PIN unlock: the user key wrapped with a `PinKey` (the PIN through the account KDF,
+/// salted with the email). Needs an unlocked session.
+pub fn pin_protect_user_key(pin: &str, email: &str, kdf: &Kdf) -> Result<String> {
+    let pin_key = PinKey::derive(pin.as_bytes(), email.as_bytes(), kdf).map_err(err)?;
+    with_session(|s| Ok(pin_key.encrypt_user_key(&s.user).map_err(err)?.to_string()))
+}
+
+/// Opens the session from a user key wrapped by `pin_protect_user_key`. A wrong PIN fails the MAC.
+pub fn unlock_with_pin(
+    pin: &str,
+    email: &str,
+    kdf: &Kdf,
+    pin_protected_user_key: &str,
+    encrypted_private_key: Option<&str>,
+) -> Result<()> {
+    let pin_key = PinKey::derive(pin.as_bytes(), email.as_bytes(), kdf).map_err(err)?;
+    let user = pin_key
+        .decrypt_user_key(EncString::from_str(pin_protected_user_key).map_err(err)?)
+        .map_err(err)?;
+    open_session(user, encrypted_private_key)
+}
+
+fn open_session(user: SymmetricCryptoKey, encrypted_private_key: Option<&str>) -> Result<()> {
     let private = match encrypted_private_key {
         Some(s) if !s.is_empty() => {
             let der: Vec<u8> = EncString::from_str(s)
@@ -98,7 +126,6 @@ pub fn unlock_user_key(
         }
         _ => None,
     };
-    free_master_key(handle);
     SESSION.with_borrow_mut(|s| {
         *s = Some(Session {
             user,
@@ -189,6 +216,18 @@ pub fn encrypt_send(send_json: &str) -> Result<String> {
     Ok(send.to_string())
 }
 
+pub fn decrypt_attachment(cipher_json: &str, id: &str, data: &[u8]) -> Result<Vec<u8>> {
+    let cipher: Value = serde_json::from_str(cipher_json).map_err(err)?;
+    with_session(|s| crate::cipher::decrypt_attachment(s, &cipher, id, data))
+}
+
+pub fn encrypt_attachment(cipher_json: &str, file_name: &str, data: &[u8]) -> Result<String> {
+    let cipher: Value = serde_json::from_str(cipher_json).map_err(err)?;
+    with_session(|s| {
+        Ok(crate::cipher::encrypt_attachment(s, &cipher, file_name, data)?.to_string())
+    })
+}
+
 pub fn encrypt_send_file(wrapped_key: &str, data: &[u8]) -> Result<Vec<u8>> {
     with_session(|s| crate::send::encrypt_file(s, wrapped_key, data))
 }
@@ -206,4 +245,50 @@ pub fn make_registration_keys(handle: u32) -> Result<String> {
         })
         .to_string())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use bitwarden_crypto::SymmetricKeyAlgorithm;
+
+    use super::*;
+
+    #[test]
+    fn pin_unlock_roundtrip() {
+        let kdf = kdf_from_params(0, 5000, 0, 0).unwrap();
+        let user = SymmetricCryptoKey::make(SymmetricKeyAlgorithm::Aes256CbcHmac);
+        let expected = user.to_base64();
+        open_session(user, None).unwrap();
+        let wrapped = pin_protect_user_key("1234", "a@example.test", &kdf).unwrap();
+        lock();
+        assert!(unlock_with_pin("1235", "a@example.test", &kdf, &wrapped, None).is_err());
+        assert!(!is_unlocked());
+        unlock_with_pin("1234", "a@example.test", &kdf, &wrapped, None).unwrap();
+        assert_eq!(with_session(|s| Ok(s.user.to_base64())).unwrap(), expected);
+    }
+
+    #[test]
+    fn attachment_roundtrip() {
+        open_session(
+            SymmetricCryptoKey::make(SymmetricKeyAlgorithm::Aes256CbcHmac),
+            None,
+        )
+        .unwrap();
+        let cipher = r#"{"id":"c1","type":2,"name":"n"}"#;
+        let enc: Value =
+            serde_json::from_str(&encrypt_attachment(cipher, "a.txt", b"hello").unwrap()).unwrap();
+        let with_att = serde_json::json!({ "id": "c1", "attachments": [{ "id": "a1", "key": enc["key"], "fileName": enc["fileName"] }] });
+        let body = base64::Engine::decode(
+            &base64::engine::general_purpose::STANDARD,
+            enc["data"].as_str().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            decrypt_attachment(&with_att.to_string(), "a1", &body).unwrap(),
+            b"hello"
+        );
+        let dec = decrypt_cipher(&with_att.to_string()).unwrap();
+        assert!(dec.contains(r#""fileName":"a.txt""#), "{dec}");
+        assert!(decrypt_attachment(&with_att.to_string(), "nope", &body).is_err());
+    }
 }

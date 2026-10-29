@@ -1,7 +1,7 @@
 // Vault screens: list + search + folder filter, item view, Login/Note editor, generator.
 // Talks to the service worker only; decrypted data lives here just while the popup is open.
 import type { FillResult, PageLogin } from "../autofill/page.ts";
-import type { PageMatches, VaultItem, VaultList } from "../shared/messages.ts";
+import type { HistoryEntry, PageMatches, VaultItem, VaultList } from "../shared/messages.ts";
 import { type Child, h, send, t } from "./dom.ts";
 import { icon, type IconName } from "./icons.ts";
 
@@ -9,6 +9,8 @@ type Json = Record<string, unknown>;
 export interface Ctx {
   rerender(): void;
   lock(): void;
+  /** The account email (default for plus-addressed usernames). */
+  email(): string | undefined;
 }
 
 type Route = { kind: "list" } | { kind: "item"; id: string } | { kind: "edit"; isNew: boolean } | { kind: "folders" };
@@ -29,6 +31,7 @@ interface EditDraft {
 const GEN_DEFAULTS: Json = {
   type: "password", length: 20, lowercase: true, uppercase: true, numbers: true, special: true, avoidAmbiguous: false,
   numWords: 5, wordSeparator: "-", capitalize: true, includeNumber: true,
+  usernameType: "word", email: "", domain: "",
 };
 
 const st = {
@@ -48,6 +51,8 @@ const st = {
   draft: undefined as EditDraft | undefined,
   gen: { ...GEN_DEFAULTS },
   generated: "",
+  /** Generator history screen, while open. */
+  history: undefined as HistoryEntry[] | undefined,
   toast: "",
 };
 let totpTimer: ReturnType<typeof setInterval> | undefined;
@@ -57,7 +62,7 @@ export function resetVault(): void {
   Object.assign(st, {
     list: undefined, page: undefined, loading: false, syncing: false, busy: false, error: undefined, route: { kind: "list" }, query: "",
     folder: "", item: undefined, reveal: new Set(), totp: undefined, confirmDelete: false, draft: undefined,
-    gen: { ...GEN_DEFAULTS }, generated: "", toast: "",
+    gen: { ...GEN_DEFAULTS }, generated: "", history: undefined, toast: "",
   });
 }
 
@@ -76,10 +81,29 @@ function hue(s: string): number {
   return x % 360;
 }
 
-export function tile(name: string, type: number): HTMLElement {
+/** The server's icon service (`<server>/icons/<host>/icon.png`); unset when website icons are off. */
+let iconBase: string | undefined;
+export const setIconBase = (base: string | undefined) => (iconBase = base);
+
+function iconUrl(uris: string[]): string | undefined {
+  for (const u of iconBase ? uris : []) {
+    try {
+      const url = new URL(/^[a-z][\w+.-]*:/i.test(u) ? u : `https://${u}`);
+      if (url.protocol === "https:" || url.protocol === "http:") return `${iconBase}/${url.hostname}/icon.png`;
+    } catch {
+      /* not a URL: try the next one */
+    }
+  }
+  return undefined;
+}
+
+export function tile(name: string, type: number, uris: string[] = []): HTMLElement {
   const letter = name.trim().slice(0, 1).toUpperCase();
   const fallback: IconName = type === 2 ? "note" : type === 4 ? "user" : "key";
-  return h("span", { class: "tile", style: `--h:${hue(name)}`, "aria-hidden": "true" }, letter || icon(fallback));
+  const el = h("span", { class: "tile", style: `--h:${hue(name)}`, "aria-hidden": "true" }, letter || icon(fallback));
+  const src = type === 1 ? iconUrl(uris) : undefined;
+  if (src) el.replaceChildren(h("img", { src, alt: "", onerror: () => el.replaceChildren(letter || icon(fallback)) }));
+  return el;
 }
 
 export function toast(ctx: Ctx, text: string) {
@@ -172,7 +196,7 @@ function listView(ctx: Ctx): HTMLElement {
         h(
           "button",
           { type: "button", class: "row", role: "listitem", onclick: () => open(ctx, { kind: "item", id: i.id }) },
-          tile(i.name, i.type),
+          tile(i.name, i.type, i.uris),
           h("div", { class: "body" }, h("span", { class: "title" }, i.failed ? t("decryptFailed") : i.name || t("untitled")), i.sub ? h("span", { class: "sub" }, i.sub) : null),
           i.favorite ? icon("star", t("favorite")) : null,
           icon("chevron"),
@@ -262,7 +286,7 @@ function suggestions(ctx: Ctx): Child {
             h(
               "div",
               { class: "row" },
-              tile(i.name, i.type),
+              tile(i.name, i.type, i.uris),
               h("div", { class: "body" }, h("span", { class: "title" }, i.name), i.sub ? h("span", { class: "sub" }, i.sub) : null),
               h("button", { type: "button", class: "btn tonal small", "aria-label": `${t("fill")} ${i.name}`, onclick: () => void fill(ctx, i.id) }, t("fill")),
             ),
@@ -431,6 +455,24 @@ async function vaultAction(ctx: Ctx, req: Parameters<typeof send>[0], done: stri
   toast(ctx, t(done));
 }
 
+// Same cap as Send files (MAX_SEND_FILE_BYTES in background/vault.ts).
+const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
+
+async function download(ctx: Ctx, cipherId: string, attachmentId: string) {
+  const r = await send<{ fileName: string; data: string }>({ type: "downloadAttachment", cipherId, attachmentId });
+  if (!r.ok) return ((st.error = r.error), ctx.rerender());
+  const url = URL.createObjectURL(new Blob([Uint8Array.fromBase64(r.data.data)]));
+  h("a", { href: url, download: r.data.fileName }).click();
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
+async function upload(ctx: Ctx, cipherId: string, file: File | undefined) {
+  if (!file) return;
+  if (file.size > MAX_ATTACHMENT_BYTES) return ((st.error = t("fileTooLarge")), ctx.rerender());
+  const data = new Uint8Array(await file.arrayBuffer()).toBase64();
+  await vaultAction(ctx, { type: "addAttachment", cipherId, file: { name: file.name, data } }, "saved", false);
+}
+
 function itemView(ctx: Ctx, id: string): HTMLElement {
   const item = st.item && st.item.id === id ? st.item : undefined;
   if (!item) {
@@ -463,7 +505,9 @@ function itemView(ctx: Ctx, id: string): HTMLElement {
   const fields = Array.isArray(item.fields) ? (item.fields as Json[]) : [];
   const history = Array.isArray(item.passwordHistory) ? (item.passwordHistory as Json[]) : [];
   const folder = st.list?.folders.find((f) => f.id === item.folderId);
-  const attachments = Array.isArray(item.attachments) ? item.attachments.length : 0;
+  const attachments = Array.isArray(item.attachments) ? (item.attachments as Json[]) : [];
+  const org = st.list?.organizations?.find((o) => o.id === item.organizationId);
+  const collections = (Array.isArray(item.collectionIds) ? (item.collectionIds as string[]) : []).map((c) => st.list?.collections?.find((x) => x.id === c)?.name).filter(Boolean);
   const date = (v: unknown) => (typeof v === "string" && v ? new Date(v).toLocaleString() : "");
   const passkeys = Array.isArray(login?.fido2Credentials) ? (login!.fido2Credentials as Json[]).length : 0;
   const confirm = (fn: () => void) => () => (st.confirmDelete ? fn() : ((st.confirmDelete = true), ctx.rerender()));
@@ -484,7 +528,7 @@ function itemView(ctx: Ctx, id: string): HTMLElement {
         : null,
       editable ? iconButton("edit", t("edit"), () => startEdit(ctx, item)) : null,
     ),
-    h("div", { class: "hero" }, tile(str(item.name), type), h("div", { class: "body" }, h("h1", {}, str(item.name) || t("untitled")), h("span", { class: "sub" }, t(TYPE_LABEL[type] ?? "untitled")))),
+    h("div", { class: "hero" }, tile(str(item.name), type, uris), h("div", { class: "body" }, h("h1", {}, str(item.name) || t("untitled")), h("span", { class: "sub" }, t(TYPE_LABEL[type] ?? "untitled")))),
     errorBox(),
     inTrash ? h("div", { class: "notice warn" }, icon("trash"), h("div", {}, t("inTrash"))) : summary?.readOnly ? h("div", { class: "notice" }, icon("lock"), h("div", {}, t("readOnlyItem"))) : null,
     rows.length ? h("div", { class: "group" }, ...rows) : null,
@@ -511,9 +555,31 @@ function itemView(ctx: Ctx, id: string): HTMLElement {
           : []),
     ),
     ...section(
+      t("attachments"),
+      ...attachments.map((a) =>
+        h(
+          "div",
+          { class: "row" },
+          icon("attach"),
+          h("div", { class: "body" }, h("span", { class: "title ellipsis" }, str(a.fileName) || t("untitled")), h("span", { class: "sub" }, str(a.sizeName))),
+          iconButton("download", `${t("download")} ${str(a.fileName)}`, () => void download(ctx, id, str(a.id))),
+        ),
+      ),
+      editable && !inTrash && !item.organizationId
+        ? h(
+            "label",
+            { class: "row" },
+            icon("plus"),
+            h("div", { class: "body" }, h("span", { class: "title" }, t("addAttachment"))),
+            h("input", { type: "file", class: "sr-only", "aria-label": t("addAttachment"), onchange: (e: Event) => void upload(ctx, id, (e.target as HTMLInputElement).files?.[0]) }),
+          )
+        : null,
+    ),
+    ...section(
       t("details"),
+      org ? h("div", { class: "row" }, icon("shield"), h("div", { class: "body" }, h("span", { class: "label" }, t("organization")), h("span", { class: "value" }, org.name))) : null,
+      collections.length ? h("div", { class: "row" }, icon("folder"), h("div", { class: "body" }, h("span", { class: "label" }, t("collections")), h("span", { class: "value" }, collections.join(", ")))) : null,
       folder ? h("div", { class: "row" }, icon("folder"), h("div", { class: "body" }, h("span", { class: "label" }, t("folder")), h("span", { class: "value" }, folder.name))) : null,
-      attachments ? h("div", { class: "row" }, icon("attach"), h("div", { class: "body" }, h("span", { class: "value" }, t("attachmentsCount", String(attachments))))) : null,
       item.revisionDate ? h("div", { class: "row" }, icon("edit"), h("div", { class: "body" }, h("span", { class: "label" }, t("lastEdited")), h("span", { class: "value" }, date(item.revisionDate)))) : null,
     ),
     h(
@@ -726,12 +792,47 @@ export function vaultScreen(ctx: Ctx): HTMLElement {
 
 async function regenerate(ctx: Ctx) {
   const r = await send<string>({ type: "generate", options: st.gen });
-  if (r.ok) st.generated = r.data;
+  st.generated = r.ok ? r.data : "";
+  st.error = r.ok ? undefined : r.error;
+  ctx.rerender();
+}
+
+async function openHistory(ctx: Ctx) {
+  const r = await send<HistoryEntry[]>({ type: "generatorHistory" });
+  if (r.ok) st.history = r.data;
   else st.error = r.error;
   ctx.rerender();
 }
 
+function historyScreen(ctx: Ctx, list: HistoryEntry[]): HTMLElement {
+  const close = () => ((st.history = undefined), ctx.rerender());
+  return h(
+    "div",
+    { class: "page" },
+    h("div", { class: "top" }, iconButton("back", t("back"), close), h("h1", { style: "flex:1" }, t("generatorHistory"))),
+    list.length
+      ? h(
+          "div",
+          { class: "group", role: "list" },
+          ...list.map((e) =>
+            h(
+              "div",
+              { class: "row", role: "listitem" },
+              h("div", { class: "body" }, h("span", { class: "title mono" }, e.value), h("span", { class: "sub" }, new Date(e.date).toLocaleString())),
+              iconButton("copy", t("copyField", e.value), () => void copy(ctx, e.value)),
+            ),
+          ),
+        )
+      : h("div", { class: "empty" }, icon("timer"), h("strong", {}, t("generatorHistoryEmpty"))),
+    list.length
+      ? h("button", { type: "button", class: "btn text", onclick: async () => ((await send({ type: "generatorHistoryClear" })).ok ? ((st.history = []), ctx.rerender()) : undefined) }, t("clear"))
+      : null,
+    errorBox(),
+  );
+}
+
 export function generatorScreen(ctx: Ctx): HTMLElement {
+  if (st.history) return historyScreen(ctx, st.history);
   if (!st.generated && !st.error) void regenerate(ctx);
   const g = st.gen;
   const set = (k: string, v: unknown) => {
@@ -752,12 +853,46 @@ export function generatorScreen(ctx: Ctx): HTMLElement {
       h("div", { class: "body" }, h("span", { class: "title" }, `${label}: ${String(g[k])}`)),
       h("input", { type: "range", min, max, value: String(g[k]), "aria-label": label, onchange: (e: Event) => set(k, Number((e.target as HTMLInputElement).value)) }),
     );
-  const isPass = g.type === "password";
-  const chip = (type: string, label: string) => h("button", { type: "button", class: "chip", "aria-pressed": String(g.type === type), onclick: () => set("type", type) }, label);
+  g.email ||= ctx.email() ?? "";
+  const chip = (type: string, label: string, key = "type") => h("button", { type: "button", class: "chip", "aria-pressed": String(g[key] === type), onclick: () => set(key, type) }, label);
+  const text = (k: string, label: string, props: Record<string, unknown> = {}) =>
+    h(
+      "label",
+      { class: "row" },
+      h("div", { class: "body" }, h("span", { class: "title" }, label)),
+      h("input", { ...props, value: str(g[k]), "aria-label": label, spellcheck: false, onchange: (e: Event) => set(k, (e.target as HTMLInputElement).value) }),
+    );
+  let options: HTMLElement;
+  if (g.type === "password")
+    options = h("div", { class: "group" }, range("length", t("length"), 5, 128), toggle("uppercase", "A–Z"), toggle("lowercase", "a–z"), toggle("numbers", "0–9"), toggle("special", "!@#$%^&*"), toggle("avoidAmbiguous", t("avoidAmbiguous")));
+  else if (g.type === "passphrase")
+    options = h(
+      "div",
+      { class: "group" },
+      range("numWords", t("words"), 3, 20),
+      text("wordSeparator", t("separator"), { class: "small-input", maxLength: 3 }),
+      toggle("capitalize", t("capitalize")),
+      toggle("includeNumber", t("includeNumber")),
+    );
+  else
+    options = h(
+      "div",
+      {},
+      h("div", { class: "chips", role: "group", "aria-label": t("usernameType") }, chip("word", t("usernameWord"), "usernameType"), chip("plus", t("usernamePlus"), "usernameType"), chip("catchall", t("usernameCatchAll"), "usernameType")),
+      h(
+        "div",
+        { class: "group" },
+        ...(g.usernameType === "plus"
+          ? [text("email", t("email"), { type: "email" })]
+          : g.usernameType === "catchall"
+            ? [text("domain", t("domain"), { placeholder: "example.com" })]
+            : [toggle("capitalize", t("capitalize")), toggle("includeNumber", t("includeNumber"))]),
+      ),
+    );
   return h(
     "div",
     { class: "page" },
-    h("div", { class: "top" }, h("h1", {}, t("generator"))),
+    h("div", { class: "top" }, h("h1", { style: "flex:1" }, t("generator")), iconButton("timer", t("generatorHistory"), () => void openHistory(ctx))),
     h(
       "div",
       { class: "generated" },
@@ -766,24 +901,13 @@ export function generatorScreen(ctx: Ctx): HTMLElement {
         { class: "mono", "aria-live": "polite", "aria-label": t("generatedValue") },
         ...(st.generated ? [...st.generated].map((c) => (/\d/.test(c) ? h("span", { class: "d" }, c) : /[^\p{L}\s-]/u.test(c) ? h("span", { class: "s" }, c) : c)) : ["…"]),
       ),
-      h("div", { class: "trailing" }, iconButton("refresh", t("regenerate"), () => void regenerate(ctx)), iconButton("copy", t("copyField", t("generatedValue")), () => void copy(ctx, st.generated))),
+      h("div", { class: "trailing" }, iconButton("refresh", t("regenerate"), () => void regenerate(ctx)), iconButton("copy", t("copyField", t("generatedValue")), () => {
+        void copy(ctx, st.generated);
+        void send({ type: "generatorHistoryAdd", value: st.generated });
+      })),
     ),
-    h("div", { class: "chips" }, chip("password", t("typePassword")), chip("passphrase", t("typePassphrase"))),
-    isPass
-      ? h("div", { class: "group" }, range("length", t("length"), 5, 128), toggle("uppercase", "A–Z"), toggle("lowercase", "a–z"), toggle("numbers", "0–9"), toggle("special", "!@#$%^&*"), toggle("avoidAmbiguous", t("avoidAmbiguous")))
-      : h(
-          "div",
-          { class: "group" },
-          range("numWords", t("words"), 3, 20),
-          h(
-            "label",
-            { class: "row" },
-            h("div", { class: "body" }, h("span", { class: "title" }, t("separator"))),
-            h("input", { class: "small-input", value: str(g.wordSeparator), maxLength: 3, onchange: (e: Event) => set("wordSeparator", (e.target as HTMLInputElement).value) }),
-          ),
-          toggle("capitalize", t("capitalize")),
-          toggle("includeNumber", t("includeNumber")),
-        ),
+    h("div", { class: "chips" }, chip("password", t("typePassword")), chip("passphrase", t("typePassphrase")), chip("username", t("username"))),
+    options,
     errorBox(),
   );
 }

@@ -9,6 +9,8 @@ type Json = Record<string, unknown>;
 
 let ciphers: Map<string, Json> | undefined;
 let folders: Folder[] = [];
+let collections: Folder[] = [];
+let organizations: Folder[] = [];
 let sends = new Map<string, Json>();
 
 const s = (v: unknown): string => (typeof v === "string" ? v : "");
@@ -24,7 +26,7 @@ function put(c: Json): void {
   (ci(c, "deletedDate") ? trash : ciphers!).set(id, c);
 }
 
-export function loadVault(encCiphers: unknown[], encFolders: unknown[], encSends: unknown[], orgKeys: Record<string, string>): void {
+export function loadVault(encCiphers: unknown[], encFolders: unknown[], encSends: unknown[], orgKeys: Record<string, string>, encCollections: unknown[], orgs: Folder[]): void {
   if (Object.keys(orgKeys).length) core.setOrgKeys(JSON.stringify(orgKeys));
   const r = JSON.parse(core.decryptCipherList(JSON.stringify(encCiphers))) as { ciphers: Json[]; failed: { id: string }[] };
   ciphers = new Map();
@@ -35,7 +37,11 @@ export function loadVault(encCiphers: unknown[], encFolders: unknown[], encSends
   const fr = JSON.parse(core.decryptFolders(JSON.stringify(encFolders))) as { folders: Json[] };
   const sr = JSON.parse(core.decryptSendList(JSON.stringify(encSends))) as { sends: Json[]; failed: { id: string }[] };
   sends = new Map([...sr.sends, ...sr.failed.map((f) => ({ id: f.id, failed: true }))].map((x) => [s(ci(x, "id")), x]));
-  folders = fr.folders.map((f) => ({ id: s(ci(f, "id")), name: s(ci(f, "name")) })).sort((a, b) => a.name.localeCompare(b.name));
+  const named = (r: { folders: Json[] }) => r.folders.map((f) => ({ id: s(ci(f, "id")), name: s(ci(f, "name")) })).sort((a, b) => a.name.localeCompare(b.name));
+  folders = named(fr);
+  // Collection names use their organization's key (decryptFolders picks it by organizationId).
+  collections = named(JSON.parse(core.decryptFolders(JSON.stringify(encCollections))) as { folders: Json[] });
+  organizations = orgs;
 }
 
 export function upsertCipher(enc: Json): void {
@@ -75,7 +81,7 @@ function summary(c: Json): VaultItem {
 export function listVault(): VaultList | null {
   if (!ciphers) return null;
   const sorted = (m: Map<string, Json>) => [...m.values()].map(summary).sort((a, b) => a.name.localeCompare(b.name));
-  return { items: sorted(ciphers), folders, trash: sorted(trash) };
+  return { items: sorted(ciphers), folders, trash: sorted(trash), organizations, collections };
 }
 
 function get(id: string): Json {
@@ -117,7 +123,29 @@ export function totp(id: string): { code: string; period: number; remaining: num
   return JSON.parse(core.totp(secret, Date.now()));
 }
 
-export const generate = (options: Json): string => core.generatePassword(JSON.stringify(options));
+const gen = (options: Json) => core.generatePassword(JSON.stringify(options));
+/** `n` random characters from a-z0-9 (or 0-9), from the core CSPRNG generator (minimum length 5). */
+const randomChars = (n: number, digitsOnly = false) =>
+  gen({ length: Math.max(n, 5), lowercase: !digitsOnly, uppercase: false, numbers: true, special: false, minNumber: 0 }).slice(0, n);
+
+/** Passwords and passphrases come from core; usernames (Bitwarden's word / plus-addressed / catch-all) are built on it. */
+export function generate(o: Json): string {
+  if (o.type !== "username") return gen(o);
+  if (o.usernameType === "plus") {
+    const email = s(o.email).trim();
+    const at = email.lastIndexOf("@");
+    if (at < 1 || at === email.length - 1) throw new Error("Enter an email address");
+    return `${email.slice(0, at)}+${randomChars(8)}${email.slice(at)}`;
+  }
+  if (o.usernameType === "catchall") {
+    const domain = s(o.domain).trim().replace(/^@/, "");
+    if (!domain) throw new Error("Enter a domain");
+    return `${randomChars(8)}@${domain}`;
+  }
+  // Space never occurs in the EFF word list, so the first word comes out whole.
+  const word = gen({ type: "passphrase", numWords: 3, wordSeparator: " ", capitalize: o.capitalize === true }).split(" ")[0]!;
+  return o.includeNumber === true ? word + randomChars(4, true) : word;
+}
 
 let psl: Psl | undefined;
 
@@ -142,9 +170,78 @@ export async function matchUri(url: string): Promise<VaultItem[]> {
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
-export function fillData(id: string): { username: string; password: string } {
+/** `totp` is the current code, for copying after the fill. */
+/** User-key strings (a failed one comes back empty). */
+export function decryptText(values: string[]): string[] {
+  const r = JSON.parse(core.decryptFolders(JSON.stringify(values.map((name, i) => ({ id: String(i), name }))))) as { folders: Json[] };
+  const plain = new Map(r.folders.map((f) => [s(ci(f, "id")), s(ci(f, "name"))]));
+  return values.map((_, i) => plain.get(String(i)) ?? "");
+}
+
+export function fillData(id: string): { username: string; password: string; totp?: string } {
   const login = o(ci(get(id), "login"));
-  return { username: s(ci(login, "username")), password: s(ci(login, "password")) };
+  const secret = s(ci(login, "totp"));
+  return { username: s(ci(login, "username")), password: s(ci(login, "password")), ...(secret ? { totp: JSON.parse(core.totp(secret, Date.now())).code as string } : {}) };
+}
+
+// ---------- Import / export (Bitwarden's unencrypted JSON format) ----------
+
+const EXPORT_KEYS = ["id", "folderId", "type", "reprompt", "name", "notes", "favorite", "login", "secureNote", "card", "identity", "sshKey", "fields", "passwordHistory", "revisionDate", "creationDate"];
+
+/** Personal items (not the trash, not organization items) and folders, like the official individual export. */
+export function exportJson(): string {
+  if (!ciphers) throw new Error("vault not loaded");
+  const items = [...ciphers.values()]
+    .filter((c) => !c.failed && !ci(c, "organizationId"))
+    .map((c) => ({ ...Object.fromEntries(EXPORT_KEYS.map((k) => [k, ci(c, k) ?? null])), organizationId: null, collectionIds: null, deletedDate: null }));
+  return JSON.stringify({ encrypted: false, folders, items }, null, 2);
+}
+
+export interface ImportRequest {
+  ciphers: Json[];
+  folders: { name: string }[];
+  folderRelationships: { key: number; value: number }[];
+  skipped: number;
+}
+
+/** Parses an unencrypted Bitwarden JSON export and encrypts it for POST /api/ciphers/import. */
+export function prepareImport(text: string): ImportRequest {
+  let data: Json | undefined;
+  try {
+    data = o(JSON.parse(text));
+  } catch {
+    /* reported below */
+  }
+  if (!data || data.encrypted === true || !Array.isArray(data.items)) throw new Error("This is not an unencrypted Bitwarden JSON export");
+  const srcFolders = (Array.isArray(data.folders) ? data.folders : []).map(o).filter((f): f is Json => typeof f?.name === "string");
+  const folderIndex = new Map(srcFolders.map((f, i) => [s(f.id), i]));
+  const out: ImportRequest = { ciphers: [], folders: srcFolders.map((f) => ({ name: s(prepareSave({ type: 2, name: f.name }).name) })), folderRelationships: [], skipped: 0 };
+  for (const raw of data.items) {
+    const item = o(raw);
+    const type = Number(item?.type);
+    if (!item || ![1, 2, 3, 4, 5].includes(type) || typeof item.name !== "string") {
+      out.skipped++;
+      continue;
+    }
+    // Server-assigned fields are dropped; the item lands in the personal vault.
+    const { id: _id, folderId, organizationId: _org, collectionIds: _coll, revisionDate: _rev, creationDate: _cr, deletedDate: _del, attachments: _att, key: _key, ...rest } = item;
+    const fi = folderIndex.get(s(folderId));
+    if (fi !== undefined) out.folderRelationships.push({ key: out.ciphers.length, value: fi });
+    out.ciphers.push(JSON.parse(core.encryptCipher(JSON.stringify({ ...rest, type }))) as Json);
+  }
+  return out;
+}
+
+// ---------- Attachments ----------
+
+export const decryptAttachment = (cipherId: string, attachmentId: string, data: string): string =>
+  core.decryptAttachment(JSON.stringify(get(cipherId)), attachmentId, Uint8Array.fromBase64(data)).toBase64();
+
+/** Personal items only, like editing. Result: { key, fileName, data } for the upload. */
+export function encryptAttachment(cipherId: string, fileName: string, data: string): Json {
+  const c = get(cipherId);
+  if (ci(c, "organizationId")) throw new Error("organization items are read-only");
+  return JSON.parse(core.encryptAttachment(JSON.stringify(c), fileName, Uint8Array.fromBase64(data))) as Json;
 }
 
 // ---------- Send ----------
@@ -170,7 +267,19 @@ export function listSends(): SendEntry[] {
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
-export const prepareSend = (send: Json): Json => JSON.parse(core.encryptSend(JSON.stringify(send))) as Json;
+/** A send with an `id` is an edit: the changes go on top of the stored send, with its key (the link stays). */
+export function prepareSend(send: Json): Json {
+  const id = s(ci(send, "id"));
+  let plain = send;
+  if (id) {
+    const cur = sends.get(id);
+    if (!cur || cur.failed) throw new Error("send not found");
+    // The stored password is the server's hash: never hash it again. No new password keeps it server-side.
+    const { password: _hash, ...rest } = cur;
+    plain = { ...rest, ...send };
+  }
+  return JSON.parse(core.encryptSend(JSON.stringify(plain))) as Json;
+}
 
 export const encryptSendFile = (key: string, data: string): string => core.encryptSendFile(key, Uint8Array.fromBase64(data)).toBase64();
 

@@ -3,7 +3,7 @@
 //   local   (disk):   device id, server, settings, account (encrypted keys + refresh token), 2FA remember tokens
 //   session (memory): unlock flag, access token, pending 2FA login. Cleared on browser restart.
 import { DEFAULT_AUTO_LOCK_MINUTES } from "../shared/constants.ts";
-import type { KdfParams, Settings, TwoFactorChallenge } from "../shared/messages.ts";
+import type { HistoryEntry, KdfParams, Settings, TwoFactorChallenge } from "../shared/messages.ts";
 import type { InlineContext, PendingSave } from "./inline.ts";
 
 export interface Server {
@@ -19,6 +19,8 @@ export interface Account {
   protectedUserKey: string;
   encryptedPrivateKey?: string;
   refreshToken?: string;
+  /** PIN unlock is on: the PIN, encrypted with the user key (to re-arm it after a browser restart). */
+  protectedPin?: string;
 }
 
 export interface PendingLogin {
@@ -39,6 +41,8 @@ export interface Session {
   sso?: { state: string; verifier: string; expiresAt: number };
   /** Why the last SSO login failed (shown when the popup opens next). */
   ssoError?: string;
+  /** PIN unlock: the user key wrapped with the PIN key, and wrong tries so far. */
+  pin?: { email: string; key: string; attempts: number };
 }
 
 /**
@@ -71,6 +75,9 @@ export interface VaultCache {
   /** Absent in caches written before Phase 4. */
   sends?: unknown[];
   orgKeys: Record<string, string>;
+  /** Absent in caches written before collections were shown. */
+  collections?: unknown[];
+  orgs?: { id: string; name: string }[];
 }
 
 interface LocalSchema {
@@ -81,6 +88,8 @@ interface LocalSchema {
   account: Account;
   /** email -> TwoFactorToken returned when "remember me" was ticked. */
   rememberTokens: Record<string, string>;
+  /** Copied generator values, encrypted with the user key, newest first. */
+  genHistory: HistoryEntry[];
 }
 
 interface SessionSchema {
@@ -111,7 +120,7 @@ export async function updateSession(patch: Partial<Session>): Promise<Session> {
 export const clearSession = () => chrome.storage.session.remove("session");
 
 export async function getSettings(): Promise<Settings> {
-  return { autoLockMinutes: DEFAULT_AUTO_LOCK_MINUTES, lockOnSystemLock: true, passkeys: false, inlineMenu: true, savePrompt: true, neverSave: [], defaultManager: false, ...(await getLocal("settings")) };
+  return { autoLockMinutes: DEFAULT_AUTO_LOCK_MINUTES, timeoutAction: "lock", lockOnSystemLock: true, passkeys: false, inlineMenu: true, savePrompt: true, neverSave: [], defaultManager: false, favicons: true, autoCopyTotp: true, ...(await getLocal("settings")) };
 }
 
 export async function getDeviceId(): Promise<string> {

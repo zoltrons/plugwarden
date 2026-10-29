@@ -86,3 +86,23 @@
   path: src/sso.rs
   local: src/background/account.ts (SSO), dev/vaultwarden/mock-idp.mjs
   sync: client_id -> redirect URI table, binding cookie, state handling, SSO_* settings.
+- repo: sdk-internal
+  path: crates/bitwarden-crypto/src/keys/pin_key.rs
+  local: crates/core-wasm/src/api.rs (pin_protect_user_key, unlock_with_pin), src/background/account.ts (PIN)
+  sync: PIN key derivation (KDF + stretch), wrapped user key format, ephemeral vs persistent PIN storage.
+- repo: sdk-internal
+  path: crates/bitwarden-vault/src/cipher/attachment.rs
+  local: crates/core-wasm/src/cipher.rs (decrypt_attachment, encrypt_attachment)
+  sync: Attachment key wrapping (cipher key vs org/user key), body format, keyless legacy attachments.
+- repo: sdk-internal
+  path: crates/bitwarden-generators/src/username.rs
+  local: src/offscreen/vault.ts (generate)
+  sync: Username types (word, subaddress, catch-all), random string length/charset, number suffix.
+- repo: clients
+  path: libs/tools/export-vault-core/src/services/individual-vault-export.service.ts
+  local: src/offscreen/vault.ts (exportJson)
+  sync: Bitwarden JSON export format (item fields, folders, encrypted flag).
+- repo: clients
+  path: libs/importer/src/importers/bitwarden/bitwarden-json-importer.ts
+  local: src/offscreen/vault.ts (prepareImport)
+  sync: Accepted JSON shape, folder relationships, which fields are dropped.

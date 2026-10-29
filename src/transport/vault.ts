@@ -1,12 +1,13 @@
 // Vault endpoints (mirrors vaultwarden src/api/core/ciphers.rs, see upstream-map.yaml).
 import { arr, obj, opt, parse, record, str, unknownValue } from "../shared/validate.ts";
-import { call } from "./http.ts";
+import { ApiError, call, NetworkError } from "./http.ts";
 
 const syncResponse = obj({
   ciphers: arr(unknownValue),
   folders: arr(unknownValue),
   sends: opt(arr(unknownValue)),
-  profile: obj({ organizations: opt(arr(obj({ id: str, key: opt(str) }))) }),
+  collections: opt(arr(unknownValue)),
+  profile: obj({ organizations: opt(arr(obj({ id: str, key: opt(str), name: opt(str) }))) }),
 });
 export type SyncResponse = ReturnType<typeof syncResponse>;
 
@@ -44,6 +45,45 @@ export async function trashCipher(base: string, token: string, id: string): Prom
   await call(base, "PUT", `/api/ciphers/${encodeURIComponent(id)}/delete`, { token });
 }
 
+export async function importCiphers(base: string, token: string, data: { ciphers: unknown[]; folders: unknown[]; folderRelationships: unknown[] }): Promise<void> {
+  await call(base, "POST", "/api/ciphers/import", { token, json: data });
+}
+
+/** Re-checks the master password (400 when wrong). */
+export async function verifyPassword(base: string, token: string, masterPasswordHash: string): Promise<void> {
+  await call(base, "POST", "/api/accounts/verify-password", { token, json: { masterPasswordHash } });
+}
+
+// ---------- Attachments (vaultwarden src/api/core/ciphers.rs) ----------
+
+const path = (cipherId: string, attachmentId?: string) =>
+  `/api/ciphers/${encodeURIComponent(cipherId)}/attachment${attachmentId ? `/${encodeURIComponent(attachmentId)}` : ""}`;
+
+/** The encrypted body, through the signed download URL the server hands out. */
+export async function downloadAttachment(base: string, token: string, cipherId: string, attachmentId: string): Promise<Uint8Array> {
+  const { url } = parse(obj({ url: str }), await call(base, "GET", path(cipherId, attachmentId), { token }));
+  let res: Response;
+  try {
+    res = await fetch(new URL(url, base), { credentials: "omit", cache: "no-store" });
+  } catch (e) {
+    throw new NetworkError(e instanceof Error ? e.message : String(e));
+  }
+  if (!res.ok) throw new ApiError(res.status, null, `Attachment download failed (${res.status})`);
+  return new Uint8Array(await res.arrayBuffer());
+}
+
+/** Registers a new attachment (encrypted key and name) and uploads its encrypted body. */
+export async function addAttachment(base: string, token: string, cipherId: string, meta: { key: string; fileName: string }, body: Uint8Array): Promise<void> {
+  const { attachmentId } = parse(obj({ attachmentId: str }), await call(base, "POST", `${path(cipherId)}/v2`, { token, json: { ...meta, fileSize: body.length } }));
+  const data = new FormData();
+  data.append("data", new Blob([body as Uint8Array<ArrayBuffer>]), meta.fileName);
+  // Without its body the attachment is broken: remove it again if the upload fails.
+  await call(base, "POST", path(cipherId, attachmentId), { token, data }).catch(async (e: unknown) => {
+    await call(base, "DELETE", path(cipherId, attachmentId), { token }).catch(() => undefined);
+    throw e;
+  });
+}
+
 // ---------- Send (vaultwarden src/api/core/sends.rs) ----------
 
 export async function createSend(base: string, token: string, send: Record<string, unknown>): Promise<Record<string, unknown>> {
@@ -62,6 +102,10 @@ export async function uploadSendFile(base: string, token: string, sendId: string
   const data = new FormData();
   data.append("data", new Blob([body as Uint8Array<ArrayBuffer>]), fileName);
   await call(base, "POST", `/api/sends/${encodeURIComponent(sendId)}/file/${encodeURIComponent(fileId)}`, { token, data });
+}
+
+export async function updateSend(base: string, token: string, id: string, send: Record<string, unknown>): Promise<Record<string, unknown>> {
+  return parse(record, await call(base, "PUT", `/api/sends/${encodeURIComponent(id)}`, { token, json: send }));
 }
 
 export async function deleteSend(base: string, token: string, id: string): Promise<void> {

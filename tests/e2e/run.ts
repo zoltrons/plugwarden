@@ -1,10 +1,10 @@
 // Phase 1 end-to-end test: real extension in a Chromium 156 browser against a local Vaultwarden.
 //   docker compose -f dev/vaultwarden/docker-compose.yml up -d
 //   bash tools/build-wasm.sh --features register --out dist/wasm-register   (test-only account setup)
-//   node tools/fetch-psl.mjs && node tools/build.mjs --e2e-host=http://localhost:8080,http://localhost:8099,http://127.0.0.1:8099
+//   node tools/fetch-psl.mjs && node tools/build.mjs --e2e
 //   CHROME_PATH=<chromium-based browser that honours --load-extension> npm run test:e2e
 import assert from "node:assert/strict";
-import { createDecipheriv, createHash, createHmac, createPublicKey, pbkdf2Sync, randomBytes, verify } from "node:crypto";
+import { constants, createCipheriv, createDecipheriv, createHash, createHmac, createPublicKey, generateKeyPairSync, pbkdf2Sync, publicEncrypt, randomBytes, verify } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
@@ -66,6 +66,15 @@ async function register(label: string, kdf: Kdf): Promise<TestUser> {
   return u;
 }
 
+/** Retries an async check (e.g. a value in extension storage) for up to 5 s. */
+async function poll(what: string, check: () => Promise<boolean>): Promise<void> {
+  for (let i = 0; i < 50; i++) {
+    if (await check()) return;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  assert.fail(`timed out waiting for ${what}`);
+}
+
 const totpNow = () => JSON.parse(wasm.totp(TOTP_KEY, Date.now())) as { code: string; remaining: number };
 
 /** Vaultwarden rejects a TOTP code twice in the same step, so wait for a fresh one. */
@@ -109,12 +118,48 @@ async function apiSession(u: TestUser) {
       const sync = (await call(BASE, "GET", "/api/sync?excludeDomains=true", { token })) as { folders: unknown[] };
       return (JSON.parse(wasm.decryptFolders(JSON.stringify(sync.folders))).folders as { name: string }[]).map((f) => f.name);
     },
+    /** Personal items (this session holds no organization keys). */
     async ciphers() {
-      const sync = (await call(BASE, "GET", "/api/sync?excludeDomains=true", { token })) as { ciphers: unknown[] };
-      return sync.ciphers.map((c) => JSON.parse(wasm.decryptCipher(JSON.stringify(c))) as Record<string, any>);
+      const sync = (await call(BASE, "GET", "/api/sync?excludeDomains=true", { token })) as { ciphers: { organizationId?: string }[] };
+      return sync.ciphers.filter((c) => !c.organizationId).map((c) => JSON.parse(wasm.decryptCipher(JSON.stringify(c))) as Record<string, any>);
     },
     done: () => wasm.lock(),
   };
+}
+
+/**
+ * Creates an organization with one collection for `u`, and a secure note in that collection. All
+ * crypto here is node:crypto (org key RSA-OAEP-wrapped for the user, names AES-CBC + HMAC), independent
+ * of core-wasm.
+ */
+async function createOrgNote(u: TestUser, orgName: string, collectionName: string, noteName: string): Promise<void> {
+  const tok = await passwordToken(BASE, { email: u.email, authHash: authHash(u), deviceId: crypto.randomUUID() });
+  const token = tok.access_token;
+  const userId = JSON.parse(Buffer.from(token.split(".")[1]!, "base64url").toString()).sub as string;
+  const { publicKey } = (await call(BASE, "GET", `/api/users/${userId}/public-key`, { token })) as { publicKey: string };
+  const orgKey = randomBytes(64);
+  const enc = (plain: Buffer | string) => {
+    const iv = randomBytes(16);
+    const c = createCipheriv("aes-256-cbc", orgKey.subarray(0, 32), iv);
+    const ct = Buffer.concat([c.update(plain), c.final()]);
+    const mac = createHmac("sha256", orgKey.subarray(32)).update(Buffer.concat([iv, ct])).digest();
+    return `2.${iv.toString("base64")}|${ct.toString("base64")}|${mac.toString("base64")}`;
+  };
+  const wrapped = publicEncrypt({ key: Buffer.from(publicKey, "base64"), format: "der", type: "spki", padding: constants.RSA_PKCS1_OAEP_PADDING, oaepHash: "sha1" }, orgKey);
+  const pair = generateKeyPairSync("rsa", { modulusLength: 2048, publicKeyEncoding: { type: "spki", format: "der" }, privateKeyEncoding: { type: "pkcs8", format: "der" } });
+  const org = (await call(BASE, "POST", "/api/organizations", {
+    token,
+    json: {
+      name: orgName, billingEmail: u.email, planType: 0, collectionName: enc(collectionName), key: `4.${wrapped.toString("base64")}`,
+      keys: { publicKey: pair.publicKey.toString("base64"), encryptedPrivateKey: enc(pair.privateKey) },
+    },
+  })) as { id: string };
+  const sync = (await call(BASE, "GET", "/api/sync?excludeDomains=true", { token })) as { collections: { id: string; organizationId: string }[] };
+  const coll = sync.collections.find((c) => c.organizationId === org.id)!;
+  await call(BASE, "POST", "/api/ciphers/create", {
+    token,
+    json: { cipher: { type: 2, name: enc(noteName), notes: null, secureNote: { type: 0 }, organizationId: org.id, encryptedFor: userId }, collectionIds: [coll.id] },
+  });
 }
 
 // A plain login page for autofill tests, reachable as localhost:8099 (matches) and 127.0.0.1:8099 (does not).
@@ -235,6 +280,57 @@ try {
     await expectUnlocked();
   });
 
+  await step("PIN: set in settings, unlocks the locked vault, wrong PIN refused, never stored in clear", async () => {
+    await page.getByRole("button", { name: "Settings" }).click();
+    await page.getByLabel("Unlock with PIN").check();
+    await page.getByLabel("PIN", { exact: true }).fill("4826");
+    await click("Set PIN");
+    await poll("PIN armed", () => sw.evaluate(async () => !!(await chrome.storage.session.get("session")).session?.pin));
+    const dump = await sw.evaluate(async () => JSON.stringify([await chrome.storage.local.get(null), await chrome.storage.session.get(null)]));
+    assert.ok(!dump.includes("4826"), "PIN found in storage");
+    await page.getByRole("button", { name: "Lock now" }).click();
+    await page.getByRole("heading", { name: "Vault locked" }).waitFor();
+    assert.equal(await sw.evaluate(() => chrome.offscreen.hasDocument()), false);
+    await fill("PIN", "0000");
+    await click("Unlock");
+    await page.getByRole("alert").filter({ hasText: "Wrong PIN" }).waitFor();
+    await fill("PIN", "4826");
+    await click("Unlock");
+    await expectUnlocked();
+  });
+
+  await step("PIN: after a browser restart the master password re-arms it", async () => {
+    await page.evaluate(() => chrome.runtime.sendMessage({ type: "lock" }));
+    // A restart empties storage.session; drop the PIN-wrapped key the same way.
+    await sw.evaluate(async () => {
+      const { session } = await chrome.storage.session.get("session");
+      delete session.pin;
+      await chrome.storage.session.set({ session });
+    });
+    await open();
+    await page.getByRole("heading", { name: "Vault locked" }).waitFor();
+    assert.equal(await page.getByLabel("PIN", { exact: true }).count(), 0);
+    await fill("Master password", pbkdf2.password);
+    await click("Unlock");
+    await expectUnlocked();
+    await poll("PIN re-armed", () => sw.evaluate(async () => !!(await chrome.storage.session.get("session")).session?.pin));
+  });
+
+  await step("PIN: five wrong PINs log out", async () => {
+    await page.evaluate(() => chrome.runtime.sendMessage({ type: "lock" }));
+    await open();
+    for (let i = 0; i < 5; i++) {
+      await fill("PIN", "1111");
+      await click("Unlock");
+      await page.getByRole("alert").waitFor();
+    }
+    await page.getByRole("alert").filter({ hasText: "logged out" }).waitFor();
+    await open();
+    await page.getByRole("heading", { name: "Log in" }).waitFor();
+    await loginAs(pbkdf2);
+    await expectUnlocked();
+  });
+
   await step("no secrets in extension storage", async () => {
     const dump = await sw.evaluate(async () =>
       JSON.stringify([await chrome.storage.local.get(null), await chrome.storage.session.get(null)]),
@@ -253,8 +349,19 @@ try {
     await expectUnlocked();
   });
 
-  await step("logout, login Argon2id 3/64MiB/4", async () => {
-    await logout();
+  await step("timeout action 'log out' forgets the account; login Argon2id 3/64MiB/4", async () => {
+    await page.getByRole("button", { name: "Settings" }).click();
+    await page.getByLabel("Timeout action").selectOption("logout");
+    await poll("timeout action saved", () => sw.evaluate(async () => (await chrome.storage.local.get("settings")).settings?.timeoutAction === "logout"));
+    await sw.evaluate(() => chrome.alarms.create("autolock", { when: Date.now() + 200 }));
+    await page.waitForTimeout(2000);
+    await open();
+    await page.getByRole("heading", { name: "Log in" }).waitFor();
+    assert.equal(await sw.evaluate(async () => Object.keys(await chrome.storage.local.get(["account", "vault"])).length), 0);
+    await sw.evaluate(async () => {
+      const { settings } = await chrome.storage.local.get("settings");
+      await chrome.storage.local.set({ settings: { ...settings, timeoutAction: "lock" } });
+    });
     await loginAs(argon);
     await expectUnlocked();
   });
@@ -277,6 +384,34 @@ try {
     await logout();
     await loginAs(totpUser);
     await expectUnlocked();
+  });
+
+  await step("YubiKey OTP two-step login sends provider 3 with the typed OTP", async () => {
+    await logout();
+    // Vaultwarden checks OTPs with Yubico's servers, so stand in for the server's 2FA answer inside the
+    // service worker; the second request (with the OTP) goes to the real server, which logs in this
+    // user without two-step login.
+    await sw.evaluate(() => {
+      const real = globalThis.fetch;
+      const g = globalThis as unknown as { yubiSeen: (string | null)[] };
+      globalThis.fetch = async (input, init) => {
+        const form = new URLSearchParams(String(init?.body ?? ""));
+        if (String(input).endsWith("/identity/connect/token") && form.get("grant_type") === "password") {
+          if (!form.has("twoFactorProvider"))
+            return new Response(JSON.stringify({ error: "invalid_grant", TwoFactorProviders: ["3"], TwoFactorProviders2: { "3": { Nfc: true } } }), { status: 400 });
+          g.yubiSeen = [form.get("twoFactorProvider"), form.get("twoFactorToken")];
+          globalThis.fetch = real;
+        }
+        return real(input, init);
+      };
+    });
+    await loginAs(pbkdf2);
+    await page.getByRole("button", { name: "YubiKey" }).waitFor();
+    const otp = "cccccbcjdifctrndncchkftchjlnbhvhtugdljibejrv";
+    await fill("Verification code", otp);
+    await page.getByLabel("Verification code", { exact: true }).press("Enter");
+    await expectUnlocked();
+    assert.deepEqual(await sw.evaluate(() => (globalThis as unknown as { yubiSeen: unknown }).yubiSeen), ["3", otp]);
   });
 
   // ---------- Phase 4: WebAuthn two-step login ----------
@@ -336,7 +471,7 @@ try {
     await panel.close();
     await page.getByRole("button", { name: "Settings" }).click();
     await page.getByRole("button", { name: "Open in side panel" }).waitFor();
-    await page.getByRole("button", { name: "Vault" }).click();
+    await page.getByRole("button", { name: "Vault", exact: true }).click();
   });
 
   // ---------- Phase 4: Send ----------
@@ -389,6 +524,7 @@ try {
     assert.deepEqual([r.name, r.text], ["Wifi for guests", "guest-wifi-pass-42"]);
   });
 
+  let reportLink = "";
   await step("Send: password-protected file send; server checks our password hash", async () => {
     await page.getByRole("button", { name: "New Send" }).click();
     await fill("Name", "Report");
@@ -397,10 +533,24 @@ try {
     await fill("Password (optional)", "s3nd-pw");
     await page.getByRole("button", { name: "Create and copy link" }).click();
     await page.getByRole("listitem").filter({ hasText: "Report" }).waitFor();
-    const link = await readClipboard();
+    const link = (reportLink = await readClipboard());
     await assert.rejects(receive(link, "wrong-pw"));
     const r = await receive(link, "s3nd-pw");
     assert.deepEqual([r.name, r.fileName, r.file?.toString("utf8")], ["Report", "report.txt", "quarterly numbers\n"]);
+  });
+
+  await step("Send: edit renames, keeps link and password; disabling stops access", async () => {
+    await page.getByRole("button", { name: "Edit Report" }).click();
+    await page.getByRole("heading", { name: "Edit Send" }).waitFor();
+    await fill("Name", "Report Q3");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await page.getByRole("listitem").filter({ hasText: "Report Q3" }).waitFor();
+    assert.equal((await receive(reportLink, "s3nd-pw")).name, "Report Q3");
+    await page.getByRole("button", { name: "Edit Report Q3" }).click();
+    await page.getByLabel("Disable this Send").check();
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await page.getByRole("listitem").filter({ hasText: "Disabled" }).waitFor();
+    await assert.rejects(receive(reportLink, "s3nd-pw"));
   });
 
   await step("Send: delete removes it on the server", async () => {
@@ -442,6 +592,22 @@ try {
     assert.match(await rows().first().innerText(), /GitHub/);
     await page.getByRole("button", { name: "Work", exact: true }).click(); // chips toggle off again
     assert.equal(await rows().count(), 3);
+  });
+
+  await step("website icons come from the server's icon service and can be turned off", async () => {
+    const icon = () => rows().filter({ hasText: "GitHub" }).locator(".tile img");
+    assert.equal(await icon().getAttribute("src"), `${BASE}/icons/github.com/icon.png`);
+    assert.equal(await rows().filter({ hasText: "Wifi note" }).locator(".tile img").count(), 0);
+    await page.getByRole("button", { name: "Settings" }).click();
+    await page.getByLabel("Show website icons").uncheck();
+    await poll("icons setting saved", () => sw.evaluate(async () => (await chrome.storage.local.get("settings")).settings?.favicons === false));
+    await page.getByRole("button", { name: "Vault", exact: true }).click();
+    await rows().filter({ hasText: "GitHub" }).waitFor();
+    assert.equal(await icon().count(), 0);
+    await page.getByRole("button", { name: "Settings" }).click();
+    await page.getByLabel("Show website icons").check();
+    await page.getByRole("button", { name: "Vault", exact: true }).click();
+    await icon().waitFor();
   });
 
   await step("item view: reveal password, TOTP matches, hidden field, copy schedules clearing", async () => {
@@ -519,6 +685,32 @@ try {
     s.done();
     await page.getByRole("button", { name: "Sync now" }).click();
     await rows().filter({ hasText: "Added elsewhere" }).waitFor();
+  });
+
+  await step("attachments: upload in the popup, download decrypts, server copy decrypts", async () => {
+    await rows().filter({ hasText: "Wifi note" }).click();
+    await page.getByRole("heading", { name: "Wifi note" }).waitFor();
+    await page.getByLabel("Add attachment").setInputFiles({ name: "router.txt", mimeType: "text/plain", buffer: Buffer.from("admin / 1234\n") });
+    const button = page.getByRole("button", { name: "Download router.txt" });
+    await button.waitFor();
+    const [dl] = await Promise.all([page.waitForEvent("download"), button.click()]);
+    assert.equal(dl.suggestedFilename(), "router.txt");
+    assert.equal(readFileSync(await dl.path()).toString(), "admin / 1234\n");
+    const s = await apiSession(vaultUser);
+    const c = (await s.ciphers()).find((x) => x.name === "Wifi note");
+    s.done();
+    assert.equal(c?.attachments?.[0]?.fileName, "router.txt");
+    await back();
+  });
+
+  await step("organization item shows its organization and collection names", async () => {
+    await createOrgNote(vaultUser, "Team Alpha", "Engineering", "Team wiki");
+    await page.getByRole("button", { name: "Sync now" }).click();
+    await rows().filter({ hasText: "Team wiki" }).click();
+    await page.getByRole("heading", { name: "Team wiki" }).waitFor();
+    await page.getByText("Team Alpha", { exact: true }).waitFor();
+    await page.getByText("Engineering", { exact: true }).waitFor();
+    await back();
   });
 
   await step("move to trash", async () => {
@@ -606,6 +798,44 @@ try {
     await page.getByRole("button", { name: "Back" }).click();
   });
 
+  await step("export: master password re-checked, personal items as Bitwarden JSON", async () => {
+    await page.getByRole("button", { name: "Settings" }).click();
+    await page.getByRole("button", { name: /^Export vault/ }).click();
+    await page.getByLabel("Master password").fill("wrong-password");
+    await click("Export");
+    await page.getByRole("alert").filter({ hasText: "Wrong master password" }).waitFor();
+    await page.getByLabel("Master password").fill(vaultUser.password);
+    const [dl] = await Promise.all([page.waitForEvent("download"), click("Export")]);
+    assert.match(dl.suggestedFilename(), /^plugwarden_export_\d{14}\.json$/);
+    const data = JSON.parse(readFileSync(await dl.path(), "utf8"));
+    assert.equal(data.encrypted, false);
+    const github = data.items.find((i: any) => i.name === "GitHub");
+    assert.equal(github?.login?.username, "octo");
+    assert.equal(data.folders.find((f: any) => f.id === github.folderId)?.name, "Work");
+    assert.ok(!data.items.some((i: any) => i.name === "Team wiki"), "organization item exported");
+  });
+
+  await step("import: Bitwarden JSON creates items and folders on the server", async () => {
+    const file = {
+      encrypted: false,
+      folders: [{ id: "f-1", name: "Imported folder" }],
+      items: [
+        { id: "i-1", folderId: "f-1", type: 1, name: "Imported login", favorite: true, login: { username: "imp", password: "imp-pw", uris: [{ uri: "https://imp.example", match: null }] } },
+        { id: "i-2", type: 99, name: "Unknown type" },
+      ],
+    };
+    await page.getByLabel("Import items").setInputFiles({ name: "export.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(file)) });
+    await page.getByRole("status").filter({ hasText: "Imported 1 item(s). Skipped 1 unsupported item(s)." }).waitFor();
+    const s = await apiSession(vaultUser);
+    const c = (await s.ciphers()).find((x) => x.name === "Imported login");
+    const folders = await s.folders();
+    s.done();
+    assert.deepEqual([c?.login.username, c?.login.password, c?.favorite], ["imp", "imp-pw", true]);
+    assert.ok(folders.includes("Imported folder"));
+    await page.getByRole("button", { name: "Vault", exact: true }).click();
+    await rows().filter({ hasText: "Imported login" }).waitFor();
+  });
+
   await step("generator: password and passphrase", async () => {
     await page.getByRole("button", { name: "Generator" }).click();
     const out = page.getByRole("status", { name: "Generated value" }).or(page.locator("output"));
@@ -615,12 +845,40 @@ try {
     await page.waitForFunction(() => (document.querySelector("output")?.textContent ?? "").split("-").length === 5);
   });
 
+  await step("generator: usernames (random word, plus-addressed email, catch-all)", async () => {
+    const until = (re: RegExp) => page.waitForFunction((src) => new RegExp(src).test(document.querySelector("output")?.textContent ?? ""), re.source);
+    await page.getByRole("button", { name: "Username", exact: true }).click();
+    await until(/^[A-Z][a-z-]+\d{4}$/); // capitalized EFF word + 4 digits (defaults)
+    await page.getByRole("button", { name: "Plus-addressed email" }).click();
+    await until(/^[^@]+\+[a-z0-9]{8}@/);
+    const plus = await page.locator("output").innerText();
+    assert.equal(plus.replace(/\+[a-z0-9]{8}@/, "@"), vaultUser.email);
+    await page.getByRole("button", { name: "Catch-all email" }).click();
+    await page.getByLabel("Domain").fill("catch.example");
+    await page.getByLabel("Domain").blur();
+    await until(/^[a-z0-9]{8}@catch\.example$/);
+  });
+
+  await step("generator history: copied values listed, encrypted at rest, clearable", async () => {
+    const value = await page.locator("output").innerText();
+    await page.getByRole("button", { name: "Copy Generated value" }).click();
+    await poll("history entry", () => sw.evaluate(async () => ((await chrome.storage.local.get("genHistory")).genHistory ?? []).length === 1));
+    const raw = await sw.evaluate(async () => JSON.stringify(await chrome.storage.local.get("genHistory")));
+    assert.ok(!raw.includes(value) && raw.includes('"2.'), raw);
+    await page.getByRole("button", { name: "Generator history" }).click();
+    await page.getByRole("listitem").filter({ hasText: value }).waitFor();
+    await page.getByRole("button", { name: "Clear", exact: true }).click();
+    await page.getByText("Copied values show up here").waitFor();
+    assert.equal(await sw.evaluate(async () => Object.keys(await chrome.storage.local.get("genHistory")).length), 0);
+    await page.getByRole("button", { name: "Back" }).click();
+  });
+
   // Design review screenshots (not assertions): SHOTS=<dir> npm run test:e2e
   if (process.env.SHOTS) {
     for (const scheme of ["dark", "light"] as const) {
       await page.emulateMedia({ colorScheme: scheme });
       const shot = (name: string) => page.locator("body").screenshot({ path: join(process.env.SHOTS!, `${scheme}-${name}.png`) });
-      await page.getByRole("button", { name: "Vault" }).click();
+      await page.getByRole("button", { name: "Vault", exact: true }).click();
       await shot("list");
       await rows().filter({ hasText: "GitHub" }).click();
       await page.getByRole("heading", { name: "GitHub" }).waitFor();
@@ -635,11 +893,11 @@ try {
       await shot("settings");
     }
     await page.emulateMedia({ colorScheme: null });
-    await page.getByRole("button", { name: "Vault" }).click();
+    await page.getByRole("button", { name: "Vault", exact: true }).click();
   }
 
   await step("lock clears decrypted vault from the popup", async () => {
-    await page.getByRole("button", { name: "Vault" }).click();
+    await page.getByRole("button", { name: "Vault", exact: true }).click();
     await page.getByRole("button", { name: "Lock now" }).click();
     await page.getByRole("heading", { name: "Vault locked" }).waitFor();
     assert.ok(!(await page.locator("#app").innerText()).includes("GitHub"));
@@ -647,7 +905,7 @@ try {
 
   // ---------- Phase 3: autofill ----------
   const s3 = await apiSession(vaultUser);
-  await s3.create({ type: 1, name: "Local app", login: { username: "local-user", password: "local-pass", uris: [{ uri: SITE, match: null }] } });
+  await s3.create({ type: 1, name: "Local app", login: { username: "local-user", password: "local-pass", totp: TOTP_KEY, uris: [{ uri: SITE, match: null }] } });
   s3.done();
   const loginPage = await ctx.newPage();
   await loginPage.goto(`${SITE}/login`);
@@ -665,13 +923,18 @@ try {
       (document.getElementById("p") as HTMLInputElement).value = p!;
     }, [u, p]);
 
-  await step("autofill: popup lists site matches and fills the page", async () => {
+  await step("autofill: popup lists site matches and fills the page; TOTP code copied", async () => {
     await unlockIfLocked();
     await reopenPopup();
     await page.getByRole("heading", { name: "On this site — localhost:8099" }).waitFor();
     await page.getByRole("button", { name: "Fill Local app" }).click();
     await loginPage.waitForFunction(() => (document.getElementById("p") as HTMLInputElement).value !== "");
     assert.deepEqual(await fieldValues(), ["local-user", "local-pass"]);
+    const codes = () => [totpNow().code, JSON.parse(wasm.totp(TOTP_KEY, Date.now() - 30_000)).code];
+    let copied = "";
+    for (let i = 0; i < 10 && !codes().includes(copied); i++) copied = await readClipboard();
+    assert.ok(codes().includes(copied), `clipboard ${copied}`);
+    assert.ok(await sw.evaluate(() => chrome.alarms.get("clipboard")), "clipboard clear alarm not scheduled");
   });
 
   const shortcut = () =>
@@ -695,6 +958,32 @@ try {
     const cmd = cmds.find((c) => c.name === "autofill-login");
     assert.ok(cmd, "autofill-login command not registered");
     console.log(`    assigned shortcut: ${JSON.stringify(cmd.shortcut)}`);
+  });
+
+  await step("badge counts the site's logins; context menu lists them and fills the picked one", async () => {
+    await reopenPopup(); // also makes the login page the active tab
+    const badge = () =>
+      sw.evaluate(async () => {
+        const [t] = await chrome.tabs.query({ url: "http://localhost:8099/*" });
+        return chrome.action.getBadgeText({ tabId: t!.id });
+      });
+    await poll("badge 1", async () => (await badge()) === "1");
+    const { data } = await page.evaluate(() => chrome.runtime.sendMessage({ type: "pageMatches" }));
+    const menuId = `plugwarden-autofill:${data.items[0].id}`;
+    // contextMenus has no getter; update() fails for an id that does not exist.
+    const menuExists = (mid: string) => sw.evaluate((m) => new Promise((r) => chrome.contextMenus.update(m, {}, () => r(!chrome.runtime.lastError))), mid);
+    assert.equal(await menuExists(menuId), true);
+    await setFields("", "");
+    const r = await sw.evaluate(async (m) => {
+      const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+      return (globalThis as any).plugwardenTest.onContextMenu({ menuItemId: m }, tab);
+    }, menuId);
+    assert.deepEqual(r, { filled: true });
+    assert.deepEqual(await fieldValues(), ["local-user", "local-pass"]);
+    await page.evaluate(() => chrome.runtime.sendMessage({ type: "lock" }));
+    await poll("badge cleared", async () => (await badge()) === "");
+    assert.equal(await menuExists(menuId), false);
+    await unlockIfLocked();
   });
 
   await step("save login from page: new username creates an item", async () => {

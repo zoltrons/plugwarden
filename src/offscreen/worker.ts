@@ -28,6 +28,15 @@ function run(req: CoreRequest): unknown {
       core.unlockUserKey(req.handle, req.protectedUserKey, req.encryptedPrivateKey);
       authHashes.delete(req.handle);
       return true;
+    case "pinProtect": {
+      const { type, iterations, memory, parallelism } = req.kdf;
+      return core.pinProtectUserKey(req.pin, req.email, type, iterations, memory, parallelism);
+    }
+    case "unlockPin": {
+      const { type, iterations, memory, parallelism } = req.kdf;
+      core.unlockWithPin(req.pin, req.email, type, iterations, memory, parallelism, req.protectedUserKey, req.encryptedPrivateKey);
+      return true;
+    }
     case "freeKey":
       core.freeMasterKey(req.handle);
       authHashes.delete(req.handle);
@@ -39,7 +48,7 @@ function run(req: CoreRequest): unknown {
     case "status":
       return { unlocked: core.isUnlocked() };
     case "loadVault":
-      return vault.loadVault(req.ciphers, req.folders, req.sends, req.orgKeys);
+      return vault.loadVault(req.ciphers, req.folders, req.sends, req.orgKeys, req.collections, req.orgs);
     case "upsertCipher":
       return vault.upsertCipher(req.cipher);
     case "removeCipher":
@@ -54,12 +63,24 @@ function run(req: CoreRequest): unknown {
       return vault.totp(req.id);
     case "generate":
       return vault.generate(req.options);
+    case "encryptText":
+      return req.values.map((name) => String(vault.prepareSave({ type: 2, name }).name));
+    case "decryptText":
+      return vault.decryptText(req.values);
     case "matchUri":
       return vault.matchUri(req.url);
     case "fillData":
       return vault.fillData(req.id);
     case "formValues":
       return vault.formValues(req.id);
+    case "exportJson":
+      return vault.exportJson();
+    case "prepareImport":
+      return vault.prepareImport(req.text);
+    case "decryptAttachment":
+      return vault.decryptAttachment(req.cipherId, req.attachmentId, req.data);
+    case "encryptAttachment":
+      return vault.encryptAttachment(req.cipherId, req.fileName, req.data);
     case "listSends":
       return vault.listSends();
     case "prepareSend":

@@ -181,7 +181,7 @@ button.row:hover { background: var(--container-high); }
 /* Switch */
 .switch { position: relative; width: 52px; height: 32px; flex: none; }
 .switch input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }
-.switch span { position: absolute; inset: 0; border-radius: 999px; background: var(--container-high); border: 2px solid var(--outline); transition: background .15s; }
+.switch span { position: absolute; inset: 0; pointer-events: none; border-radius: 999px; background: var(--container-high); border: 2px solid var(--outline); transition: background .15s; }
 .switch span::after { content: ""; position: absolute; top: 6px; left: 6px; width: 16px; height: 16px; border-radius: 50%; background: var(--muted); transition: transform .15s, width .15s, height .15s, top .15s; }
 .switch input:checked + span { background: var(--primary); border-color: var(--primary); }
 .switch input:checked + span::after { transform: translateX(18px); top: 3px; width: 22px; height: 22px; left: 3px; background: var(--on-primary); }
@@ -238,6 +238,9 @@ button.row:hover { background: var(--container-high); }
   width: 40px; height: 40px; flex: none; border-radius: 12px; display: grid; place-items: center;
   font-weight: 600; font-size: 17px; background: hsl(var(--h) 70% var(--tile-l)); color: hsl(var(--h) 70% var(--tile-fg));
 }
+.tile:has(img) { background: var(--container-high); }
+.tile img { width: 24px; height: 24px; }
+.hero .tile img { width: 32px; height: 32px; }
 .row .label { font-size: 12px; color: var(--muted); font-weight: 500; }
 .row .value { font-size: 15px; word-break: break-all; }
 .row.field-row { padding-right: 6px; }

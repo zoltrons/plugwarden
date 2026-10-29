@@ -14,14 +14,20 @@ export type Request =
   | { type: "twoFactorCancel" }
   | { type: "ssoStart" }
   | { type: "unlock"; password: string }
+  | { type: "unlockPin"; pin: string }
+  /** Without `pin`: turn PIN unlock off. */
+  | { type: "setPin"; pin?: string }
   | { type: "lock" }
   | { type: "logout" }
   | {
       type: "setSettings";
       autoLockMinutes?: number;
+      timeoutAction?: "lock" | "logout";
       lockOnSystemLock?: boolean;
       inlineMenu?: boolean;
       savePrompt?: boolean;
+      favicons?: boolean;
+      autoCopyTotp?: boolean;
       /** Only clearing the list is offered. */
       clearNeverSave?: boolean;
     }
@@ -34,10 +40,18 @@ export type Request =
   | { type: "deleteItem"; id: string }
   | { type: "restoreItem"; id: string }
   | { type: "purgeItem"; id: string }
+  | { type: "downloadAttachment"; cipherId: string; attachmentId: string }
+  // Bitwarden JSON (unencrypted); export re-checks the master password
+  | { type: "exportVault"; password: string }
+  | { type: "importVault"; text: string }
+  | { type: "addAttachment"; cipherId: string; file: { name: string; data: string } }
   | { type: "saveFolder"; name: string; id?: string }
   | { type: "deleteFolder"; id: string }
   | { type: "totp"; id: string }
   | { type: "generate"; options: Record<string, unknown> }
+  | { type: "generatorHistory" }
+  | { type: "generatorHistoryAdd"; value: string }
+  | { type: "generatorHistoryClear" }
   | { type: "clipboardCopied" }
   // Send
   | { type: "sendList" }
@@ -47,7 +61,7 @@ export type Request =
   | { type: "setPasskeys"; enabled: boolean }
   | { type: "passkeyPrompt"; id: string }
   | { type: "passkeyDecision"; id: string; action: "use" | "fallback"; itemId?: string; credentialId?: string }
-  // autofill on the active tab (activeTab is granted by opening the popup)
+  // autofill on the active tab (host permissions cover every http(s) tab)
   | { type: "pageMatches" }
   | { type: "fill"; id: string }
   | { type: "readPageLogin" };
@@ -61,15 +75,24 @@ const requestValidators: { [K in Request["type"]]: Validator<Extract<Request, { 
   twoFactorCancel: obj({ type: literal("twoFactorCancel") }),
   ssoStart: obj({ type: literal("ssoStart") }),
   unlock: obj({ type: literal("unlock"), password: str }),
+  unlockPin: obj({ type: literal("unlockPin"), pin: str }),
+  setPin: (v, p) => {
+    const s = obj({ type: literal("setPin"), pin: opt(str) })(v, p);
+    if (s.pin !== undefined && !s.pin) throw new ValidationError("pin: required");
+    return s;
+  },
   lock: obj({ type: literal("lock") }),
   logout: obj({ type: literal("logout") }),
   setSettings: (v, p) => {
     const s = obj({
       type: literal("setSettings"),
       autoLockMinutes: opt(num),
+      timeoutAction: opt(literal("lock", "logout")),
       lockOnSystemLock: opt(bool),
       inlineMenu: opt(bool),
       savePrompt: opt(bool),
+      favicons: opt(bool),
+      autoCopyTotp: opt(bool),
       clearNeverSave: opt(bool),
     })(v, p);
     if (s.autoLockMinutes !== undefined && !(AUTO_LOCK_CHOICES as readonly number[]).includes(s.autoLockMinutes))
@@ -90,16 +113,24 @@ const requestValidators: { [K in Request["type"]]: Validator<Extract<Request, { 
   deleteItem: obj({ type: literal("deleteItem"), id: str }),
   restoreItem: obj({ type: literal("restoreItem"), id: str }),
   purgeItem: obj({ type: literal("purgeItem"), id: str }),
+  downloadAttachment: obj({ type: literal("downloadAttachment"), cipherId: str, attachmentId: str }),
+  exportVault: obj({ type: literal("exportVault"), password: str }),
+  importVault: obj({ type: literal("importVault"), text: str }),
+  addAttachment: obj({ type: literal("addAttachment"), cipherId: str, file: obj({ name: str, data: str }) }),
   saveFolder: obj({ type: literal("saveFolder"), name: str, id: opt(str) }),
   deleteFolder: obj({ type: literal("deleteFolder"), id: str }),
   totp: obj({ type: literal("totp"), id: str }),
   generate: obj({ type: literal("generate"), options: record }),
+  generatorHistory: obj({ type: literal("generatorHistory") }),
+  generatorHistoryAdd: obj({ type: literal("generatorHistoryAdd"), value: str }),
+  generatorHistoryClear: obj({ type: literal("generatorHistoryClear") }),
   clipboardCopied: obj({ type: literal("clipboardCopied") }),
   sendList: obj({ type: literal("sendList") }),
   saveSend: (v, p) => {
     const s = obj({ type: literal("saveSend"), send: record, file: opt(obj({ name: str, data: str })) })(v, p);
     if (typeof s.send.name !== "string" || !s.send.name.trim()) throw new ValidationError("send.name: required");
-    if (s.send.id !== undefined) throw new ValidationError("send.id: editing sends is not supported");
+    // An edit (id) changes the stored send; a file send's content cannot change.
+    if (s.send.id !== undefined && (typeof s.send.id !== "string" || s.file)) throw new ValidationError("send.id: invalid edit");
     return s;
   },
   deleteSend: obj({ type: literal("deleteSend"), id: str }),
@@ -129,6 +160,8 @@ export interface TwoFactorChallenge {
 
 export interface Settings {
   autoLockMinutes: number;
+  /** What auto-lock, system lock and a browser restart do: lock, or log out (forget the account). */
+  timeoutAction: "lock" | "logout";
   lockOnSystemLock: boolean;
   /** Answer websites' passkey requests (needs site access; content scripts registered). */
   passkeys: boolean;
@@ -140,6 +173,10 @@ export interface Settings {
   neverSave: string[];
   /** Chrome's own password saving and address/card autofill are turned off (privacy permission). */
   defaultManager: boolean;
+  /** Website icons for logins, from the server's /icons service. */
+  favicons: boolean;
+  /** After filling a login that has a TOTP key, put the current code on the clipboard. */
+  autoCopyTotp: boolean;
 }
 
 export interface State {
@@ -150,6 +187,10 @@ export interface State {
   twoFactor?: TwoFactorChallenge;
   /** The last SSO login failed (it finishes in the background, after the popup closed). */
   ssoError?: string;
+  /** PIN unlock is turned on for this account. */
+  pinSet?: boolean;
+  /** The locked vault can be opened with the PIN (until the browser restarts). */
+  pinUnlock?: boolean;
   settings: Settings;
 }
 
@@ -182,7 +223,17 @@ export interface VaultList {
   items: VaultItem[];
   folders: Folder[];
   trash: VaultItem[];
+  /** Names for organization items' details. */
+  organizations?: Folder[];
+  collections?: Folder[];
   syncedAt?: number;
+}
+
+/** A copied generator value, newest first. */
+export interface HistoryEntry {
+  /** epoch ms */
+  date: number;
+  value: string;
 }
 
 export interface PasskeyCandidate {
@@ -245,11 +296,14 @@ export type CoreRequest =
   | { op: "prepareKey"; email: string; password: string; kdf: KdfParams }
   | { op: "authHash"; handle: number }
   | { op: "unlock"; handle: number; protectedUserKey: string; encryptedPrivateKey?: string }
+  // PIN: the user key wrapped with a key derived from the PIN (account KDF and email)
+  | { op: "pinProtect"; pin: string; email: string; kdf: KdfParams }
+  | { op: "unlockPin"; pin: string; email: string; kdf: KdfParams; protectedUserKey: string; encryptedPrivateKey?: string }
   | { op: "freeKey"; handle: number }
   | { op: "lock" }
   | { op: "status" }
   // vault: the worker keeps the decrypted vault in memory
-  | { op: "loadVault"; ciphers: unknown[]; folders: unknown[]; sends: unknown[]; orgKeys: Record<string, string> }
+  | { op: "loadVault"; ciphers: unknown[]; folders: unknown[]; sends: unknown[]; orgKeys: Record<string, string>; collections: unknown[]; orgs: Folder[] }
   | { op: "upsertCipher"; cipher: Record<string, unknown> }
   | { op: "removeCipher"; id: string }
   | { op: "listVault" }
@@ -257,9 +311,17 @@ export type CoreRequest =
   | { op: "prepareSave"; item: Record<string, unknown> }
   | { op: "totp"; id: string }
   | { op: "generate"; options: Record<string, unknown> }
+  // free text encrypted with the user key (like a folder name)
+  | { op: "encryptText"; values: string[] }
+  | { op: "decryptText"; values: string[] }
   | { op: "matchUri"; url: string }
   | { op: "fillData"; id: string }
   | { op: "formValues"; id: string }
+  // attachments (bodies base64)
+  | { op: "decryptAttachment"; cipherId: string; attachmentId: string; data: string }
+  | { op: "exportJson" }
+  | { op: "prepareImport"; text: string }
+  | { op: "encryptAttachment"; cipherId: string; fileName: string; data: string }
   // Send
   | { op: "listSends" }
   | { op: "prepareSend"; send: Record<string, unknown> }
@@ -271,7 +333,7 @@ export type CoreRequest =
   | { op: "passkeyAssert"; itemId: string; credentialId: string; rpId: string; origin: string; challenge: string }
   | { op: "passkeyCreate"; input: PasskeyCreateInput }
   // handled by the offscreen document itself, not the worker
-  | { op: "clearClipboard" };
+  | { op: "writeClipboard"; text: string };
 
 export type CoreResult = { ok: true; value: unknown } | { ok: false; error: string };
 
@@ -286,10 +348,20 @@ const coreValidators: { [K in CoreRequest["op"]]: Validator<Extract<CoreRequest,
   prepareKey: obj({ op: literal("prepareKey"), email: str, password: str, kdf: kdfParams }),
   authHash: obj({ op: literal("authHash"), handle: num }),
   unlock: obj({ op: literal("unlock"), handle: num, protectedUserKey: str, encryptedPrivateKey: opt(str) }),
+  pinProtect: obj({ op: literal("pinProtect"), pin: str, email: str, kdf: kdfParams }),
+  unlockPin: obj({ op: literal("unlockPin"), pin: str, email: str, kdf: kdfParams, protectedUserKey: str, encryptedPrivateKey: opt(str) }),
   freeKey: obj({ op: literal("freeKey"), handle: num }),
   lock: obj({ op: literal("lock") }),
   status: obj({ op: literal("status") }),
-  loadVault: obj({ op: literal("loadVault"), ciphers: arr(unknownValue), folders: arr(unknownValue), sends: arr(unknownValue), orgKeys: record as Validator<Record<string, string>> }),
+  loadVault: obj({
+    op: literal("loadVault"),
+    ciphers: arr(unknownValue),
+    folders: arr(unknownValue),
+    sends: arr(unknownValue),
+    orgKeys: record as Validator<Record<string, string>>,
+    collections: arr(unknownValue),
+    orgs: arr(obj({ id: str, name: str })),
+  }),
   upsertCipher: obj({ op: literal("upsertCipher"), cipher: record }),
   removeCipher: obj({ op: literal("removeCipher"), id: str }),
   listVault: obj({ op: literal("listVault") }),
@@ -297,9 +369,15 @@ const coreValidators: { [K in CoreRequest["op"]]: Validator<Extract<CoreRequest,
   prepareSave: obj({ op: literal("prepareSave"), item: record }),
   totp: obj({ op: literal("totp"), id: str }),
   generate: obj({ op: literal("generate"), options: record }),
+  encryptText: obj({ op: literal("encryptText"), values: arr(str) }),
+  decryptText: obj({ op: literal("decryptText"), values: arr(str) }),
   matchUri: obj({ op: literal("matchUri"), url: str }),
   fillData: obj({ op: literal("fillData"), id: str }),
   formValues: obj({ op: literal("formValues"), id: str }),
+  decryptAttachment: obj({ op: literal("decryptAttachment"), cipherId: str, attachmentId: str, data: str }),
+  exportJson: obj({ op: literal("exportJson") }),
+  prepareImport: obj({ op: literal("prepareImport"), text: str }),
+  encryptAttachment: obj({ op: literal("encryptAttachment"), cipherId: str, fileName: str, data: str }),
   listSends: obj({ op: literal("listSends") }),
   prepareSend: obj({ op: literal("prepareSend"), send: record }),
   encryptSendFile: obj({ op: literal("encryptSendFile"), key: str, data: str }),
@@ -308,7 +386,7 @@ const coreValidators: { [K in CoreRequest["op"]]: Validator<Extract<CoreRequest,
   passkeyCandidates: obj({ op: literal("passkeyCandidates"), rpId: str, origin: str, ids: arr(str) }),
   passkeyAssert: obj({ op: literal("passkeyAssert"), itemId: str, credentialId: str, rpId: str, origin: str, challenge: str }),
   passkeyCreate: obj({ op: literal("passkeyCreate"), input: passkeyCreateInput }),
-  clearClipboard: obj({ op: literal("clearClipboard") }),
+  writeClipboard: obj({ op: literal("writeClipboard"), text: str }),
 };
 
 export function parseCoreRequest(v: unknown): CoreRequest {

@@ -6,7 +6,7 @@ import { applyTheme, type Child, h, inPanel, savedTheme, send, t, THEMES } from 
 import { icon, type IconName } from "./icons.ts";
 import { passkeyRequestId, passkeyScreen } from "./passkey.ts";
 import { resetSend, sendScreen } from "./send.ts";
-import { type Ctx, generatorScreen, resetVault, toastEl, vaultScreen } from "./vault.ts";
+import { type Ctx, generatorScreen, resetVault, setIconBase, toastEl, vaultScreen } from "./vault.ts";
 
 // ---------- state ----------
 
@@ -21,9 +21,15 @@ interface Ui {
   provider?: number;
   /** WebAuthn was cancelled or failed: wait for a click instead of prompting again on every render. */
   webauthnPaused?: boolean;
+  /** Locked view: master password instead of the PIN. */
+  usePassword?: boolean;
+  /** Settings: the PIN form is open. */
+  pinSetup?: boolean;
+  /** Settings: the export form (master password) is open. */
+  exporting?: boolean;
 }
 
-const draft = { server: "", email: "", password: "", code: "", remember: false };
+const draft = { server: "", email: "", password: "", code: "", pin: "", remember: false };
 const ui: Ui = { busy: false, tab: "vault", editServer: false, reveal: false };
 let state: State | undefined;
 
@@ -61,7 +67,7 @@ function field(opts: {
   );
 }
 
-function bound(key: "server" | "email" | "password" | "code", props: Record<string, unknown>) {
+function bound(key: "server" | "email" | "password" | "code" | "pin", props: Record<string, unknown>) {
   return h("input", {
     ...props,
     value: draft[key],
@@ -274,7 +280,7 @@ async function submitWebAuthn(token: string) {
 
 function twoFactorView(s: State): HTMLElement {
   const offered = s.twoFactor?.providers ?? [];
-  const supported: number[] = [TWO_FACTOR.Authenticator, TWO_FACTOR.Email, TWO_FACTOR.WebAuthn].filter(
+  const supported: number[] = [TWO_FACTOR.Authenticator, TWO_FACTOR.Email, TWO_FACTOR.YubiKey, TWO_FACTOR.WebAuthn].filter(
     (p) => offered.includes(p) && (p !== TWO_FACTOR.WebAuthn || !!s.twoFactor?.webauthn),
   );
   if (ui.provider === undefined || !supported.includes(ui.provider)) ui.provider = supported[0];
@@ -321,6 +327,7 @@ function twoFactorView(s: State): HTMLElement {
           { class: "chips", role: "group", "aria-label": t("twoFactorMethod") },
           offered.includes(TWO_FACTOR.Authenticator) ? chip(TWO_FACTOR.Authenticator, t("providerAuthenticator"), "phone") : null,
           offered.includes(TWO_FACTOR.Email) ? chip(TWO_FACTOR.Email, t("providerEmail"), "mail") : null,
+          offered.includes(TWO_FACTOR.YubiKey) ? chip(TWO_FACTOR.YubiKey, t("providerYubiKey"), "key") : null,
           supported.includes(TWO_FACTOR.WebAuthn) ? chip(TWO_FACTOR.WebAuthn, t("providerWebAuthn"), "key") : null,
         )
       : h("div", { class: "error" }, icon("error"), h("div", {}, t("twoFactorUnsupported"))),
@@ -344,12 +351,19 @@ function twoFactorView(s: State): HTMLElement {
       : null,
     ui.info ? h("p", { class: "note", role: "status" }, ui.info) : null,
     ui.provider === TWO_FACTOR.WebAuthn ? webauthnBox(s) : null,
+    ui.provider === TWO_FACTOR.YubiKey ? h("p", { class: "note" }, t("yubiKeyHint")) : null,
     typed
       ? field({
           icon: "lock",
           label: t("verificationCode"),
-          extraClass: "code",
-          input: bound("code", { inputMode: "numeric", autocomplete: "one-time-code", required: true, "data-autofocus": "1" }),
+          extraClass: ui.provider === TWO_FACTOR.YubiKey ? undefined : "code",
+          // A YubiKey OTP is 44 modhex letters typed by the key itself.
+          input: bound(
+            "code",
+            ui.provider === TWO_FACTOR.YubiKey
+              ? { autocomplete: "off", spellcheck: false, required: true, "data-autofocus": "1" }
+              : { inputMode: "numeric", autocomplete: "one-time-code", required: true, "data-autofocus": "1" },
+          ),
         })
       : null,
     supported.length
@@ -362,12 +376,18 @@ function twoFactorView(s: State): HTMLElement {
 }
 
 function lockedView(s: State): HTMLElement {
+  const withPin = !!s.pinUnlock && !ui.usePassword;
   const onsubmit = (e: Event) => {
     e.preventDefault();
-    const password = draft.password;
-    draft.password = "";
-    void act({ type: "unlock", password }, t("busyUnlocking"));
+    const [password, pin] = [draft.password, draft.pin];
+    draft.password = draft.pin = "";
+    void act(withPin ? { type: "unlockPin", pin } : { type: "unlock", password }, t("busyUnlocking"));
   };
+  const pinField = () =>
+    field({ icon: "lock", label: t("pin"), input: bound("pin", { type: "password", autocomplete: "off", required: true, spellcheck: false, "data-autofocus": "1" }) });
+  const switchMethod = s.pinUnlock
+    ? h("button", { type: "button", class: "btn text", disabled: ui.busy, onclick: () => ((ui.usePassword = !ui.usePassword), (ui.error = undefined), render()) }, t(withPin ? "useMasterPassword" : "usePin"))
+    : null;
   return h(
     "form",
     { class: "page center", onsubmit },
@@ -379,13 +399,14 @@ function lockedView(s: State): HTMLElement {
       h("p", {}, s.email ?? ""),
       h("p", {}, host(s.serverUrl)),
     ),
-    passwordField("current-password"),
+    withPin ? pinField() : passwordField("current-password"),
     errorBox(),
     busyBar(),
     h(
       "div",
       { class: "actions" },
       submitButton(t("unlock")),
+      switchMethod,
       h("button", { type: "button", class: "btn text", disabled: ui.busy, onclick: () => void act({ type: "logout" }) }, t("logOut")),
     ),
   );
@@ -432,15 +453,7 @@ function settingsTab(s: State): HTMLElement {
     type: "checkbox",
     checked: s.settings.passkeys,
     "aria-label": t("passkeys"),
-    onchange: (e: Event) => {
-      const box = e.target as HTMLInputElement;
-      if (!box.checked) return void act({ type: "setPasskeys", enabled: false });
-      // Site access is requested inside the click (user gesture); it is what lets the shim run on websites.
-      chrome.permissions.request({ origins: ["https://*/*"] }).then(
-        (granted) => (granted ? void act({ type: "setPasskeys", enabled: true }) : ((box.checked = false), (ui.error = t("errPermissionDenied")), render())),
-        (err: unknown) => ((box.checked = false), (ui.error = String(err)), render()),
-      );
-    },
+    onchange: (e: Event) => void act({ type: "setPasskeys", enabled: (e.target as HTMLInputElement).checked }),
   });
   const toggle = (label: string, checked: boolean, onchange: (box: HTMLInputElement) => void) =>
     h("span", { class: "switch" }, h("input", { type: "checkbox", checked, "aria-label": label, onchange: (e: Event) => onchange(e.target as HTMLInputElement) }), h("span"));
@@ -461,6 +474,7 @@ function settingsTab(s: State): HTMLElement {
       "div",
       { class: "group" },
       row("home", t("inlineMenu"), t("inlineMenuHint"), toggle(t("inlineMenu"), s.settings.inlineMenu, (b) => void act({ type: "setSettings", inlineMenu: b.checked }))),
+      row("timer", t("autoCopyTotp"), t("autoCopyTotpHint"), toggle(t("autoCopyTotp"), s.settings.autoCopyTotp, (b) => void act({ type: "setSettings", autoCopyTotp: b.checked }))),
       row("plus", t("savePrompt"), t("savePromptHint"), toggle(t("savePrompt"), s.settings.savePrompt, (b) => void act({ type: "setSettings", savePrompt: b.checked }))),
       s.settings.neverSave.length
         ? row("globe", t("neverSaveSites", String(s.settings.neverSave.length)), s.settings.neverSave.join(", "), h("button", { type: "button", class: "btn text small", onclick: () => void act({ type: "setSettings", clearNeverSave: true }) }, t("clear")))
@@ -480,6 +494,17 @@ function settingsTab(s: State): HTMLElement {
       { class: "group" },
       row("timer", t("autoLock"), undefined, select),
       row(
+        "logout",
+        t("timeoutAction"),
+        undefined,
+        h(
+          "select",
+          { "aria-label": t("timeoutAction"), onchange: (e: Event) => void act({ type: "setSettings", timeoutAction: (e.target as HTMLSelectElement).value as "lock" | "logout" }) },
+          h("option", { value: "lock", selected: s.settings.timeoutAction === "lock" }, t("lock")),
+          h("option", { value: "logout", selected: s.settings.timeoutAction === "logout" }, t("logOut")),
+        ),
+      ),
+      row(
         "eye",
         t("theme"),
         undefined,
@@ -495,9 +520,64 @@ function settingsTab(s: State): HTMLElement {
           ...THEMES.map((v) => h("option", { value: v, selected: v === savedTheme() }, t(`theme_${v}`))),
         ),
       ),
+      row("globe", t("favicons"), t("faviconsHint"), toggle(t("favicons"), s.settings.favicons, (b) => void act({ type: "setSettings", favicons: b.checked }))),
       row("lock", t("lockOnSystemLock"), undefined, h("span", { class: "switch" }, sysLock, h("span"))),
+      row(
+        "key",
+        t("unlockWithPin"),
+        t("unlockWithPinHint"),
+        toggle(t("unlockWithPin"), !!s.pinSet || !!ui.pinSetup, (b) => (b.checked ? ((ui.pinSetup = true), render()) : void act({ type: "setPin" }))),
+      ),
+      ui.pinSetup && !s.pinSet
+        ? h(
+            "form",
+            {
+              class: "row",
+              onsubmit: async (e: Event) => {
+                e.preventDefault();
+                const pin = draft.pin;
+                draft.pin = "";
+                if (await act({ type: "setPin", pin })) ui.pinSetup = false;
+                render();
+              },
+            },
+            h("input", { type: "password", autocomplete: "off", required: true, "aria-label": t("pin"), placeholder: t("pin"), value: draft.pin, oninput: (e: Event) => (draft.pin = (e.target as HTMLInputElement).value) }),
+            h("button", { type: "submit", class: "btn tonal small" }, t("setPin")),
+          )
+        : null,
       row("key", t("passkeys"), t("passkeysHint"), h("span", { class: "switch" }, passkeys, h("span"))),
     ),
+    h("h2", { class: "section-title" }, t("vault")),
+    h(
+      "div",
+      { class: "group" },
+      row("download", t("exportVault"), t("exportHint"), null, { type: "button", disabled: ui.busy, onclick: () => ((ui.exporting = !ui.exporting), render()) }, "button"),
+      ui.exporting
+        ? h(
+            "form",
+            {
+              class: "row",
+              onsubmit: (e: Event) => {
+                e.preventDefault();
+                const password = draft.password;
+                draft.password = "";
+                void exportVault(password);
+              },
+            },
+            h("input", { type: "password", autocomplete: "current-password", required: true, "aria-label": t("masterPassword"), placeholder: t("masterPassword"), value: draft.password, oninput: (e: Event) => (draft.password = (e.target as HTMLInputElement).value) }),
+            h("button", { type: "submit", class: "btn tonal small", disabled: ui.busy }, t("exportConfirm")),
+          )
+        : null,
+      h(
+        "label",
+        { class: "row" },
+        icon("plus"),
+        h("div", { class: "body" }, h("span", { class: "title" }, t("importVault")), h("span", { class: "sub" }, t("importHint"))),
+        h("input", { type: "file", accept: ".json,application/json", class: "sr-only", "aria-label": t("importVault"), disabled: ui.busy, onchange: (e: Event) => void importVault((e.target as HTMLInputElement).files?.[0]) }),
+      ),
+    ),
+    busyBar(),
+    ui.info ? h("p", { class: "note", role: "status" }, ui.info) : null,
     h(
       "div",
       { class: "group" },
@@ -513,6 +593,34 @@ function settingsTab(s: State): HTMLElement {
     ),
     errorBox(),
   );
+}
+
+async function exportVault(password: string) {
+  Object.assign(ui, { busy: true, error: undefined, info: undefined });
+  render();
+  const r = await send<string>({ type: "exportVault", password });
+  ui.busy = false;
+  if (r.ok) {
+    const stamp = new Date().toISOString().replace(/\D/g, "").slice(0, 14);
+    const url = URL.createObjectURL(new Blob([r.data], { type: "application/json" }));
+    h("a", { href: url, download: `plugwarden_export_${stamp}.json` }).click();
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    ui.exporting = false;
+  } else ui.error = r.error;
+  render();
+}
+
+async function importVault(file: File | undefined) {
+  if (!file) return;
+  Object.assign(ui, { busy: true, error: undefined, info: undefined });
+  render();
+  const r = await send<{ imported: number; skipped: number }>({ type: "importVault", text: await file.text() });
+  ui.busy = false;
+  if (r.ok) {
+    ui.info = t("imported", String(r.data.imported)) + (r.data.skipped ? ` ${t("importSkipped", String(r.data.skipped))}` : "");
+    resetVault(); // the list reloads with the new items
+  } else ui.error = r.error;
+  render();
 }
 
 function unlockedView(s: State): DocumentFragment {
@@ -535,13 +643,14 @@ function unlockedView(s: State): DocumentFragment {
 // ---------- render ----------
 
 const app = document.getElementById("app")!;
-const vaultCtx: Ctx = { rerender: () => render(), lock: () => void act({ type: "lock" }) };
+const vaultCtx: Ctx = { rerender: () => render(), lock: () => void act({ type: "lock" }), email: () => state?.email };
 let firstRender = true;
 
 function render(): void {
   if (!state) return;
   const s = state;
   if (s.phase !== "twoFactor") ui.webauthnPaused = false;
+  setIconBase(s.settings.favicons && s.serverUrl ? `${s.serverUrl}/icons` : undefined);
   if (s.phase !== "unlocked") {
     ui.tab = "vault"; // a new session always starts on the vault
     resetVault(); // and holds no decrypted data from the previous one
@@ -572,7 +681,7 @@ if (!inPanel) void chrome.windows.getCurrent().then((w) => (windowId = w.id));
 void send<State>({ type: "getState" }).then((res) => {
   if (res.ok) state = res.data;
   else {
-    state = { phase: "setup", settings: { autoLockMinutes: 15, lockOnSystemLock: true, passkeys: false, inlineMenu: true, savePrompt: true, neverSave: [], defaultManager: false } };
+    state = { phase: "setup", settings: { autoLockMinutes: 15, timeoutAction: "lock", lockOnSystemLock: true, passkeys: false, inlineMenu: true, savePrompt: true, neverSave: [], defaultManager: false, favicons: true, autoCopyTotp: true } };
     ui.error = res.error;
   }
   draft.email = state.email ?? "";

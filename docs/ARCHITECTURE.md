@@ -5,7 +5,7 @@ Plugwarden is a Manifest V3 Chrome extension (Chromium 156+) that talks to a sel
 
 1. Protocol compatibility with Vaultwarden (pinned in `upstream.lock`; the server is the source of truth).
 2. Security (minimal permissions, plaintext only in memory, auto-lock).
-3. Size and speed (no UI framework, esbuild, small pruned WASM, no persistent content script).
+3. Size and speed (no UI framework, esbuild, small pruned WASM, a content script that stays idle until a field is focused).
 4. Easy upstream sync (pinned revs, upstream map, diff reports, contract tests).
 
 ## Process model
@@ -33,10 +33,15 @@ Plugwarden is a Manifest V3 Chrome extension (Chromium 156+) that talks to a sel
   WASM memory to. The SW never holds the user key, only encrypted blobs it passes through.
 * **Popup** (`src/ui`): vanilla TS, no components framework. Asks the SW for data; never sees keys, never calls
   `fetch`. First paint must not wait for WASM.
-* **Autofill** (`src/autofill`): no persistent content script and no site access. On a user gesture
-  (popup "Fill", Ctrl+Shift+L, context menu "Fill with Plugwarden"), which grants `activeTab`, the SW
-  injects a self-contained function into the tab's top frame with `chrome.scripting`. It re-checks the
-  page origin before filling. "Save login" reads the typed-in form on request from the popup.
+* **Autofill** (`src/autofill`): a static content script (`content.js`, all http(s) pages and frames,
+  `document_idle`) that scans nothing on load and only reacts when the user focuses an input. For
+  login, card and identity fields it frames the inline menu (`menu.html`) under the field; after a login
+  form is submitted it asks the SW whether to show the save/update bar (`bar.html`, top frame only).
+  Both are extension pages (web-accessible resources), so the site cannot read their contents; they ask
+  the SW for data and the SW fills. Fills (inline menu, popup "Fill", Ctrl+Shift+L, context menu) inject a
+  self-contained function from `page.ts` with `chrome.scripting` into the frame whose URL matched, and
+  the function re-checks the origin before filling. Matching always uses the URL the browser reports
+  (`sender.url` / `tab.url`), never one the page supplies.
 
 ## Modules and boundaries
 
@@ -87,17 +92,26 @@ scripts may only send a whitelisted subset of message types).
 
 ## Permissions
 
-`storage`, `alarms`, `idle`, `offscreen`, `clipboardWrite` (clearing copied secrets), plus `optional_host_permissions` `https://*/*`,
-`http://*/*`: Vaultwarden's CORS only allows its own origin, so the extension needs a host permission
-for the server. It is requested at setup for that one origin only (`chrome.permissions.request`).
-`activeTab`, `scripting`, `contextMenus` (Phase 3): fill on user gesture only; no `<all_urls>` and no
-persistent content script, so there is no automatic "save login" bar (a popup button reads the form instead).
-`sidePanel` (Phase 4): the popup UI also opens in the side panel (`sidepanel.html`, same bundle).
+`storage`, `alarms`, `idle`, `offscreen`, `clipboardWrite` (clearing copied secrets), `scripting`,
+`contextMenus`, `sidePanel` (the popup UI also opens in the side panel: `sidepanel.html`, same bundle).
 
-Content scripts are only ever registered at runtime (`chrome.scripting.registerContentScripts`):
+Host permissions `https://*/*` and `http://*/*` are **required at install**, like the official
+extension: Vaultwarden's CORS only allows its own origin, so the server needs one; the content script,
+the inline menu and the save bar need every site; fills and the side panel's "On this site" use
+`chrome.scripting` and `tabs.query` URLs on any tab, so `activeTab` is not needed.
 
-* **Passkeys** (opt-in in Settings): asks for `https://*/*` from the optional host permissions, then
-  registers a MAIN-world shim (`passkey-page.js`, wraps `navigator.credentials.create/get`) and an
+`privacy` is **optional**: requested inside the click on "Make Plugwarden the default password
+manager" (it turns off the browser's own password saving and autofill through `chrome.privacy`) and
+removed when that setting is turned off.
+
+Static content script `content.js` (see Autofill above) plus the web-accessible `menu.html` and
+`bar.html`. Its per-tab state lives in `chrome.storage.session`, one key per tab, removed when the tab
+closes: `inline:<tabId>` (frame, URL and kind of the field the open menu belongs to) and `save:<tabId>`
+(a submitted login waiting in the save bar, 5 minute TTL).
+
+Other content scripts are registered at runtime (`chrome.scripting.registerContentScripts`):
+
+* **Passkeys** (opt-in in Settings): registers a MAIN-world shim (`passkey-page.js`, wraps `navigator.credentials.create/get`) and an
   isolated relay (`passkey-relay.js`) on the granted origins, top frames only. Each call opens an
   approval window (`popup.html?passkey=<id>`); the origin comes from `port.sender.origin`, the RP ID is
   checked against it (with the PSL) in the worker, and keys are signed there (WebCrypto ES256).
@@ -109,11 +123,16 @@ Content scripts are only ever registered at runtime (`chrome.scripting.registerC
 
 * `chrome.storage.local`: server URL, device id, encrypted vault (as returned by `/api/sync`),
   protected user key, KDF params, refresh token (plain, like the official extension; the area is
-  set to `TRUSTED_CONTEXTS` so content scripts cannot read it), 2FA remember tokens, settings.
-* `chrome.storage.session`: lock state, access token, pending 2FA login. The unlocked user key lives only in the
-  offscreen document's WASM memory.
+  set to `TRUSTED_CONTEXTS` so content scripts cannot read it), 2FA remember tokens, settings,
+  generator history and (with PIN unlock on) the PIN, both encrypted with the user key.
+* `chrome.storage.session`: lock state, access token, pending 2FA login, and with PIN unlock on the
+  user key wrapped with the PIN key (bitwarden-crypto `PinKey`, account KDF). The unlocked user key
+  lives only in the offscreen document's WASM memory. A browser restart empties this area, so the
+  master password is needed once; that unlock re-wraps the key with the stored PIN. Five wrong PINs
+  log out.
 * Lock = close offscreen document (drops WASM memory) + clear session state. Auto-lock via
-  `chrome.idle` and `chrome.alarms`. Clipboard clearing via alarm + offscreen document.
+  `chrome.idle` and `chrome.alarms`; the timeout action can instead log out (forget the account and
+  the cache), also on browser start. Clipboard clearing via alarm + offscreen document.
 
 ## Upstream sync
 

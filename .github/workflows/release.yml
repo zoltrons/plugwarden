@@ -1,0 +1,40 @@
+name: release
+# Push a tag v<manifest version> to build the extension and attach a signed .crx and a .zip to a
+# GitHub release. Needs the CRX_KEY secret: a PEM private key, which fixes the extension id, so keep it
+# and never regenerate it:  openssl genrsa 2048 | openssl pkcs8 -topk8 -nocrypt -out plugwarden.pem
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - run: rustup target add wasm32-unknown-unknown
+      - run: cargo install wasm-bindgen-cli --version "$(sed -n 's/^wasm-bindgen = "\(.*\)".*/\1/p' upstream.lock)" --locked
+      # Chromium 156 from Playwright: the runner's Chrome may be older than minimum_chrome_version.
+      - run: npm ci && npx playwright-core install --with-deps chromium
+      - run: npm i -g binaryen@132.0.0 && bash tools/build-wasm.sh --simd
+      - run: node tools/fetch-psl.mjs && npm run typecheck && npm test && npm run build && npm run size
+      - name: tag matches the manifest version
+        run: test "v$(node -p "require('./dist/ext/manifest.json').version")" = "$GITHUB_REF_NAME"
+      - name: pack .crx and .zip
+        env:
+          CRX_KEY: ${{ secrets.CRX_KEY }}
+        run: |
+          test -n "$CRX_KEY" || { echo "::error::CRX_KEY secret is not set"; exit 1; }
+          printf '%s\n' "$CRX_KEY" > "$RUNNER_TEMP/key.pem"
+          chrome="$(node -p "require('playwright-core').chromium.executablePath()")"
+          xvfb-run -a "$chrome" --pack-extension="$PWD/dist/ext" --pack-extension-key="$RUNNER_TEMP/key.pem" --no-message-box
+          rm "$RUNNER_TEMP/key.pem"
+          mv dist/ext.crx "plugwarden-$GITHUB_REF_NAME.crx"
+          (cd dist/ext && zip -qr "../../plugwarden-$GITHUB_REF_NAME.zip" .)
+      - run: gh release create "$GITHUB_REF_NAME" plugwarden-*.crx plugwarden-*.zip --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}

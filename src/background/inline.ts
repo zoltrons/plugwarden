@@ -6,7 +6,7 @@ import type { BarInfo, FieldKind, FrameRequest, MenuData, MenuItem, PageRequest,
 import { coreAlive, coreCall } from "./core.ts";
 import { touchAutoLock } from "./lock.ts";
 import { getLocal, getSession, getSettings, getTabState, setLocal, setTabState } from "./store.ts";
-import { list, save } from "./vault.ts";
+import { copyToClipboard, list, save } from "./vault.ts";
 
 export interface InlineContext {
   frameId: number;
@@ -122,8 +122,9 @@ export async function handleFrame(req: FrameRequest, tabId: number): Promise<unk
   const origin = new URL(ctx.url).origin;
   let res: FillResult | undefined;
   if (ctx.kind === "login") {
-    const { username, password } = await coreCall<{ username: string; password: string }>({ op: "fillData", id: req.id });
+    const { username, password, totp } = await coreCall<{ username: string; password: string; totp?: string }>({ op: "fillData", id: req.id });
     res = (await chrome.scripting.executeScript({ target, func: fillLogin, args: [origin, username, password] }))[0]?.result;
+    if (res?.filled && totp && (await getSettings()).autoCopyTotp) await copyToClipboard(totp);
   } else {
     const values = await coreCall<Record<string, string>>({ op: "formValues", id: req.id });
     res = (await chrome.scripting.executeScript({ target, func: fillForm, args: [origin, values] }))[0]?.result;

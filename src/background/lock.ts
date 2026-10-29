@@ -20,8 +20,3 @@ export async function touchAutoLock(): Promise<void> {
   }
   await chrome.alarms.create(AUTOLOCK_ALARM, { delayInMinutes: Math.max(autoLockMinutes, 0.5) });
 }
-
-export async function onIdleStateChanged(state: string): Promise<void> {
-  if (state !== "locked") return;
-  if ((await getSettings()).lockOnSystemLock) await lockNow();
-}

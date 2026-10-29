@@ -8,7 +8,7 @@
   "minimum_chrome_version": "156",
   "background": { "service_worker": "background.js", "type": "module" },
   "action": { "default_popup": "popup.html", "default_title": "Plugwarden" },
-  "permissions": ["storage", "alarms", "idle", "offscreen", "clipboardWrite", "activeTab", "scripting", "contextMenus", "sidePanel"],
+  "permissions": ["storage", "alarms", "idle", "offscreen", "clipboardWrite", "scripting", "contextMenus", "sidePanel"],
   "side_panel": { "default_path": "sidepanel.html" },
   "host_permissions": ["https://*/*", "http://*/*"],
   "optional_permissions": ["privacy"],
