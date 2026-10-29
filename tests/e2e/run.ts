@@ -352,7 +352,10 @@ try {
   await step("timeout action 'log out' forgets the account; login Argon2id 3/64MiB/4", async () => {
     await page.getByRole("button", { name: "Settings" }).click();
     await page.getByLabel("Timeout action").selectOption("logout");
-    await poll("timeout action saved", () => sw.evaluate(async () => (await chrome.storage.local.get("settings")).settings?.timeoutAction === "logout"));
+    // Requests run in order and each re-arms the auto-lock alarm before replying: once this no-op
+    // answers, the select's request has done so too and cannot push our short alarm back.
+    await page.evaluate(() => chrome.runtime.sendMessage({ type: "setSettings" }));
+    assert.equal(await sw.evaluate(async () => (await chrome.storage.local.get("settings")).settings?.timeoutAction), "logout");
     await sw.evaluate(() => chrome.alarms.create("autolock", { when: Date.now() + 200 }));
     await page.waitForTimeout(2000);
     await open();
