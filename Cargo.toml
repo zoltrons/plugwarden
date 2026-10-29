@@ -1,0 +1,23 @@
+[workspace]
+resolver = "3"
+members = ["crates/core-wasm"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.88"
+license = "GPL-3.0-only"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+debug = false
+
+# Native test builds: KDFs (PBKDF2 600k, Argon2id 64 MiB) are unusably slow unoptimized.
+[profile.test]
+opt-level = 3
+
+[profile.test.package."*"]
+opt-level = 3

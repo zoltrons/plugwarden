@@ -1,0 +1,32 @@
+# Plugwarden upstream pins. Single source of truth for "which upstream are we compatible with".
+# Read by tools/sync-upstream (diff report) and by CI (Cargo rev bump, Vaultwarden matrix).
+# Bump only via a PR that runs the test vectors + Vaultwarden contract tests.
+# Format: TOML.
+
+[sdk-internal]
+repo = "https://github.com/bitwarden/sdk-internal"
+rev = "d7ab9964cd0b10db346d0418dba065969663bdcb"   # main @ 2026-10-29T12:49:51Z
+# Crates we depend on (git dep, pinned to `rev` above). Anything else is out of scope.
+crates = ["bitwarden-crypto"]
+# Matches the sdk-internal workspace pin; wasm-bindgen-cli must be the exact same version.
+wasm-bindgen = "0.2.114"
+license = "GPL-3.0-only OR LicenseRef-Bitwarden-SDK"   # see docs/LICENSING.md
+
+[clients]
+repo = "https://github.com/bitwarden/clients"
+commit = "d4141a4e9bad4816149bb249d5b18247c38eac65"  # main @ 2026-10-29T10:27:32Z
+release = "browser-v2026.10.1"                        # latest browser tag at pin time
+license = "GPL-3.0-only"
+
+[vaultwarden]
+repo = "https://github.com/dani-garcia/vaultwarden"
+version = "1.37.4"
+image = "vaultwarden/server:1.37.4"
+image-digest = "sha256:efb3cde962015fcc036b2ea625242248611943b27212ebf4392841fb30fad055"
+# /api/config "version" reported by this release (Bitwarden server compat level).
+server-compat-version = "2026.6.0"
+test-matrix = ["1.37.4", "latest"]
+license = "AGPL-3.0-only"
+
+[chromium]
+minimum_chrome_version = "156"   # to be verified in Phase 1 (see docs/COMPATIBILITY.md)

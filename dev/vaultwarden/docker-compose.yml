@@ -1,0 +1,27 @@
+# Local Vaultwarden for the Phase 0 spike and the e2e contract tests.
+# Test-only fixture: signups are open and there is no admin token. Never expose beyond 127.0.0.1.
+#   VW_TAG=1.37.4 docker compose up -d     (pinned, see upstream.lock)
+#   VW_TAG=latest docker compose up -d     (matrix leg)
+name: plugwarden-vw
+
+services:
+  vaultwarden:
+    image: vaultwarden/server:${VW_TAG:-1.37.4}
+    restart: "no"
+    ports:
+      - "127.0.0.1:${VW_PORT:-8080}:80"
+    environment:
+      DOMAIN: "http://localhost:${VW_PORT:-8080}"
+      SIGNUPS_ALLOWED: "true"
+      SIGNUPS_VERIFY: "false"
+      INVITATIONS_ALLOWED: "false"
+      SHOW_PASSWORD_HINT: "false"
+      # Do not ratelimit the test harness.
+      LOGIN_RATELIMIT_MAX_BURST: "1000"
+      LOGIN_RATELIMIT_SECONDS: "1"
+      LOG_LEVEL: "warn"
+    volumes:
+      - vw-data:/data
+
+volumes:
+  vw-data:

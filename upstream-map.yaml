@@ -1,0 +1,60 @@
+# Upstream path -> local module that mirrors it. Read by tools/sync-upstream (Phase 1) to build a
+# diff report between the pins in upstream.lock and upstream main. Never edits code.
+# repo keys match upstream.lock sections.
+
+- repo: sdk-internal
+  path: crates/bitwarden-crypto
+  local: crates/core-wasm (Cargo git dep)
+  sync: Bumped as a dependency, not mirrored. Watch EncString types, key formats (COSE/v2), KDF params.
+- repo: sdk-internal
+  path: test-vectors
+  local: crates/core-wasm/tests/vectors.rs
+  sync: New vector files or fields must pass; blob-encrypted ciphers are currently skipped.
+- repo: sdk-internal
+  path: crates/bitwarden-vault/src/cipher
+  local: crates/core-wasm/src/cipher.rs
+  sync: Encrypted field list (CONTAINERS / PLAIN_KEYS); new cipher types; cipher key and blob ("data") formats.
+- repo: sdk-internal
+  path: crates/bitwarden-vault/src/totp.rs
+  local: crates/core-wasm/src/totp.rs
+  sync: URI formats, defaults, clamping.
+- repo: sdk-internal
+  path: crates/bitwarden-generators/src
+  local: crates/core-wasm/src/generator.rs
+  sync: Character sets, option defaults and bounds, wordlist.
+- repo: sdk-internal
+  path: crates/bitwarden-wasm-internal/build.sh
+  local: tools/build-wasm.sh
+  sync: wasm-bindgen version, target features (SIMD), wasm-opt flags.
+- repo: clients
+  path: apps/browser/src/manifest.v3.json
+  local: src/manifest.json (Phase 1)
+  sync: Permissions, CSP, minimum_chrome_version, commands.
+- repo: clients
+  path: apps/browser/src/autofill/content
+  local: src/autofill (Phase 3)
+  sync: Field detection heuristics, performance notes.
+- repo: clients
+  path: apps/browser/src/platform/offscreen-document
+  local: src/offscreen
+  sync: Offscreen reasons and lifecycle.
+- repo: clients
+  path: libs/common/src/platform/services/api.service.ts
+  local: src/transport (Phase 1)
+  sync: Client headers (Bitwarden-Client-Name/Version, Device-Type), token request fields.
+- repo: vaultwarden
+  path: src/api/identity.rs
+  local: src/transport/auth.ts (Phase 1), spike/vw-flow.mjs
+  sync: Token grant types, 2FA providers, prelogin/register shapes, response casing.
+- repo: vaultwarden
+  path: src/api/core/accounts.rs
+  local: src/transport (Phase 1)
+  sync: Register/profile/KDF data shapes.
+- repo: vaultwarden
+  path: src/api/core/ciphers.rs
+  local: src/transport/ciphers.ts (Phase 2), spike/vw-flow.mjs
+  sync: CipherData required fields (e.g. encryptedFor), sync response shape.
+- repo: vaultwarden
+  path: src/api/core/mod.rs
+  local: src/transport/config.ts (Phase 1)
+  sync: /api/config version (capability detection) and feature flags.

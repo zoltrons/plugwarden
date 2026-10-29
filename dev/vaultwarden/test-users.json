@@ -1,0 +1,7 @@
+{
+  "_comment": "Test-only fixture for the local docker-compose Vaultwarden. Emails get a random suffix per run.",
+  "users": [
+    { "label": "pbkdf2", "emailPrefix": "pw-pbkdf2", "password": "plugwarden-test-pbkdf2-pw", "kdf": [0, 600000, 0, 0] },
+    { "label": "argon2id", "emailPrefix": "pw-argon2", "password": "plugwarden-test-argon2-pw", "kdf": [1, 3, 64, 4] }
+  ]
+}
