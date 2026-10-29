@@ -1,6 +1,7 @@
 // Vault screens: list + search + folder filter, item view, Login/Note editor, generator.
 // Talks to the service worker only; decrypted data lives here just while the popup is open.
-import type { VaultItem, VaultList } from "../shared/messages.ts";
+import type { FillResult, PageLogin } from "../autofill/page.ts";
+import type { PageMatches, VaultItem, VaultList } from "../shared/messages.ts";
 import { type Child, h, send, t } from "./dom.ts";
 import { icon, type IconName } from "./icons.ts";
 
@@ -32,6 +33,7 @@ const GEN_DEFAULTS: Json = {
 
 const st = {
   list: undefined as VaultList | undefined,
+  page: undefined as PageMatches | undefined,
   loading: false,
   syncing: false,
   busy: false,
@@ -53,7 +55,7 @@ let totpTimer: ReturnType<typeof setInterval> | undefined;
 export function resetVault(): void {
   clearInterval(totpTimer);
   Object.assign(st, {
-    list: undefined, loading: false, syncing: false, busy: false, error: undefined, route: { kind: "list" }, query: "",
+    list: undefined, page: undefined, loading: false, syncing: false, busy: false, error: undefined, route: { kind: "list" }, query: "",
     folder: "", item: undefined, reveal: new Set(), totp: undefined, confirmDelete: false, draft: undefined,
     gen: { ...GEN_DEFAULTS }, generated: "", toast: "",
   });
@@ -118,7 +120,10 @@ async function loadList(ctx: Ctx) {
   if (r.ok) st.list = r.data;
   else st.error = r.error;
   ctx.rerender();
-  if (r.ok) await syncNow(ctx, false);
+  if (!r.ok) return;
+  const p = await send<PageMatches>({ type: "pageMatches" });
+  if (p.ok) st.page = p.data;
+  await syncNow(ctx, false);
 }
 
 async function syncNow(ctx: Ctx, force: boolean) {
@@ -126,7 +131,12 @@ async function syncNow(ctx: Ctx, force: boolean) {
   ctx.rerender();
   const r = await send<VaultList | null>({ type: "sync", force });
   st.syncing = false;
-  if (r.ok && r.data) st.list = r.data;
+  if (r.ok && r.data) {
+    st.list = r.data;
+    // New data can add matches for the current site.
+    const p = await send<PageMatches>({ type: "pageMatches" });
+    if (p.ok) st.page = p.data;
+  }
   if (!r.ok) st.error = r.error;
   ctx.rerender();
 }
@@ -193,8 +203,57 @@ function listView(ctx: Ctx): HTMLElement {
       ? h("div", { class: "chips scroll", role: "group", "aria-label": t("folders") }, chip("", t("allItems")), ...folders.map((f) => chip(f.id, f.name)), chip("none", t("noFolder")))
       : null,
     errorBox(),
+    st.query || st.folder ? null : suggestions(ctx),
     st.loading && !st.list ? h("div", { class: "progress" }) : listBox,
     h("button", { type: "button", class: "fab", onclick: () => startEdit(ctx, undefined) }, icon("plus"), t("newItem")),
+  );
+}
+
+// ---------- this site ----------
+
+async function fill(ctx: Ctx, id: string) {
+  const r = await send<FillResult>({ type: "fill", id });
+  if (r.ok && r.data.filled) window.close();
+  else toast(ctx, r.ok ? t("fillFailed") : r.error);
+}
+
+/** Save what the user typed on the page: update the login with the same username, or create one. */
+async function saveFromPage(ctx: Ctx) {
+  const r = await send<PageLogin | null>({ type: "readPageLogin" });
+  if (!r.ok || !r.data) return toast(ctx, r.ok ? t("noLoginOnPage") : r.error);
+  const login = r.data;
+  const same = st.page?.items.find((i) => !i.readOnly && i.sub === login.username);
+  if (same) {
+    const item = await send<Json>({ type: "getItem", id: same.id });
+    if (item.ok) return startEdit(ctx, item.data, { password: login.password });
+  }
+  const url = new URL(login.url);
+  startEdit(ctx, undefined, { name: url.hostname, username: login.username, password: login.password, uris: url.origin });
+}
+
+function suggestions(ctx: Ctx): Child {
+  const page = st.page;
+  if (!page?.host) return null;
+  return h(
+    "section",
+    { class: "suggestions", "aria-label": t("onThisSite", page.host) },
+    h("h2", { class: "section-title" }, t("onThisSite", page.host)),
+    page.items.length
+      ? h(
+          "div",
+          { class: "group" },
+          ...page.items.map((i) =>
+            h(
+              "div",
+              { class: "row" },
+              tile(i.name, i.type),
+              h("div", { class: "body" }, h("span", { class: "title" }, i.name), i.sub ? h("span", { class: "sub" }, i.sub) : null),
+              h("button", { type: "button", class: "btn tonal small", "aria-label": `${t("fill")} ${i.name}`, onclick: () => void fill(ctx, i.id) }, t("fill")),
+            ),
+          ),
+        )
+      : null,
+    h("button", { type: "button", class: "btn text", onclick: () => void saveFromPage(ctx) }, icon("plus"), t("saveFromPage")),
   );
 }
 
@@ -349,7 +408,7 @@ function itemView(ctx: Ctx, id: string): HTMLElement {
 
 // ---------- editor (personal Login / Secure note) ----------
 
-function startEdit(ctx: Ctx, item: Json | undefined) {
+function startEdit(ctx: Ctx, item: Json | undefined, prefill: Partial<Omit<EditDraft, "base">> = {}) {
   const base: Json = item ? structuredClone(item) : { type: 1, favorite: false, reprompt: 0, folderId: null, organizationId: null };
   const login = obj(base.login);
   st.draft = {
@@ -363,6 +422,7 @@ function startEdit(ctx: Ctx, item: Json | undefined) {
     notes: str(base.notes),
     folderId: str(base.folderId),
     favorite: base.favorite === true,
+    ...prefill,
   };
   open(ctx, { kind: "edit", isNew: !item });
 }

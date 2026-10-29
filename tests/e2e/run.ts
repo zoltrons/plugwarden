@@ -1,11 +1,12 @@
 // Phase 1 end-to-end test: real extension in a Chromium 156 browser against a local Vaultwarden.
 //   docker compose -f dev/vaultwarden/docker-compose.yml up -d
 //   bash tools/build-wasm.sh --features register --out dist/wasm-register   (test-only account setup)
-//   node tools/build.mjs --e2e-host=http://localhost:8080
+//   node tools/fetch-psl.mjs && node tools/build.mjs --e2e-host=http://localhost:8080,http://localhost:8099,http://127.0.0.1:8099
 //   CHROME_PATH=<chromium-based browser that honours --load-extension> npm run test:e2e
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -112,6 +113,14 @@ async function apiSession(u: TestUser) {
   };
 }
 
+// A plain login page for autofill tests, reachable as localhost:8099 (matches) and 127.0.0.1:8099 (does not).
+const SITE = "http://localhost:8099";
+const site = createServer((_req, res) => {
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.end(`<!doctype html><title>Login</title><form onsubmit="return false">
+    <input id="u" name="user" autocomplete="username"><input id="p" type="password" name="pw"><button>Sign in</button></form>`);
+}).listen(8099);
+
 // ---------- browser ----------
 
 const ext = join(root, "dist/ext");
@@ -137,7 +146,7 @@ try {
       await p.close();
     }
   };
-  const page: Page = await ctx.newPage();
+  let page: Page = await ctx.newPage();
   currentPage = page;
   const open = async () => {
     await page.goto(popupUrl);
@@ -152,6 +161,15 @@ try {
     await click("Log in");
   };
   const expectUnlocked = () => page.getByRole("searchbox", { name: "Search vault" }).waitFor({ timeout: 20_000 });
+  const unlockIfLocked = async () => {
+    await page.goto(popupUrl);
+    await page.locator("#app .page").waitFor();
+    if (await page.getByRole("heading", { name: "Vault locked" }).count()) {
+      await fill("Master password", "test-vault-pw");
+      await click("Unlock");
+      await expectUnlocked();
+    }
+  };
   const logout = async () => {
     await page.getByRole("button", { name: "Settings" }).click();
     await page.getByRole("button", { name: "Log out" }).click();
@@ -381,8 +399,89 @@ try {
     assert.ok(!(await page.locator("#app").innerText()).includes("GitHub"));
   });
 
+  // ---------- Phase 3: autofill ----------
+  const s3 = await apiSession(vaultUser);
+  await s3.create({ type: 1, name: "Local app", login: { username: "local-user", password: "local-pass", uris: [{ uri: SITE, match: null }] } });
+  s3.done();
+  const loginPage = await ctx.newPage();
+  await loginPage.goto(`${SITE}/login`);
+  const reopenPopup = async () => {
+    if (page.isClosed()) page = await ctx.newPage();
+    currentPage = page;
+    await loginPage.bringToFront(); // the "active tab" the popup works on
+    await page.goto(popupUrl);
+  };
+  const fieldValues = () =>
+    loginPage.evaluate(() => [(document.getElementById("u") as HTMLInputElement).value, (document.getElementById("p") as HTMLInputElement).value]);
+  const setFields = (u: string, p: string) =>
+    loginPage.evaluate(([u, p]) => {
+      (document.getElementById("u") as HTMLInputElement).value = u!;
+      (document.getElementById("p") as HTMLInputElement).value = p!;
+    }, [u, p]);
+
+  await step("autofill: popup lists site matches and fills the page", async () => {
+    await unlockIfLocked();
+    await reopenPopup();
+    await page.getByRole("heading", { name: "On this site — localhost:8099" }).waitFor();
+    await page.getByRole("button", { name: "Fill Local app" }).click();
+    await loginPage.waitForFunction(() => (document.getElementById("p") as HTMLInputElement).value !== "");
+    assert.deepEqual(await fieldValues(), ["local-user", "local-pass"]);
+  });
+
+  const shortcut = () =>
+    sw.evaluate(async () => {
+      const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+      return (globalThis as any).plugwardenTest.autofillFromGesture(tab);
+    });
+
+  await step("Ctrl+Shift+L handler: fills matching sites only", async () => {
+    const other = await ctx.newPage();
+    await other.goto("http://127.0.0.1:8099/login");
+    await other.bringToFront();
+    assert.deepEqual(await shortcut(), { filled: false, reason: "noMatch" });
+    await other.close();
+    await setFields("", "");
+    await loginPage.bringToFront();
+    assert.deepEqual(await shortcut(), { filled: true });
+    assert.deepEqual(await fieldValues(), ["local-user", "local-pass"]);
+    const cmds = await sw.evaluate(() => chrome.commands.getAll());
+    // The suggested key is only a suggestion; browsers may leave it unassigned (Helium does).
+    const cmd = cmds.find((c) => c.name === "autofill-login");
+    assert.ok(cmd, "autofill-login command not registered");
+    console.log(`    assigned shortcut: ${JSON.stringify(cmd.shortcut)}`);
+  });
+
+  await step("save login from page: new username creates an item", async () => {
+    await setFields("new-user", "new-pass");
+    await reopenPopup();
+    await page.getByRole("button", { name: "Save login from this page" }).click();
+    assert.equal(await page.getByLabel("Name", { exact: true }).inputValue(), "localhost");
+    await page.getByRole("button", { name: "Save" }).click();
+    await page.getByRole("status").filter({ hasText: "Saved" }).waitFor();
+    const s = await apiSession(vaultUser);
+    const c = (await s.ciphers()).find((x) => x.login?.username === "new-user" && !x.deletedDate);
+    s.done();
+    assert.equal(c?.login.password, "new-pass");
+    assert.equal(c?.login.uris[0].uri, SITE);
+  });
+
+  await step("save login from page: same username updates the password", async () => {
+    await setFields("local-user", "local-pass-2");
+    await reopenPopup();
+    await page.getByRole("button", { name: "Save login from this page" }).click();
+    await page.getByRole("heading", { name: "Edit item" }).waitFor();
+    await page.getByRole("button", { name: "Save" }).click();
+    await page.getByRole("heading", { name: "Local app" }).waitFor();
+    const s = await apiSession(vaultUser);
+    const c = (await s.ciphers()).find((x) => x.name === "Local app");
+    s.done();
+    assert.equal(c?.login.password, "local-pass-2");
+    assert.equal(c?.passwordHistory?.[0]?.password, "local-pass");
+  });
+
   console.log(`\n${passed.length} steps passed (${await ctx.browser()?.version() ?? "persistent context"})`);
 } finally {
   await ctx.close();
+  site.close();
   rmSync(profile, { recursive: true, force: true });
 }

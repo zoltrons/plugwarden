@@ -11,6 +11,7 @@ Plugwarden is licensed **GPL-3.0-only**.
 | bitwarden/sdk-internal (`bitwarden-crypto`) | GPL-3.0-only OR Bitwarden SDK License | Cargo **git dependency pinned to a rev**; we take it under the **GPL-3.0-only** option. Not vendored. |
 | bitwarden/sdk-internal `test-vectors/` | same | Downloaded at test time by `tools/fetch-test-vectors.sh` into `target/` (gitignored). Not committed. |
 | bitwarden/clients | GPL-3.0-only | Read as reference only. No source copied. |
+| publicsuffix/list | MPL-2.0 | Data file fetched at build time (`tools/fetch-psl.mjs`, pinned in `upstream.lock`) and shipped as `psl.json`. MPL-2.0 is GPL-compatible; ship its notice with releases. |
 | dani-garcia/vaultwarden | AGPL-3.0-only | Protocol reference and a test server in Docker. No code linked or copied. |
 
 Why GPL-3.0-only and not the Bitwarden SDK License: the SDK License only allows use in a

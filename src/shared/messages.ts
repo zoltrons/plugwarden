@@ -24,7 +24,11 @@ export type Request =
   | { type: "deleteItem"; id: string }
   | { type: "totp"; id: string }
   | { type: "generate"; options: Record<string, unknown> }
-  | { type: "clipboardCopied" };
+  | { type: "clipboardCopied" }
+  // autofill on the active tab (activeTab is granted by opening the popup)
+  | { type: "pageMatches" }
+  | { type: "fill"; id: string }
+  | { type: "readPageLogin" };
 
 const requestValidators: { [K in Request["type"]]: Validator<Extract<Request, { type: K }>> } = {
   getState: obj({ type: literal("getState") }),
@@ -57,6 +61,9 @@ const requestValidators: { [K in Request["type"]]: Validator<Extract<Request, { 
   totp: obj({ type: literal("totp"), id: str }),
   generate: obj({ type: literal("generate"), options: record }),
   clipboardCopied: obj({ type: literal("clipboardCopied") }),
+  pageMatches: obj({ type: literal("pageMatches") }),
+  fill: obj({ type: literal("fill"), id: str }),
+  readPageLogin: obj({ type: literal("readPageLogin") }),
 };
 
 export function parseRequest(v: unknown): Request {
@@ -98,6 +105,12 @@ export interface VaultItem {
   readOnly: boolean;
   hasTotp: boolean;
   failed?: boolean;
+}
+
+/** Logins matching the active tab. `host` is absent when the tab is not an http(s) page. */
+export interface PageMatches {
+  host?: string;
+  items: VaultItem[];
 }
 
 export interface Folder {
@@ -151,6 +164,8 @@ export type CoreRequest =
   | { op: "prepareSave"; item: Record<string, unknown> }
   | { op: "totp"; id: string }
   | { op: "generate"; options: Record<string, unknown> }
+  | { op: "matchUri"; url: string }
+  | { op: "fillData"; id: string }
   // handled by the offscreen document itself, not the worker
   | { op: "clearClipboard" };
 
@@ -175,6 +190,8 @@ const coreValidators: { [K in CoreRequest["op"]]: Validator<Extract<CoreRequest,
   prepareSave: obj({ op: literal("prepareSave"), item: record }),
   totp: obj({ op: literal("totp"), id: str }),
   generate: obj({ op: literal("generate"), options: record }),
+  matchUri: obj({ op: literal("matchUri"), url: str }),
+  fillData: obj({ op: literal("fillData"), id: str }),
   clearClipboard: obj({ op: literal("clearClipboard") }),
 };
 

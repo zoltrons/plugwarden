@@ -28,7 +28,7 @@ jobs:
       - run: cargo install wasm-bindgen-cli --version "$(sed -n 's/^wasm-bindgen = "\(.*\)".*/\1/p' upstream.lock)" --locked
       - run: npm ci
       - run: npm i -g binaryen@132.0.0 && bash tools/build-wasm.sh --simd
-      - run: npm run typecheck && npm test
+      - run: node tools/fetch-psl.mjs && npm run typecheck && npm test
       - run: npm run build
       - name: size report (fails over budget)
         shell: bash # explicit bash adds pipefail, so tee does not hide a budget failure
@@ -54,5 +54,5 @@ jobs:
       - uses: actions/download-artifact@v4
         with: { name: wasm, path: dist/wasm }
       - run: npm i -g binaryen@132.0.0 && bash tools/build-wasm.sh --features register --out dist/wasm-register
-      - run: node tools/build.mjs --e2e-host=http://localhost:8080
+      - run: node tools/fetch-psl.mjs && node tools/build.mjs --e2e-host=http://localhost:8080,http://localhost:8099,http://127.0.0.1:8099
       - run: npm run test:e2e

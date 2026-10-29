@@ -334,5 +334,31 @@
   },
   "includeNumber": {
     "message": "Include number"
+  },
+  "ctxAutofill": {
+    "message": "Fill with Plugwarden"
+  },
+  "cmdAutofill": {
+    "message": "Fill the login for this page"
+  },
+  "onThisSite": {
+    "message": "On this site — $P1$",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "fill": {
+    "message": "Fill"
+  },
+  "saveFromPage": {
+    "message": "Save login from this page"
+  },
+  "noLoginOnPage": {
+    "message": "No filled-in login form found on this page"
+  },
+  "fillFailed": {
+    "message": "Could not find a login form to fill"
   }
 }

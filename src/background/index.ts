@@ -24,6 +24,7 @@ import {
   setLocal,
   updateSession,
 } from "./store.ts";
+import { AUTOFILL_COMMAND, autofillFromGesture, CONTEXT_MENU_ID, fillActiveTab, pageMatches, readPageLogin } from "./autofill.ts";
 import { CLIPBOARD_ALARM, clearClipboard, list as vaultList, requireUnlocked, save, sync, trash } from "./vault.ts";
 
 async function getState(): Promise<State> {
@@ -86,6 +87,14 @@ async function handle(req: Request): Promise<unknown> {
       if (req.type === "totp") return coreCall({ op: "totp", id: req.id });
       return coreCall({ op: "generate", options: req.options });
     }
+    case "pageMatches":
+    case "fill":
+    case "readPageLogin":
+      await requireUnlocked();
+      await touchAutoLock();
+      if (req.type === "pageMatches") return pageMatches();
+      if (req.type === "fill") return fillActiveTab(req.id);
+      return readPageLogin();
     case "clipboardCopied":
       await chrome.alarms.create(CLIPBOARD_ALARM, { delayInMinutes: 0.5 });
       return null;
@@ -159,7 +168,7 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, reply: (r: Response<
   }
   const run = () => handle(req).then((data) => reply({ ok: true, data } as Response<unknown>), (e: unknown) => reply(toError(e)));
   // Reads run immediately; anything that changes state or talks to the server is queued.
-  if (["getState", "vaultList", "getItem", "totp", "generate"].includes(req.type)) void run();
+  if (["getState", "vaultList", "getItem", "totp", "generate", "pageMatches", "readPageLogin"].includes(req.type)) void run();
   else queue = queue.then(run, run);
   return true;
 });
@@ -171,5 +180,20 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 
 chrome.idle.onStateChanged.addListener((state) => void onIdleStateChanged(state));
 
-chrome.runtime.onInstalled.addListener(() => void restrictStorageAccess());
+chrome.commands.onCommand.addListener((command, tab) => {
+  if (command === AUTOFILL_COMMAND) void autofillFromGesture(tab);
+});
+
+chrome.contextMenus.onClicked.addListener((info, tab) => {
+  if (info.menuItemId === CONTEXT_MENU_ID) void autofillFromGesture(tab);
+});
+
+chrome.runtime.onInstalled.addListener(() => {
+  void restrictStorageAccess();
+  chrome.contextMenus.create({ id: CONTEXT_MENU_ID, title: chrome.i18n.getMessage("ctxAutofill"), contexts: ["editable"] });
+});
+
+// Test-only hook (commands and context menus cannot be triggered from automation); compiled out otherwise.
+declare const E2E: boolean;
+if (E2E) Object.assign(globalThis, { plugwardenTest: { autofillFromGesture } });
 chrome.runtime.onStartup.addListener(() => void restrictStorageAccess());

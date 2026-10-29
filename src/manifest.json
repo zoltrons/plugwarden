@@ -8,10 +8,16 @@
   "minimum_chrome_version": "156",
   "background": { "service_worker": "background.js", "type": "module" },
   "action": { "default_popup": "popup.html", "default_title": "Plugwarden" },
-  "permissions": ["storage", "alarms", "idle", "offscreen", "clipboardWrite"],
+  "permissions": ["storage", "alarms", "idle", "offscreen", "clipboardWrite", "activeTab", "scripting", "contextMenus"],
   "optional_host_permissions": ["https://*/*", "http://*/*"],
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+  },
+  "commands": {
+    "autofill-login": {
+      "suggested_key": { "default": "Ctrl+Shift+L", "mac": "Command+Shift+L" },
+      "description": "__MSG_cmdAutofill__"
+    }
   },
   "incognito": "not_allowed"
 }

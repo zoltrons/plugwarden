@@ -58,3 +58,7 @@
   path: src/api/core/mod.rs
   local: src/transport/config.ts
   sync: /api/config version (capability detection) and feature flags.
+- repo: clients
+  path: libs/common/src/vault/models/domain/login-uri.ts
+  local: src/autofill/match.ts
+  sync: UriMatchType semantics (Domain default, Host incl. port, StartsWith, Exact, RegularExpression, Never).

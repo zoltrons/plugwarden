@@ -13,7 +13,8 @@ const out = join(root, "dist/ext");
 const args = process.argv.slice(2);
 const watch = args.includes("--watch");
 const dev = args.includes("--dev") || watch;
-const e2eHost = args.find((a) => a.startsWith("--e2e-host="))?.split("=")[1];
+// Comma-separated origins, e.g. --e2e-host=http://localhost:8080,http://localhost:8099
+const e2eHosts = args.find((a) => a.startsWith("--e2e-host="))?.split("=")[1]?.split(",");
 
 const wasmDir = join(root, "dist/wasm");
 if (!existsSync(join(wasmDir, "core_wasm_bg.wasm"))) {
@@ -26,12 +27,14 @@ mkdirSync(out, { recursive: true });
 
 function copyStatic() {
   const manifest = JSON.parse(readFileSync(join(root, "src/manifest.json"), "utf8"));
-  if (e2eHost) manifest.host_permissions = [`${new URL(e2eHost).origin}/*`];
+  if (e2eHosts) manifest.host_permissions = e2eHosts.map((h) => `${new URL(h).origin}/*`);
   writeFileSync(join(out, "manifest.json"), JSON.stringify(manifest, null, 2));
   cpSync(join(root, "src/ui/popup.html"), join(out, "popup.html"));
   cpSync(join(root, "src/ui/popup.css"), join(out, "popup.css"));
   cpSync(join(root, "src/offscreen/offscreen.html"), join(out, "offscreen.html"));
   cpSync(join(wasmDir, "core_wasm_bg.wasm"), join(out, "core_wasm_bg.wasm"));
+  if (!existsSync(join(root, "dist/psl.json"))) throw new Error("dist/psl.json missing: run `node tools/fetch-psl.mjs`");
+  cpSync(join(root, "dist/psl.json"), join(out, "psl.json"));
   cpSync(join(root, "src/_locales"), join(out, "_locales"), { recursive: true });
 }
 
@@ -52,6 +55,7 @@ const options = {
   sourcemap: dev ? "inline" : false,
   legalComments: "none",
   logLevel: "info",
+  define: { E2E: String(!!e2eHosts) },
 };
 
 copyStatic();

@@ -54,6 +54,10 @@ function run(req: CoreRequest): unknown {
       return vault.totp(req.id);
     case "generate":
       return vault.generate(req.options);
+    case "matchUri":
+      return vault.matchUri(req.url);
+    case "fillData":
+      return vault.fillData(req.id);
   }
 }
 
@@ -62,7 +66,7 @@ self.onmessage = async (ev: MessageEvent<{ id: number; req: unknown }>) => {
   let result: CoreResult;
   try {
     await ready;
-    result = { ok: true, value: run(parseCoreRequest(req)) };
+    result = { ok: true, value: await run(parseCoreRequest(req)) };
   } catch (e) {
     result = { ok: false, error: e instanceof Error ? e.message : String(e) };
   }

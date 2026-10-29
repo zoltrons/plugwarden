@@ -2,6 +2,7 @@
 import * as core from "../../dist/wasm/core_wasm.js";
 import type { Folder, VaultItem, VaultList } from "../shared/messages.ts";
 import { ci } from "../shared/validate.ts";
+import { Psl, uriMatches } from "../autofill/match.ts";
 
 type Json = Record<string, unknown>;
 
@@ -108,3 +109,26 @@ export function totp(id: string): { code: string; period: number; remaining: num
 }
 
 export const generate = (options: Json): string => core.generatePassword(JSON.stringify(options));
+
+let psl: Psl | undefined;
+
+/** Personal and org logins whose URIs match `url` (Bitwarden match types, default Domain). */
+export async function matchUri(url: string): Promise<VaultItem[]> {
+  if (!ciphers) throw new Error("vault not loaded");
+  // Loaded on first use only: ~170 KB of rules that the worker otherwise never needs.
+  psl ??= new Psl((await (await fetch(new URL("psl.json", import.meta.url))).json()) as string[]);
+  const page = new URL(url);
+  return [...ciphers.values()]
+    .filter((c) => Number(ci(c, "type")) === 1)
+    .filter((c) => {
+      const uris = ci(o(ci(c, "login")), "uris");
+      return Array.isArray(uris) && uris.some((u) => uriMatches(s(ci(u, "uri")), ci(u, "match") as number | null, page, psl!));
+    })
+    .map(summary)
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+export function fillData(id: string): { username: string; password: string } {
+  const login = o(ci(get(id), "login"));
+  return { username: s(ci(login, "username")), password: s(ci(login, "password")) };
+}

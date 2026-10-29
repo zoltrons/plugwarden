@@ -30,3 +30,8 @@ license = "AGPL-3.0-only"
 
 [chromium]
 minimum_chrome_version = "156"   # to be verified in Phase 1 (see docs/COMPATIBILITY.md)
+
+[publicsuffix]
+repo = "https://github.com/publicsuffix/list"
+commit = "8437e5262f13305f94087abe699b4fe2be1d1de8"   # 2026-10-22, used for "domain" URI matching
+license = "MPL-2.0"

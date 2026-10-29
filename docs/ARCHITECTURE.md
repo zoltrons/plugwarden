@@ -5,7 +5,7 @@ Plugwarden is a Manifest V3 Chrome extension (Chromium 156+) that talks to a sel
 
 1. Protocol compatibility with Vaultwarden (pinned in `upstream.lock`; the server is the source of truth).
 2. Security (minimal permissions, plaintext only in memory, auto-lock).
-3. Size and speed (no UI framework, esbuild, small pruned WASM, cheap content script).
+3. Size and speed (no UI framework, esbuild, small pruned WASM, no persistent content script).
 4. Easy upstream sync (pinned revs, upstream map, diff reports, contract tests).
 
 ## Process model
@@ -33,9 +33,10 @@ Plugwarden is a Manifest V3 Chrome extension (Chromium 156+) that talks to a sel
   WASM memory to. The SW never holds the user key, only encrypted blobs it passes through.
 * **Popup** (`src/ui`): vanilla TS, no components framework. Asks the SW for data; never sees keys, never calls
   `fetch`. First paint must not wait for WASM.
-* **Content script** (`src/autofill/detect`): <10 KB, `document_idle`, exits immediately when the page
-  has no password field. Filling runs as an isolated-world function injected by the SW via
-  `chrome.scripting`, so the persistent content script holds no fill logic and no secrets.
+* **Autofill** (`src/autofill`): no persistent content script and no site access. On a user gesture
+  (popup "Fill", Ctrl+Shift+L, context menu "Fill with Plugwarden"), which grants `activeTab`, the SW
+  injects a self-contained function into the tab's top frame with `chrome.scripting`. It re-checks the
+  page origin before filling. "Save login" reads the typed-in form on request from the popup.
 
 ## Modules and boundaries
 
@@ -47,7 +48,7 @@ Plugwarden is a Manifest V3 Chrome extension (Chromium 156+) that talks to a sel
 | `src/vault` | Encrypted cache, lock state machine, incremental sync, in-memory search index | `shared`, `transport` (SW side), core-wasm (offscreen side) |
 | `src/background` | SW entry, router, alarms, commands, context menu | `shared`, `transport`, `vault` |
 | `src/offscreen` | WASM host + decrypted state | `shared`, core-wasm |
-| `src/autofill` | Detector content script, fill function, URI matching | `shared` |
+| `src/autofill` | Injected fill/read functions, URI matching (+ Public Suffix List) | nothing (page.ts must stay self-contained) |
 | `src/ui` | Popup | `shared` |
 
 Rule: **UI and autofill never touch crypto or the network.** All cross-context calls go through the
@@ -89,7 +90,8 @@ scripts may only send a whitelisted subset of message types).
 `storage`, `alarms`, `idle`, `offscreen`, `clipboardWrite` (clearing copied secrets), plus `optional_host_permissions` `https://*/*`,
 `http://*/*`: Vaultwarden's CORS only allows its own origin, so the extension needs a host permission
 for the server. It is requested at setup for that one origin only (`chrome.permissions.request`).
-`activeTab` and `scripting` arrive with autofill (Phase 3).
+`activeTab`, `scripting`, `contextMenus` (Phase 3): fill on user gesture only; no `<all_urls>` and no
+persistent content script, so there is no automatic "save login" bar (a popup button reads the form instead).
 
 ## Storage and lock model
 

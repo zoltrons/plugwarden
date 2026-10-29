@@ -1,0 +1,65 @@
+// URI matching with Bitwarden's UriMatchType semantics (clients: libs/common/src/models/domain/login-uri).
+// null = the default, Domain. Equivalent-domain settings are not supported.
+export const MATCH = { Domain: 0, Host: 1, StartsWith: 2, Exact: 3, RegularExpression: 4, Never: 5 } as const;
+
+/** Public Suffix List lookup (rules as in public_suffix_list.dat, punycode). */
+export class Psl {
+  private readonly rules: Set<string>;
+  constructor(rules: Iterable<string>) {
+    this.rules = new Set(rules);
+  }
+
+  /** Registrable domain ("eTLD+1"); IPs, single labels and public suffixes themselves map to the host. */
+  baseDomain(host: string): string {
+    const h = host.toLowerCase().replace(/\.$/, "");
+    if (!h.includes(".") || /^[\d.]+$/.test(h) || h.includes(":") || h.startsWith("[")) return h;
+    const labels = h.split(".");
+    let suffixLen = 1; // implicit "*" rule
+    for (let i = 0; i < labels.length; i++) {
+      const cand = labels.slice(i).join(".");
+      if (this.rules.has(`!${cand}`)) {
+        suffixLen = labels.length - i - 1;
+        break;
+      }
+      if (this.rules.has(cand) || (i + 1 < labels.length && this.rules.has(`*.${labels.slice(i + 1).join(".")}`))) {
+        suffixLen = labels.length - i;
+        break;
+      }
+    }
+    return labels.length > suffixLen ? labels.slice(labels.length - suffixLen - 1).join(".") : h;
+  }
+}
+
+/** Saved URIs may lack a scheme ("example.com"); Bitwarden treats those as http(s). */
+export function parseUri(uri: string): URL | undefined {
+  try {
+    return new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(uri) ? uri : `http://${uri}`);
+  } catch {
+    return undefined;
+  }
+}
+
+export function uriMatches(saved: string, match: number | null | undefined, page: URL, psl: Psl): boolean {
+  if (page.protocol !== "https:" && page.protocol !== "http:") return false;
+  switch (match ?? MATCH.Domain) {
+    case MATCH.Domain: {
+      const s = parseUri(saved);
+      if (!s?.hostname) return false;
+      return s.hostname === page.hostname || psl.baseDomain(s.hostname) === psl.baseDomain(page.hostname);
+    }
+    case MATCH.Host:
+      return parseUri(saved)?.host === page.host;
+    case MATCH.StartsWith:
+      return page.href.startsWith(saved);
+    case MATCH.Exact:
+      return page.href === saved;
+    case MATCH.RegularExpression:
+      try {
+        return new RegExp(saved, "i").test(page.href);
+      } catch {
+        return false;
+      }
+    default: // Never, unknown
+      return false;
+  }
+}
