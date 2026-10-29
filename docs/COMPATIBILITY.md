@@ -64,9 +64,25 @@ on 2026-10-29 by `spike/vw-flow.mjs`, unless marked otherwise.
 * `DELETE /api/ciphers/{id}` hard-deletes; soft delete (`PUT .../delete`) not tested yet.
 * `GET /api/accounts/revision-date` → integer (ms since epoch).
 
+## CORS and two-step login (verified in Phase 1)
+
+* **CORS allows only `DOMAIN`, `file://` and the desktop origin**, never `chrome-extension://`
+  (`src/util.rs` `Cors::get_allowed_origin`). The extension therefore needs a host permission for the
+  server; it is requested per origin at setup.
+* 2FA challenge: HTTP 400 `{"error":"invalid_grant","TwoFactorProviders":["0"],
+  "TwoFactorProviders2":{"0":null,"1":{"Email":"a***@x"}}}`. Provider ids arrive as strings.
+* Retry with form fields `twoFactorProvider`, `twoFactorToken`, `twoFactorRemember=1`; success adds
+  `TwoFactorToken`, which later logins send as provider `5` (Remember) instead of a code.
+* A wrong code returns Vaultwarden's generic error body: `error_description` is `""`, the text is in
+  `message` / `ErrorModel.Message`.
+* A TOTP code cannot be reused within its step (also across enable → login).
+* Email 2FA code request: `POST /api/two-factor/send-email-login {email, masterPasswordHash,
+  deviceIdentifier}` (no bearer). Implemented, **not covered by e2e** (needs SMTP).
+* Unauthenticated endpoints (register, prelogin, send-email-login) share
+  `UNAUTHENTICATED_RATELIMIT_*` (default burst 50 / 60 s); the test compose relaxes it.
+
 ## Not yet verified
 
-* 2FA (Authenticator, Email) token flow → Phase 1.
 * Organization ciphers / org keys against a real server (decapsulation code exists, untested on VW).
 * Cipher key encryption (`key` on new ciphers) and V2 "blob" ciphers (`data` =
   `{"format_version":1,"wrapped_cek":...}`): present in sdk-internal test vectors; whether Vaultwarden

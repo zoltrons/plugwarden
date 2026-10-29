@@ -30,7 +30,7 @@ RUSTFLAGS="--cfg getrandom_backend=\"wasm_js\" $RUSTFLAGS_EXTRA" \
 
 mkdir -p "$OUT"
 "$WASM_BINDGEN" target/wasm32-unknown-unknown/release/plugwarden_core_wasm.wasm \
-  --target web --out-dir "$OUT" --out-name core_wasm --no-typescript
+  --target web --out-dir "$OUT" --out-name core_wasm
 "$WASM_OPT" -Oz --enable-bulk-memory --enable-nontrapping-float-to-int --enable-sign-ext \
   --enable-mutable-globals ${RUSTFLAGS_EXTRA:+--enable-simd} \
   "$OUT/core_wasm_bg.wasm" -o "$OUT/core_wasm_bg.wasm"

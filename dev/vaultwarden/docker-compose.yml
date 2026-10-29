@@ -19,6 +19,8 @@ services:
       # Do not ratelimit the test harness.
       LOGIN_RATELIMIT_MAX_BURST: "1000"
       LOGIN_RATELIMIT_SECONDS: "1"
+      UNAUTHENTICATED_RATELIMIT_MAX_BURST: "1000" # registration / prelogin / send-email-login
+      UNAUTHENTICATED_RATELIMIT_SECONDS: "1"
       LOG_LEVEL: "warn"
     volumes:
       - vw-data:/data

@@ -1,0 +1,58 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup target add wasm32-unknown-unknown
+      - name: sdk-internal rev in Cargo.toml matches upstream.lock
+        run: |
+          rev=$(awk '/^\[sdk-internal\]/{s=1} s&&/^rev/{gsub(/"/,"",$3); print $3; exit}' upstream.lock)
+          test "$(grep -c "rev = \"$rev\"" crates/core-wasm/Cargo.toml)" -ge 1
+      - run: bash tools/fetch-test-vectors.sh
+        env: { GH_TOKEN: "${{ github.token }}" }
+      - run: PW_TEST_VECTORS=target/test-vectors cargo test -p plugwarden-core-wasm
+
+  extension:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - run: rustup target add wasm32-unknown-unknown
+      - run: cargo install wasm-bindgen-cli --version "$(sed -n 's/^wasm-bindgen = "\(.*\)".*/\1/p' upstream.lock)" --locked
+      - run: npm ci
+      - run: npm i -g binaryen@132.0.0 && bash tools/build-wasm.sh --simd
+      - run: npm run typecheck && npm test
+      - run: npm run build
+      - name: size report (fails over budget)
+        shell: bash # explicit bash adds pipefail, so tee does not hide a budget failure
+        run: npm run size | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with: { name: wasm, path: dist/wasm }
+
+  e2e:
+    needs: extension
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        vaultwarden: ["1.37.4", "latest"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - run: rustup target add wasm32-unknown-unknown
+      - run: cargo install wasm-bindgen-cli --version "$(sed -n 's/^wasm-bindgen = "\(.*\)".*/\1/p' upstream.lock)" --locked
+      - run: npm ci && npx playwright-core install --with-deps chromium
+      - run: VW_TAG=${{ matrix.vaultwarden }} docker compose -f dev/vaultwarden/docker-compose.yml up -d --wait
+      - uses: actions/download-artifact@v4
+        with: { name: wasm, path: dist/wasm }
+      - run: npm i -g binaryen@132.0.0 && bash tools/build-wasm.sh --features register --out dist/wasm-register
+      - run: node tools/build.mjs --e2e-host=http://localhost:8080
+      - run: npm run test:e2e

@@ -1,0 +1,16 @@
+name: upstream
+# Weekly read-only report of upstream changes since the pins in upstream.lock.
+# Pin bumps come as Renovate PRs (renovate.json), which run ci.yml (vectors, e2e matrix, size).
+on:
+  schedule: [{ cron: "0 6 * * 1" }]
+  workflow_dispatch:
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - run: node tools/sync-upstream.mjs >> "$GITHUB_STEP_SUMMARY"
+        env: { GH_TOKEN: "${{ github.token }}" }

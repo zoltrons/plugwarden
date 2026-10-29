@@ -19,7 +19,7 @@ Plugwarden is a Manifest V3 Chrome extension (Chromium 156+) that talks to a sel
  │ script      │               │ - alarms / idle / commands│              │ - closes when idle/lock │
  │ (autofill)  │ ◄──────────── │ - chrome.scripting fill   │              └─────────────────────────┘
  └─────────────┘               └──────────────────────────┘
-        chrome.storage.local:   encrypted vault cache, wrapped tokens, settings
+        chrome.storage.local:   encrypted vault cache, refresh token, settings
         chrome.storage.session: lock state, timestamps (TRUSTED_CONTEXTS only)
 ```
 
@@ -27,10 +27,11 @@ Plugwarden is a Manifest V3 Chrome extension (Chromium 156+) that talks to a sel
   needs from `chrome.storage.*`; nothing important lives in globals (the SW can be killed at any time).
   Owns network I/O (`src/transport`), alarms (auto-lock, token refresh, periodic sync), `idle`,
   `commands`, context menu, and on-demand `chrome.scripting.executeScript` for fill.
-* **Offscreen document** (`src/offscreen`): the only place the WASM module and decrypted secrets live.
-  Created on unlock, closed on lock / idle. The SW never holds the user key, only encrypted blobs it
-  passes through. (Offscreen `reason` to use is verified in Phase 1.)
-* **Popup** (`src/ui`): vanilla TS + Web Components. Asks the SW for data; never sees keys, never calls
+* **Offscreen document** (`src/offscreen`, reason `WORKERS`): spawns one dedicated worker
+  (`worker.ts`) that holds the WASM module, the master key during login/2FA and the unlocked user key.
+  Lock terminates the worker and closes the document, which also frees the 64+ MiB Argon2id grew the
+  WASM memory to. The SW never holds the user key, only encrypted blobs it passes through.
+* **Popup** (`src/ui`): vanilla TS, no components framework. Asks the SW for data; never sees keys, never calls
   `fetch`. First paint must not wait for WASM.
 * **Content script** (`src/autofill/detect`): <10 KB, `document_idle`, exits immediately when the page
   has no password field. Filling runs as an isolated-world function injected by the SW via
@@ -83,11 +84,19 @@ scripts may only send a whitelisted subset of message types).
 * Capability detection: `/api/config` → `version` (Bitwarden-compat level, `2026.6.0` on Vaultwarden
   1.37.4) and `server.name`; features are gated on that rather than hardcoded.
 
+## Permissions
+
+`storage`, `alarms`, `idle`, `offscreen`, plus `optional_host_permissions` `https://*/*`,
+`http://*/*`: Vaultwarden's CORS only allows its own origin, so the extension needs a host permission
+for the server. It is requested at setup for that one origin only (`chrome.permissions.request`).
+`activeTab`, `scripting`, `clipboardWrite` arrive with the phases that use them.
+
 ## Storage and lock model
 
 * `chrome.storage.local`: server URL, device id, encrypted vault (as returned by `/api/sync`),
-  protected user key, KDF params, refresh token (wrapped), settings.
-* `chrome.storage.session`: lock state and timestamps. The unlocked user key lives only in the
+  protected user key, KDF params, refresh token (plain, like the official extension; the area is
+  set to `TRUSTED_CONTEXTS` so content scripts cannot read it), 2FA remember tokens, settings.
+* `chrome.storage.session`: lock state, access token, pending 2FA login. The unlocked user key lives only in the
   offscreen document's WASM memory.
 * Lock = close offscreen document (drops WASM memory) + clear session state. Auto-lock via
   `chrome.idle` and `chrome.alarms`. Clipboard clearing via alarm + offscreen document.

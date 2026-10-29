@@ -1,0 +1,33 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "minimumReleaseAge": "14 days",
+  "rangeStrategy": "pin",
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "sdk-internal rev: upstream.lock and the Cargo git dependency move together",
+      "managerFilePatterns": ["/^upstream\\.lock$/", "/^crates/core-wasm/Cargo\\.toml$/"],
+      "matchStrings": [
+        "\\[sdk-internal\\][\\s\\S]*?rev = \"(?<currentDigest>[0-9a-f]{40})\"",
+        "sdk-internal\", rev = \"(?<currentDigest>[0-9a-f]{40})\""
+      ],
+      "depNameTemplate": "bitwarden/sdk-internal",
+      "packageNameTemplate": "https://github.com/bitwarden/sdk-internal",
+      "currentValueTemplate": "main",
+      "datasourceTemplate": "git-refs"
+    },
+    {
+      "customType": "regex",
+      "description": "Vaultwarden version pinned for tests",
+      "managerFilePatterns": ["/^upstream\\.lock$/", "/^dev/vaultwarden/docker-compose\\.yml$/"],
+      "matchStrings": ["version = \"(?<currentValue>\\d+\\.\\d+\\.\\d+)\"", "VW_TAG:-(?<currentValue>\\d+\\.\\d+\\.\\d+)"],
+      "depNameTemplate": "vaultwarden/server",
+      "datasourceTemplate": "docker"
+    }
+  ],
+  "packageRules": [
+    { "matchDepNames": ["bitwarden/sdk-internal"], "groupName": "sdk-internal", "schedule": ["before 6am on monday"] },
+    { "matchDepNames": ["vaultwarden/server"], "groupName": "vaultwarden" }
+  ]
+}

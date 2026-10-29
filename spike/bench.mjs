@@ -22,7 +22,8 @@ cpSync(join(wasmDir, "core_wasm_bg.wasm"), join(ext, "core_wasm_bg.wasm"));
 if (official) cpSync(resolve(official), join(ext, "official_bg.wasm"));
 
 const ctx = await chromium.launchPersistentContext(profile, {
-  channel: "chromium",
+  // CHROME_PATH: a Chromium-based browser that still honours --load-extension (e.g. Helium).
+  ...(process.env.CHROME_PATH ? { executablePath: process.env.CHROME_PATH } : { channel: "chromium" }),
   headless: true,
   args: [`--disable-extensions-except=${ext}`, `--load-extension=${ext}`],
 });

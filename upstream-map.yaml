@@ -28,7 +28,7 @@
   sync: wasm-bindgen version, target features (SIMD), wasm-opt flags.
 - repo: clients
   path: apps/browser/src/manifest.v3.json
-  local: src/manifest.json (Phase 1)
+  local: src/manifest.json
   sync: Permissions, CSP, minimum_chrome_version, commands.
 - repo: clients
   path: apps/browser/src/autofill/content
@@ -40,21 +40,21 @@
   sync: Offscreen reasons and lifecycle.
 - repo: clients
   path: libs/common/src/platform/services/api.service.ts
-  local: src/transport (Phase 1)
+  local: src/transport/http.ts
   sync: Client headers (Bitwarden-Client-Name/Version, Device-Type), token request fields.
 - repo: vaultwarden
   path: src/api/identity.rs
-  local: src/transport/auth.ts (Phase 1), spike/vw-flow.mjs
+  local: src/transport/auth.ts, tests/e2e/run.ts
   sync: Token grant types, 2FA providers, prelogin/register shapes, response casing.
 - repo: vaultwarden
   path: src/api/core/accounts.rs
-  local: src/transport (Phase 1)
+  local: src/transport/auth.ts
   sync: Register/profile/KDF data shapes.
 - repo: vaultwarden
   path: src/api/core/ciphers.rs
-  local: src/transport/ciphers.ts (Phase 2), spike/vw-flow.mjs
+  local: src/transport/ciphers.ts (Phase 2), tests/e2e/run.ts
   sync: CipherData required fields (e.g. encryptedFor), sync response shape.
 - repo: vaultwarden
   path: src/api/core/mod.rs
-  local: src/transport/config.ts (Phase 1)
+  local: src/transport/config.ts
   sync: /api/config version (capability detection) and feature flags.
