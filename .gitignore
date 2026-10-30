@@ -5,3 +5,4 @@ node_modules/
 
 # UI preview build output (dev/preview/build.mjs)
 dev/preview/out/
+/coverage/

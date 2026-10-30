@@ -82,7 +82,10 @@ fn decrypt(s: &Session, send: &mut Value) -> Result<()> {
             .decrypt_with_key(&key)
             .map_err(err)
     })?;
-    obj.insert("urlKey".into(), URL_SAFE_NO_PAD.encode(secret.as_slice()).into());
+    obj.insert(
+        "urlKey".into(),
+        URL_SAFE_NO_PAD.encode(secret.as_slice()).into(),
+    );
     Ok(())
 }
 
@@ -93,7 +96,8 @@ pub fn decrypt_list(s: &Session, sends: Vec<Value>) -> Value {
     for mut send in sends {
         match decrypt(s, &mut send) {
             Ok(()) => ok.push(send),
-            Err(e) => failed.push(json!({ "id": send.get("id").cloned().unwrap_or(Value::Null), "error": e })),
+            Err(e) => failed
+                .push(json!({ "id": send.get("id").cloned().unwrap_or(Value::Null), "error": e })),
         }
     }
     json!({ "sends": ok, "failed": failed })
@@ -117,7 +121,9 @@ pub fn encrypt(s: &Session, send: &mut Value) -> Result<()> {
         }
     };
     let key = content_key(&secret);
-    apply(obj, &mut |v| Ok(v.encrypt_with_key(&key).map_err(err)?.to_string()))?;
+    apply(obj, &mut |v| {
+        Ok(v.encrypt_with_key(&key).map_err(err)?.to_string())
+    })?;
     let typed = get_str(obj, "password").map(str::to_owned);
     obj.retain(|k, _| !k.eq_ignore_ascii_case("password"));
     if let Some(password) = typed {
@@ -161,13 +167,21 @@ mod tests {
 
         let out = decrypt_list(&s, vec![send]);
         let d = &out["sends"][0];
-        assert_eq!((d["name"].as_str(), d["text"]["text"].as_str()), (Some("hello"), Some("secret")));
-        let secret = URL_SAFE_NO_PAD.decode(d["urlKey"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            (d["name"].as_str(), d["text"]["text"].as_str()),
+            (Some("hello"), Some("secret"))
+        );
+        let secret = URL_SAFE_NO_PAD
+            .decode(d["urlKey"].as_str().unwrap())
+            .unwrap();
         assert_eq!(secret.len(), 16);
 
         let buf = encrypt_file(&s, &wrapped, b"file bytes").unwrap();
         let key = content_key(&Zeroizing::new(secret.try_into().unwrap()));
-        let plain: Vec<u8> = EncString::from_buffer(&buf).unwrap().decrypt_with_key(&key).unwrap();
+        let plain: Vec<u8> = EncString::from_buffer(&buf)
+            .unwrap()
+            .decrypt_with_key(&key)
+            .unwrap();
         assert_eq!(plain, b"file bytes");
     }
 
@@ -187,7 +201,8 @@ mod tests {
         assert!(edit.get("password").is_none());
         assert_ne!(edit["name"], "n2", "content is still encrypted");
         // A newly typed password is hashed once, never passed through.
-        let mut retyped = json!({ "type": 0, "name": "n3", "text": { "text": "t" }, "password": "pw2" });
+        let mut retyped =
+            json!({ "type": 0, "name": "n3", "text": { "text": "t" }, "password": "pw2" });
         encrypt(&s, &mut retyped).unwrap();
         let new = retyped["password"].as_str().unwrap();
         assert_ne!(new, "pw2");

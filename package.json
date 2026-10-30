@@ -11,6 +11,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "check": "npm run typecheck && npm test",
     "test": "node --test --experimental-strip-types \"src/**/*.test.ts\"",
+    "test:coverage": "node -e \"fs.mkdirSync('coverage',{recursive:true})\" && node --test --experimental-strip-types --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/lcov.info \"src/**/*.test.ts\"",
     "test:fill": "node tools/smoke-fill.mjs",
     "test:e2e": "node --experimental-strip-types tests/e2e/run.ts",
     "test:passkeys": "node tools/smoke-passkeys.mjs",

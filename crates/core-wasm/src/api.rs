@@ -10,8 +10,8 @@ use std::{cell::RefCell, collections::HashMap, num::NonZeroU32, str::FromStr};
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use bitwarden_crypto::{
-    BitwardenLegacyKeyBytes, EncString, HashPurpose, Kdf, KeyDecryptable, KeyEncryptable, MasterKey, PinKey,
-    Pkcs8PrivateKeyBytes, PrivateKey, SymmetricCryptoKey, UnsignedSharedKey,
+    BitwardenLegacyKeyBytes, EncString, HashPurpose, Kdf, KeyDecryptable, KeyEncryptable,
+    MasterKey, PinKey, Pkcs8PrivateKeyBytes, PrivateKey, SymmetricCryptoKey, UnsignedSharedKey,
     derive_symmetric_key_from_prf,
 };
 use serde_json::Value;
@@ -41,7 +41,9 @@ thread_local! {
 pub fn kdf_from_params(kind: u8, iterations: u32, memory: u32, parallelism: u32) -> Result<Kdf> {
     let in_range = |v: u32, min: u32, max: u32, what: &str| {
         if !(min..=max).contains(&v) {
-            return Err(format!("KDF {what} must be between {min} and {max}, the server sent {v}"));
+            return Err(format!(
+                "KDF {what} must be between {min} and {max}, the server sent {v}"
+            ));
         }
         Ok(NonZeroU32::new(v).expect("min is at least 1"))
     };
@@ -306,8 +308,8 @@ pub fn make_registration_keys(handle: u32) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use base64::{Engine, engine::general_purpose::STANDARD};
-use bitwarden_crypto::SymmetricKeyAlgorithm;
+    
+    use bitwarden_crypto::SymmetricKeyAlgorithm;
 
     use super::*;
 
@@ -344,7 +346,9 @@ use bitwarden_crypto::SymmetricKeyAlgorithm;
     #[test]
     fn org_keys_fail_soft() {
         let user = SymmetricCryptoKey::make(SymmetricKeyAlgorithm::Aes256CbcHmac);
-        let pair = bitwarden_crypto::UserKey::new(user.clone()).make_key_pair().unwrap();
+        let pair = bitwarden_crypto::UserKey::new(user.clone())
+            .make_key_pair()
+            .unwrap();
         open_session(user, Some(&pair.private.to_string())).unwrap();
         // A key the server got wrong is skipped; the session and the personal vault stay usable.
         assert_eq!(set_org_keys(r#"{"org":"2.bogus|bogus|bogus"}"#).unwrap(), 0);
@@ -354,7 +358,11 @@ use bitwarden_crypto::SymmetricKeyAlgorithm;
 
     #[test]
     fn org_keys_need_no_private_key() {
-        open_session(SymmetricCryptoKey::make(SymmetricKeyAlgorithm::Aes256CbcHmac), None).unwrap();
+        open_session(
+            SymmetricCryptoKey::make(SymmetricKeyAlgorithm::Aes256CbcHmac),
+            None,
+        )
+        .unwrap();
         // No RSA private key at all (not every account has one): nothing loads, nothing fails.
         assert_eq!(set_org_keys(r#"{"org":"2.x|y|z"}"#).unwrap(), 0);
         assert!(is_unlocked());
