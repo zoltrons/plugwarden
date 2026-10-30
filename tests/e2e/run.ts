@@ -726,6 +726,16 @@ try {
     await back();
   });
 
+  await step("organization item can be edited by its owner", async () => {
+    await rows().filter({ hasText: "Team wiki" }).click();
+    await page.getByRole("button", { name: "Edit" }).click();
+    await fill("Name", "Team wiki v2");
+    await page.getByRole("button", { name: "Save" }).click();
+    await page.getByRole("heading", { name: "Team wiki v2" }).waitFor();
+    await page.getByText("Engineering", { exact: true }).waitFor();
+    await back();
+  });
+
   await step("move to trash", async () => {
     await rows().filter({ hasText: "Wifi note" }).click();
     await page.getByRole("button", { name: "Move to trash" }).click();
@@ -825,7 +835,7 @@ try {
     const github = data.items.find((i: any) => i.name === "GitHub");
     assert.equal(github?.login?.username, "octo");
     assert.equal(data.folders.find((f: any) => f.id === github.folderId)?.name, "Work");
-    assert.ok(!data.items.some((i: any) => i.name === "Team wiki"), "organization item exported");
+    assert.ok(!data.items.some((i: any) => i.name === "Team wiki v2"), "organization item exported");
   });
 
   await step("import: Bitwarden JSON creates items and folders on the server", async () => {
@@ -1198,6 +1208,7 @@ try {
   });
 
   await step("default password manager: Chrome's own password saving off, then handed back", async () => {
+    if (page.isClosed()) await reopenPopup(); // a popup fill closes the popup
     const set = (enabled: boolean) => page.evaluate((e) => chrome.runtime.sendMessage({ type: "setDefaultManager", enabled: e }), enabled);
     const prefs = () =>
       sw.evaluate(async () => {

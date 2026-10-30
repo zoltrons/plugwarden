@@ -170,7 +170,7 @@ const requestValidators: { [K in Request["type"]]: Validator<Extract<Request, { 
     // Login, secure note, card, identity, SSH key.
     if (![1, 2, 3, 4, 5].includes(s.item.type as number)) throw new ValidationError("item.type: this item type cannot be edited");
     if (typeof s.item.name !== "string" || !s.item.name.trim()) throw new ValidationError("item.name: required");
-    if (s.item.organizationId) throw new ValidationError("organization items are read-only");
+    if (s.item.organizationId && !s.item.id) throw new ValidationError("new organization items are not supported");
     return s;
   },
   deleteItem: obj({ type: literal("deleteItem"), id: str }),

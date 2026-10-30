@@ -27,9 +27,10 @@ test("frame requests: inline actions need the nonce, bar actions need the save t
   throws(() => parseFrameRequest({ type: "barInfo" }), /token/);
 });
 
-test("popup requests: unknown types and organization writes are refused", () => {
+test("popup requests: unknown types and new organization items are refused", () => {
   throws(() => parseRequest({ type: "eval" }), /unknown message type/);
-  throws(() => parseRequest({ type: "saveItem", item: { type: 1, name: "n", organizationId: "org" } }), /read-only/);
+  throws(() => parseRequest({ type: "saveItem", item: { type: 1, name: "n", organizationId: "org" } }), /not supported/);
+  parseRequest({ type: "saveItem", item: { id: "c1", type: 1, name: "n", organizationId: "org" } });
   throws(() => parseRequest({ type: "saveItem", item: { type: 9, name: "n" } }), /cannot be edited/);
   throws(() => parseRequest({ type: "saveItem", item: { type: 1, name: "  " } }), /required/);
   throws(() => parseRequest({ type: "setSettings", autoLockMinutes: 7 }), /not an allowed choice/);

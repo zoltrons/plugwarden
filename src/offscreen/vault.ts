@@ -83,7 +83,7 @@ function summary(c: Json): VaultItem {
     uris,
     folderId: s(ci(c, "folderId")) || undefined,
     favorite: ci(c, "favorite") === true,
-    readOnly: !!ci(c, "organizationId") || ci(c, "edit") === false,
+    readOnly: ci(c, "edit") === false,
     hasTotp: !!s(ci(login, "totp")),
     ...(Number(ci(c, "reprompt")) === 1 ? { reprompt: true } : {}),
     ...(typeof ci(login, "autofillOnPageLoad") === "boolean" ? { autofillOnPageLoad: ci(login, "autofillOnPageLoad") as boolean } : {}),
@@ -129,6 +129,9 @@ export function prepareSave(item: Json): Json {
   const id = s(item.id);
   const existing = id ? get(id) : undefined;
   if (existing && summary(existing).readOnly) throw new Error("item is read-only");
+  // An edit never moves an item between vaults; creating one in an organization needs collection ids (not supported yet).
+  if (existing) item.organizationId = ci(existing, "organizationId") ?? null;
+  else if (ci(item, "organizationId")) throw new Error("new organization items are not supported");
   if (existing && Number(item.type) === 1) {
     const oldPw = s(ci(o(ci(existing, "login")), "password"));
     const login = o(item.login);

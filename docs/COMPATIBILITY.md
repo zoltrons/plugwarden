@@ -151,7 +151,7 @@ on 2026-10-29 by the Phase 0 spike (removed; see git history), unless marked oth
 
 ## Not yet verified
 
-* Organization items are read-only in Plugwarden; editing them (collection permissions) is untested.
+* Organization items: edit/trash/restore follow the server's per-item `edit` flag (`PUT /api/ciphers/<id>`), covered by e2e for an org owner only; members with limited permissions, `viewPassword: false` and creating org items (`/api/ciphers/create` + `collectionIds`) are untested/unsupported.
 * Cipher key encryption (`key` on new ciphers) and V2 "blob" ciphers (`data` =
   `{"format_version":1,"wrapped_cek":...}`): present in sdk-internal test vectors; whether Vaultwarden
   1.37.4 stores/returns blob ciphers is unknown.

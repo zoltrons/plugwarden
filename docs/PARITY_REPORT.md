@@ -85,7 +85,7 @@ shipped as is: it is bundled, minified, into `worker.js`. All other budgets unch
   forwarded-email services (out of scope).
 * Generator history records values when copied from the Generator tab, not when the editor's
   "Generate password" fills a field.
-* Organization items stay read-only.
+* Organization items: existing ones are editable when the server says `edit: true`; no creating, no attachments, no collection changes, `viewPassword: false` is not honoured.
 * Not touched: the setup screen still calls `chrome.permissions.request` for the server origin;
   with required host permissions this is a no-op prompt-wise and was left as is.
 

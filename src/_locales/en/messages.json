@@ -241,7 +241,7 @@
     "message": "Edit"
   },
   "readOnlyItem": {
-    "message": "Organization items are read-only in Plugwarden for now."
+    "message": "You only have view access to this item."
   },
   "websites": {
     "message": "Websites"
