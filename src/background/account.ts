@@ -342,10 +342,19 @@ export async function logout(): Promise<void> {
   await updateSession({ accessToken: undefined, accessExpiresAt: undefined, pin: undefined, alias: undefined });
 }
 
+/** The refresh in flight, if any. The server may rotate the refresh token, so a second concurrent
+ * refresh would be sent a spent one and fail (and end in a logout). Rebuildable: a restart just starts over. */
+let refreshing: Promise<string> | undefined;
+
 /** Returns a valid access token, refreshing it when it expires within a minute. */
 export async function accessToken(): Promise<string> {
   const s = await getSession();
   if (s.accessToken && (s.accessExpiresAt ?? 0) - 60_000 > Date.now()) return s.accessToken;
+  refreshing ??= refreshAccessToken().finally(() => (refreshing = undefined));
+  return refreshing;
+}
+
+async function refreshAccessToken(): Promise<string> {
   const base = await requireServer();
   const account = await getLocal("account");
   if (!account?.refreshToken) throw new UserError("sessionExpired", "Please log in again");
