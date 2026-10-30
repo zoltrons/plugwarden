@@ -78,7 +78,7 @@ export async function downloadAttachment(base: string, token: string, cipherId: 
   if (target.origin !== new URL(base).origin) throw new ApiError(0, null, "The server returned an attachment URL that is not on this server");
   let res: Response;
   try {
-    res = await fetch(target, { credentials: "omit", redirect: "error", cache: "no-store" });
+    res = await fetch(target, { credentials: "omit", redirect: "error", cache: "no-store", signal: AbortSignal.timeout(120_000) });
   } catch (e) {
     throw new NetworkError(e instanceof Error ? e.message : String(e));
   }

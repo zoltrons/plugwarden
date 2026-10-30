@@ -1041,7 +1041,15 @@ async function vaultAction(ctx: Ctx, req: Parameters<typeof send>[0], done: stri
   st.list = r.data;
   st.item = undefined;
   if (back) open(ctx, { kind: "list" });
-  else ctx.rerender();
+  else {
+    // Refetch before rendering, so the item page shows the saved item instead of flashing its loading bar.
+    const route = st.route;
+    if (route.kind === "item") {
+      const fresh = await send<Json>({ type: "getItem", id: route.id });
+      if (fresh.ok) st.item = fresh.data;
+    }
+    ctx.rerender();
+  }
   toast(ctx, t(done));
 }
 
@@ -1296,7 +1304,7 @@ function itemView(ctx: Ctx, id: string): HTMLElement {
       ondragover: (e: DragEvent) => e.preventDefault(),
       ondrop: (e: DragEvent) => {
         e.preventDefault();
-        if (editable && !item.organizationId) void upload(ctx, id, e.dataTransfer?.files[0]);
+        if (editable) void upload(ctx, id, e.dataTransfer?.files[0]);
       },
     },
     topBar(
@@ -1391,7 +1399,7 @@ function itemView(ctx: Ctx, id: string): HTMLElement {
           iconButton("download", `${t("download")} ${str(a.fileName)}`, () => void download(ctx, id, str(a.id))),
         ),
       ),
-      editable && !inTrash && !item.organizationId
+      editable && !inTrash
         ? h(
             "label",
             { class: "row" },

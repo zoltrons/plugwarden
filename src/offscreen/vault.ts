@@ -293,10 +293,10 @@ export function prepareImport(text: string): ImportRequest {
 export const decryptAttachment = (cipherId: string, attachmentId: string, data: string): string =>
   core.decryptAttachment(JSON.stringify(get(cipherId)), attachmentId, Uint8Array.fromBase64(data)).toBase64();
 
-/** Personal items only, like editing. Result: { key, fileName, data } for the upload. */
+/** Editable items only, like editing. Result: { key, fileName, data } for the upload. */
 export function encryptAttachment(cipherId: string, fileName: string, data: string): Json {
   const c = get(cipherId);
-  if (ci(c, "organizationId")) throw new Error("organization items are read-only");
+  if (summary(c).readOnly) throw new Error("item is read-only");
   return JSON.parse(core.encryptAttachment(JSON.stringify(c), fileName, Uint8Array.fromBase64(data))) as Json;
 }
 

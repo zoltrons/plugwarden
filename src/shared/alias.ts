@@ -181,12 +181,7 @@ export interface AliasRequest {
   body?: string;
 }
 
-const base64 = (s: string): string => {
-  const bytes = new TextEncoder().encode(s);
-  let bin = "";
-  for (const b of bytes) bin += String.fromCharCode(b);
-  return btoa(bin);
-};
+const base64 = (s: string): string => new TextEncoder().encode(s).toBase64();
 
 function token(settings: AliasSettings): string {
   const token = settings.token.trim();

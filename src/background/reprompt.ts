@@ -41,5 +41,5 @@ export function repromptGranted(id: string): boolean {
 export const revokeReprompts = (): void => void grants.clear();
 
 /** True when `item` needs a confirmation the user has not given in this session. */
-export const repromptPending = (item: Record<string, unknown> | undefined): boolean =>
+export const repromptPending = (item: Record<string, unknown> | VaultItem | undefined): boolean =>
   repromptRequired(item) && !repromptGranted(String(ci(item, "id") ?? ""));

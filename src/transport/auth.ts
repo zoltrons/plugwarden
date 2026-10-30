@@ -136,7 +136,7 @@ export function jwtClaim(token: string, name: string): string | undefined {
   try {
     const part = token.split(".")[1];
     if (!part) return undefined;
-    const json = atob(part.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(part.length / 4) * 4, "="));
+    const json = new TextDecoder().decode(Uint8Array.fromBase64(part, { alphabet: "base64url" }));
     const v = (JSON.parse(json) as Record<string, unknown>)[name];
     return typeof v === "string" ? v : undefined;
   } catch {

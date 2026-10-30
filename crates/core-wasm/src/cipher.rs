@@ -111,16 +111,17 @@ fn apply(obj: &mut Map<String, Value>, f: &mut Leaf) -> Result<()> {
         if k == "name" || k == "notes" || CONTAINERS.contains(&k.as_str()) {
             walk(v, f)?;
         } else if k == "attachments"
-            && let Value::Array(items) = v {
-                for a in items.iter_mut().filter_map(Value::as_object_mut) {
-                    if let Some((_, name)) = a
-                        .iter_mut()
-                        .find(|(k, _)| k.eq_ignore_ascii_case("fileName"))
-                    {
-                        walk(name, f)?;
-                    }
+            && let Value::Array(items) = v
+        {
+            for a in items.iter_mut().filter_map(Value::as_object_mut) {
+                if let Some((_, name)) = a
+                    .iter_mut()
+                    .find(|(k, _)| k.eq_ignore_ascii_case("fileName"))
+                {
+                    walk(name, f)?;
                 }
             }
+        }
     }
     Ok(())
 }
@@ -254,4 +255,43 @@ pub fn decrypt_folders(s: &Session, folders: Vec<Value>) -> Value {
         }
     }
     json!({ "folders": ok, "failed": failed })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use bitwarden_crypto::SymmetricKeyAlgorithm;
+
+    use super::*;
+
+    fn session(orgs: HashMap<String, SymmetricCryptoKey>) -> Session {
+        Session {
+            user: SymmetricCryptoKey::make(SymmetricKeyAlgorithm::Aes256CbcHmac),
+            private: None,
+            orgs,
+        }
+    }
+
+    #[test]
+    fn organization_cipher_is_encrypted_with_the_organization_key() {
+        let org = SymmetricCryptoKey::make(SymmetricKeyAlgorithm::Aes256CbcHmac);
+        let editor = session(HashMap::from([("org-1".to_string(), org.clone())]));
+        // The id arrives in the server's casing, the key map is lowercase.
+        let mut cipher = json!({ "organizationId": "ORG-1", "type": 2, "name": "shared" });
+        encrypt(&editor, &mut cipher).unwrap();
+        assert_ne!(cipher["name"], "shared");
+
+        // Another member holds the same organization key but a different user key: it decrypts.
+        let member = session(HashMap::from([("org-1".to_string(), org)]));
+        let mut seen = cipher.clone();
+        decrypt(&member, &mut seen).unwrap();
+        assert_eq!(seen["name"], "shared");
+
+        // Without the organization key the user key is never used as a fallback.
+        let mut orphan = cipher.clone();
+        assert!(decrypt(&session(HashMap::new()), &mut orphan).is_err());
+        let mut unsaved = json!({ "organizationId": "ORG-1", "type": 2, "name": "shared" });
+        assert!(encrypt(&session(HashMap::new()), &mut unsaved).is_err());
+    }
 }

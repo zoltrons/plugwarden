@@ -230,7 +230,7 @@ function loginView(): HTMLElement {
 // WebAuthn runs in the server's webauthn-connector.html (the credential is bound to the server's
 // origin, which an extension page cannot claim). It reports back with postMessage "success|<json>".
 let webauthnFrame: HTMLIFrameElement | undefined;
-const b64 = (s: string) => btoa(String.fromCharCode(...new TextEncoder().encode(s)));
+const b64 = (s: string) => new TextEncoder().encode(s).toBase64();
 
 function webauthnBox(s: State): Child {
   if (ui.busy) return null;
@@ -945,7 +945,8 @@ let refreshing = false;
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "session" || !changes.session || !state || refreshing) return;
   const next = changes.session.newValue as { unlocked?: unknown } | undefined;
-  if (typeof next?.unlocked !== "boolean" || next.unlocked === (state.phase === "unlocked")) return;
+  // loggedOut -> locked (SSO finished in another tab) leaves `unlocked` false, so a logged-out view always refreshes.
+  if (typeof next?.unlocked !== "boolean" || (next.unlocked === (state.phase === "unlocked") && state.phase !== "loggedOut")) return;
   refreshing = true;
   void send<State>({ type: "getState" }).then((r) => {
     refreshing = false;

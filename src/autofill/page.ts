@@ -183,7 +183,7 @@ export function fillInPage(req: FillRequest): FillResult | PageLogin | null {
     const seen = new Set<Element>();
     for (let p: Element | null = a; p; p = p.parentElement) seen.add(p);
     for (let p: Element | null = b; p; p = p.parentElement) if (seen.has(p)) return p;
-    return document.documentElement;
+    return document.body; // disjoint trees (shadow roots) count as page-wide, like a shared <body>
   };
 
   const candidates = fields.filter((f) => f.kind === "user" || f.kind === "text");

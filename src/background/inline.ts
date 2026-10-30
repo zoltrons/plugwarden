@@ -100,6 +100,8 @@ async function loginSubmitted(tabId: number, url: string, username: string, pass
   const expiresAt = Date.now() + SAVE_TTL_MS;
   let pending: PendingSave | undefined;
   if (!same) pending = { kind: "add", url, username, password, token: "", expiresAt };
+  // A flagged item is never compared or overwritten from inside a page: edit it in the popup.
+  else if (repromptPending(same)) return;
   else if ((await coreCall<{ password: string }>({ op: "fillData", id: same.id })).password !== password)
     pending = { kind: "update", url, username, password, itemId: same.id, token: "", expiresAt };
   if (!pending) return;
@@ -160,6 +162,7 @@ export async function handleFrame(req: FrameRequest, tabId: number): Promise<unk
     } else if (req.action === "save") {
       if (p.kind === "update" && p.itemId) {
         const item = await coreCall<Record<string, any>>({ op: "getCipher", id: p.itemId });
+        if (repromptPending(item)) throw new Error(REPROMPT_MESSAGE); // flagged after the prompt was queued
         await save({ ...item, login: { ...item.login, password: p.password } });
       } else {
         const u = new URL(p.url);

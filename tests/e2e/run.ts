@@ -733,6 +733,9 @@ try {
     await page.getByRole("button", { name: "Save" }).click();
     await page.getByRole("heading", { name: "Team wiki v2" }).waitFor();
     await page.getByText("Engineering", { exact: true }).waitFor();
+    // An editable organization item takes attachments too, and the item view shows it right after.
+    await page.getByLabel("Add attachment").setInputFiles({ name: "org.txt", mimeType: "text/plain", buffer: Buffer.from("shared\n") });
+    await page.getByRole("button", { name: "Download org.txt" }).waitFor();
     await back();
   });
 
@@ -1165,6 +1168,26 @@ try {
     const c = (await s.ciphers()).find((x) => x.login?.username === "bar-user" && !x.deletedDate);
     s.done();
     assert.deepEqual([c?.login.password, c?.passwordHistory?.[0]?.password], ["bar-pass-2", "bar-pass"]);
+  });
+
+  await step("save bar: a re-prompt item is never offered an update from inside a page", async () => {
+    if (page.isClosed()) await reopenPopup(); // the previous popup fill closed it
+    const saved = await page.evaluate((site) => chrome.runtime.sendMessage({ type: "saveItem", item: { type: 1, name: "Guarded login", reprompt: 1, login: { username: "guard-user", password: "guard-pass", uris: [{ uri: site, match: null }] } } }), SITE);
+    assert.equal(saved.ok, true);
+    await loginPage.goto(`${SITE}/login`);
+    await loginPage.fill("#u", "guard-user");
+    await loginPage.fill("#p", "guard-pass-2");
+    await loginPage.keyboard.press("Escape");
+    await loginPage.getByRole("button", { name: "Sign in" }).click();
+    await loginPage.waitForTimeout(2000);
+    assert.equal(await loginPage.evaluate(() => !!document.querySelector("plugwarden-bar")), false, "bar offered an update");
+    const s = await apiSession(vaultUser);
+    const c = (await s.ciphers()).find((x) => x.name === "Guarded login");
+    s.done();
+    assert.equal(c?.login.password, "guard-pass");
+    const id = saved.data.items.find((i: { name: string }) => i.name === "Guarded login").id;
+    await page.evaluate((id) => chrome.runtime.sendMessage({ type: "deleteItem", id }), id);
+    await page.evaluate((id) => chrome.runtime.sendMessage({ type: "purgeItem", id }), id);
   });
 
   await step("save bar: change-password form offers the new password, not the current one", async () => {
