@@ -6,6 +6,7 @@
   "version": "0.2.2",
   "default_locale": "en",
   "minimum_chrome_version": "156",
+  "update_url": "https://github.com/zoltrons/plugwarden/releases/latest/download/updates.xml",
   "background": { "service_worker": "background.js", "type": "module" },
   "action": { "default_popup": "popup.html", "default_title": "Plugwarden" },
   "permissions": ["storage", "alarms", "idle", "offscreen", "clipboardWrite", "scripting", "contextMenus", "sidePanel"],

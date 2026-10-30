@@ -1,6 +1,7 @@
 name: release
-# Push a tag v<manifest version> to build the extension and attach a signed .crx and a .zip to a
-# GitHub release. Needs the CRX_KEY secret: a PEM private key, which fixes the extension id, so keep it
+# Push a tag v<manifest version> to build the extension and attach a signed .crx, a .zip and the
+# updates.xml that installed copies poll (manifest `update_url`) to a GitHub release.
+# Needs the CRX_KEY secret: a PEM private key, which fixes the extension id, so keep it
 # and never regenerate it:  openssl genrsa 2048 | openssl pkcs8 -topk8 -nocrypt -out plugwarden.pem
 on:
   push:
@@ -34,9 +35,20 @@ jobs:
           chrome="$(node -p "require('playwright-core').chromium.executablePath()")"
           # Ubuntu runners block the user namespaces Chromium's sandbox needs; packing loads no web content.
           xvfb-run -a "$chrome" --no-sandbox --pack-extension="$PWD/dist/ext" --pack-extension-key="$RUNNER_TEMP/key.pem" --no-message-box
+          # The extension id is the first 128 bits of the SHA-256 of the public key, written with a-p.
+          id="$(openssl pkey -in "$RUNNER_TEMP/key.pem" -pubout -outform DER | sha256sum | head -c 32 | tr '0-9a-f' 'a-p')"
           rm "$RUNNER_TEMP/key.pem"
           mv dist/ext.crx "plugwarden-$GITHUB_REF_NAME.crx"
           (cd dist/ext && zip -qr "../../plugwarden-$GITHUB_REF_NAME.zip" .)
-      - run: gh release create "$GITHUB_REF_NAME" plugwarden-*.crx plugwarden-*.zip --generate-notes
+          # The update manifest the extension's `update_url` points at (releases/latest/download/updates.xml).
+          cat > updates.xml <<XML
+          <?xml version="1.0" encoding="UTF-8"?>
+          <gupdate xmlns="http://www.google.com/update2/response" protocol="2.0">
+            <app appid="$id">
+              <updatecheck codebase="https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME/plugwarden-$GITHUB_REF_NAME.crx" version="${GITHUB_REF_NAME#v}" />
+            </app>
+          </gupdate>
+          XML
+      - run: gh release create "$GITHUB_REF_NAME" plugwarden-*.crx plugwarden-*.zip updates.xml --generate-notes
         env:
           GH_TOKEN: ${{ github.token }}

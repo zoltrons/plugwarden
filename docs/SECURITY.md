@@ -92,6 +92,11 @@ freed rather than zeroed in place.
 
 ## Known gaps
 
+- **Updates are only as trustworthy as the release pipeline.** Installed copies follow
+  `releases/latest/download/updates.xml` (`docs/UPDATES.md`). The browser verifies each `.crx` against the
+  extension's key, so a build signed with another key is refused, but anyone who can push a `v*` tag and read
+  `CRX_KEY` can ship code to every installed copy. Keep that secret and the repository's write access tight.
+
 - **The inline menu's "Sign in with passkey" signs in without a window.** Picking the entry is the
   decision: with exactly one matching passkey `openConditional` (`src/background/passkey.ts`) asserts
   right away. Several passkeys (a choice to make) or a `reprompt`-flagged item open the approval
