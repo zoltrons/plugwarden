@@ -1,24 +1,16 @@
-// Vault screens: list (search, filters, sort), item view, Login/Note/Card/Identity editor, generator.
+// Vault screens: list (search, filters, sort), item view, Login/Note/Card/Identity editor. The generator is generator.ts.
 // Talks to the service worker only; decrypted data lives here just while the popup is open.
 import type { FillResult, PageLogin } from "../autofill/page.ts";
 import { URI_MATCH, URI_MATCH_ADVANCED } from "../shared/constants.ts";
-import {
-  ALIAS_INFO,
-  ALIAS_VENDORS,
-  type AliasField,
-  type AliasSettings,
-  type AliasVendor,
-  defaultAliasSettings,
-  missingAliasFields,
-} from "../shared/alias.ts";
 import { cardBrand, groupCardNumber, luhnValid } from "../shared/card.ts";
 import { hasMarkup } from "../shared/markdown.ts";
 import { MAX_QR_BYTES } from "../shared/qr.ts";
 import { type Clause, matchesQuery, parseQuery, type Searchable } from "../shared/search.ts";
 import { passwordLevel } from "../shared/strength.ts";
 import { isInsecureUri, mainPage, toHttps } from "../shared/uri-tools.ts";
-import type { HistoryEntry, PageMatches, Settings, VaultItem, VaultList } from "../shared/messages.ts";
+import type { PageMatches, Settings, VaultItem, VaultList } from "../shared/messages.ts";
 import { type Child, h, send, t, withChevron } from "./dom.ts";
+import { passwordGenOptions, resetGenerator } from "./generator.ts";
 import { icon, type IconName } from "./icons.ts";
 import { renderMarkdown } from "./markdown.ts";
 import { pwnedCount } from "./pwned.ts";
@@ -57,53 +49,6 @@ interface EditDraft {
   /** Tri-state "Autofill on page load" (null = the account default). */
   autofillOnPageLoad: boolean | null;
   fields: { name: string; value: string; type: number; linkedId?: unknown }[];
-}
-
-const GEN_DEFAULTS: Json = {
-  type: "password", length: 20, lowercase: true, uppercase: true, numbers: true, special: true, avoidAmbiguous: false, minLowercase: 1, minUppercase: 1, minNumber: 1, minSpecial: 1,
-  numWords: 5, wordSeparator: "-", capitalize: true, includeNumber: true, pinLength: 4,
-  usernameType: "word", email: "", domain: "", aliasVendor: "simplelogin",
-};
-const GEN_KEY = "genOptions";
-const WORDLIST_KEY = "genWordlist";
-
-/** The generator's last options (a device preference, like the sort order). */
-function savedGen(): Json {
-  try {
-    const v = JSON.parse(localStorage.getItem(GEN_KEY) ?? "null");
-    return { ...GEN_DEFAULTS, ...(v && typeof v === "object" && !Array.isArray(v) ? v : {}) };
-  } catch {
-    return { ...GEN_DEFAULTS }; // no storage in framed pages, or damaged JSON
-  }
-}
-
-function savedWordlist(): string[] {
-  try {
-    return (localStorage.getItem(WORDLIST_KEY) ?? "").split("\n").filter(Boolean);
-  } catch {
-    return [];
-  }
-}
-
-/** One word per line; empty lines and lines starting with # ; - / are comments (Keyguard's format). */
-function parseWordlist(text: string): string[] {
-  const words = new Set<string>();
-  for (const line of text.split(/\r?\n/)) {
-    const w = line.trim();
-    if (w && w.length <= 24 && !/^[#;\-/]/.test(w)) words.add(w);
-  }
-  return [...words].slice(0, 100_000);
-}
-
-/** What the worker gets: the saved options, plus the custom list for a passphrase. */
-function genOptions(): Json {
-  const o: Json = { ...st.gen };
-  if (o.type === "pin") o.length = o.pinLength;
-  if (o.type === "passphrase") {
-    const words = savedWordlist();
-    if (words.length >= 100) o.wordlist = words;
-  }
-  return o;
 }
 
 const SORT_KEY = "vaultSort";
@@ -172,18 +117,6 @@ const st = {
   /** Timestamp of the first tap of a two-tap destructive action; 0 when idle. */
   confirmDelete: 0,
   draft: undefined as EditDraft | undefined,
-  gen: savedGen(),
-  generated: "",
-  /** Forwarded email alias settings for the service selected in the generator (session-backed). */
-  alias: undefined as AliasSettings | undefined,
-  /** Which service's settings are being read right now (a switch mid-flight must not land). */
-  aliasLoadingFor: undefined as AliasVendor | undefined,
-  /** An alias request is in flight: a double-click must not create two addresses. */
-  aliasBusy: false,
-  /** Ready-made password variants shown under the generator. */
-  suggestions: [] as string[],
-  /** Generator history screen, while open. */
-  history: undefined as HistoryEntry[] | undefined,
   toast: "",
   /** Large Type screen: the text being shown. */
   large: undefined as string | undefined,
@@ -213,6 +146,7 @@ function stopRepromptWatch() {
 }
 
 export function resetVault(): void {
+  resetGenerator();
   clearInterval(totpTimer);
   stopRepromptWatch();
   closeMenu();
@@ -220,8 +154,7 @@ export function resetVault(): void {
     list: undefined, page: undefined, loading: false, syncing: false, busy: false, error: undefined, route: { kind: "list" }, query: "",
     folder: "", item: undefined, reveal: new Set(), totp: undefined, confirmDelete: 0, draft: undefined,
     large: undefined, qr: undefined, pwned: undefined, memory: undefined, notesPreview: false,
-    gen: savedGen(), generated: "", suggestions: [], history: undefined, toast: "", copied: "", sawList: false, uriOpen: new Set(),
-    alias: undefined, aliasLoadingFor: undefined, aliasBusy: false,
+    toast: "", copied: "", sawList: false, uriOpen: new Set(),
   });
 }
 
@@ -278,7 +211,7 @@ export function tile(name: string, type: number, uris: string[] = []): HTMLEleme
 }
 
 /** Password digits and symbols get their own colors, like the rest of the app. */
-function colorize(value: string): (Node | string)[] {
+export function colorize(value: string): (Node | string)[] {
   return [...value].map((c) => (/\d/.test(c) ? h("span", { class: "d" }, c) : /[^\p{L}\s]/u.test(c) ? h("span", { class: "s" }, c) : c));
 }
 
@@ -313,7 +246,7 @@ export function iconButton(ic: IconName, label: string, onclick: () => void, ext
   return h("button", { type: "button", class: "icon-btn", "aria-label": label, title: label, onclick, ...extra }, icon(ic));
 }
 
-function copyButton(ctx: Ctx, key: string, value: string, label: string) {
+export function copyButton(ctx: Ctx, key: string, value: string, label: string) {
   const done = st.copied === key;
   return h(
     "button",
@@ -328,7 +261,7 @@ function copyButton(ctx: Ctx, key: string, value: string, label: string) {
   );
 }
 
-function errorBox(): Child {
+export function errorBox(): Child {
   return st.error ? h("div", { class: "error", role: "alert" }, icon("error"), h("div", {}, st.error)) : null;
 }
 
@@ -336,7 +269,7 @@ export function toastEl(): Child {
   return st.toast ? h("div", { class: "toast", role: "status" }, icon("check"), st.toast) : null;
 }
 
-function topBar(...children: Child[]): HTMLElement {
+export function topBar(...children: Child[]): HTMLElement {
   return h("div", { class: "top" }, ...children);
 }
 
@@ -344,7 +277,7 @@ function spacer(): HTMLElement {
   return h("span", { class: "spacer" });
 }
 
-function sectionTitle(text: string): HTMLElement {
+export function sectionTitle(text: string): HTMLElement {
   return h("h2", { class: "section-title" }, text);
 }
 
@@ -883,7 +816,7 @@ const SCHEMA: Record<number, { obj: string; fields: Spec[] }> = {
 };
 const label = (key: string) => t(`field_${key}`);
 
-function strength(pw: string): { label: string; level: number } {
+export function strength(pw: string): { label: string; level: number } {
   const level = passwordLevel(pw);
   return { level, label: t(["strengthWeak", "strengthFair", "strengthStrong", "strengthVeryStrong"][level]!) };
 }
@@ -1095,7 +1028,7 @@ async function refreshTotp(ctx: Ctx, id: string) {
   }, 1000);
 }
 
-const actionRow = (ic: IconName, title: string, onclick: () => void, danger = false) =>
+export const actionRow = (ic: IconName, title: string, onclick: () => void, danger = false) =>
   h("button", { type: "button", class: `row${danger ? " danger" : ""}`, disabled: st.busy, onclick }, icon(ic), h("div", { class: "body" }, h("span", { class: "title" }, title)));
 
 async function vaultAction(ctx: Ctx, req: Parameters<typeof send>[0], done: string, back = true) {
@@ -1500,7 +1433,7 @@ interface Prefill {
   data?: Record<string, string>;
 }
 
-function startEdit(ctx: Ctx, item: Json | undefined, prefill: Prefill = {}, asNew = !item) {
+export function startEdit(ctx: Ctx, item: Json | undefined, prefill: Prefill = {}, asNew = !item) {
   const base: Json = item ? structuredClone(item) : { type: 1, favorite: false, reprompt: 0, folderId: null, organizationId: null };
   const type = Number(base.type) || 1;
   const schema = SCHEMA[type];
@@ -1563,7 +1496,7 @@ function strengthMeter(input: HTMLInputElement | HTMLTextAreaElement, value: str
 }
 
 /** The generator's strength bar, drawn once for the current value. */
-function strengthBar(value: string): HTMLElement {
+export function strengthBar(value: string): HTMLElement {
   return h("div", { class: "meter", "data-level": String(strength(value).level), "aria-hidden": "true" }, h("i"));
 }
 
@@ -1736,7 +1669,7 @@ function editView(ctx: Ctx, isNew: boolean): HTMLElement {
         }),
         d.type === 1 && f.key === "password"
           ? iconButton("dice", t("generatePassword"), async () => {
-              const r = await send<string>({ type: "generate", options: st.gen.type === "password" || st.gen.type === "passphrase" ? genOptions() : { ...GEN_DEFAULTS } }); // a PIN or username is no password
+              const r = await send<string>({ type: "generate", options: passwordGenOptions() });
               if (!r.ok) return;
               d.data.password = r.data;
               st.reveal.add(id);
@@ -1927,364 +1860,4 @@ export function vaultScreen(ctx: Ctx): HTMLElement {
   if (r.kind === "edit" && st.draft) return editView(ctx, r.isNew);
   if (r.kind === "folders") return foldersView(ctx);
   return listView(ctx);
-}
-
-// ---------- generator ----------
-
-async function regenerate(ctx: Ctx) {
-  if (st.gen.type === "alias") {
-    // Any option change or chip click lands here. It must not call the forwarding service: that
-    // creates a real alias in the user's account. Only the generate / refresh buttons do (generateAliasNow).
-    st.suggestions = [];
-    st.error = undefined;
-    st.generated = "";
-    ctx.rerender();
-    return;
-  }
-  const r = await send<string>({ type: "generate", options: genOptions() });
-  st.generated = r.ok ? r.data : "";
-  st.error = r.ok ? undefined : r.error;
-  st.suggestions = [];
-  ctx.rerender();
-  if (!r.ok || st.gen.type !== "password") return;
-  // Three ready-made variants next to the configured one: a short site-friendly one and two long ones.
-  const variants = [{ length: 16, special: false }, { length: 24 }, { length: 32 }];
-  const all = await Promise.all(variants.map((v) => send<string>({ type: "generate", options: { ...genOptions(), ...v } })));
-  if (st.gen.type !== "password") return;
-  st.suggestions = all.flatMap((x) => (x.ok ? [x.data] : []));
-  ctx.rerender();
-}
-
-/**
- * One alias request at a time. The answer is dropped when the user has switched service meanwhile:
- * an address from the previous service must not be shown (or saved into a login) as the new one.
- */
-async function generateAliasNow(ctx: Ctx) {
-  const alias = st.alias;
-  if (!alias || st.aliasBusy || missingAliasFields(alias).length) return;
-  st.aliasBusy = true;
-  try {
-    const r = await send<string>({ type: "generateAlias", vendor: alias.vendor });
-    if (st.alias?.vendor !== alias.vendor) return;
-    st.generated = r.ok ? r.data : "";
-    st.error = r.ok ? undefined : r.error;
-  } finally {
-    st.aliasBusy = false;
-    ctx.rerender();
-  }
-}
-
-/** Loads the selected service's settings (session storage in the worker) once per generator visit. */
-async function loadAlias(ctx: Ctx, vendor: AliasVendor) {
-  st.aliasLoadingFor = vendor;
-  const r = await send<AliasSettings>({ type: "aliasSettings", vendor });
-  if (st.aliasLoadingFor !== vendor) return; // another service was selected meanwhile
-  st.aliasLoadingFor = undefined;
-  if (str(st.gen.aliasVendor) !== vendor) return;
-  // Even a failed read leaves a value, so the screen does not request it again on every render.
-  st.alias = r.ok ? r.data : defaultAliasSettings(vendor);
-  if (!r.ok) st.error = r.error;
-  ctx.rerender();
-}
-
-async function importWordlist(ctx: Ctx, file: File | undefined) {
-  if (!file) return;
-  const words = parseWordlist(await file.slice(0, 2 * 1024 * 1024).text());
-  if (words.length < 100) return ((st.error = t("wordlistTooShort")), ctx.rerender());
-  try {
-    localStorage.setItem(WORDLIST_KEY, words.join("\n"));
-  } catch {
-    return ((st.error = t("wordlistNotSaved")), ctx.rerender());
-  }
-  st.error = undefined;
-  void regenerate(ctx);
-}
-
-async function openHistory(ctx: Ctx) {
-  const r = await send<HistoryEntry[]>({ type: "generatorHistory" });
-  if (r.ok) st.history = r.data;
-  else st.error = r.error;
-  ctx.rerender();
-}
-
-function historyScreen(ctx: Ctx, list: HistoryEntry[]): HTMLElement {
-  const close = () => ((st.history = undefined), ctx.rerender());
-  return h(
-    "div",
-    { class: "page" },
-    topBar(iconButton("back", t("back"), close), h("h1", { class: "grow" }, t("generatorHistory"))),
-    list.length
-      ? h(
-          "div",
-          { class: "group", role: "list" },
-          ...list.map((e) =>
-            h(
-              "div",
-              { class: "row", role: "listitem" },
-              h("div", { class: "body" }, h("span", { class: "title mono" }, e.value), h("span", { class: "sub" }, new Date(e.date).toLocaleString())),
-              iconButton("copy", t("copyField", e.value), () => void copy(ctx, e.value)),
-            ),
-          ),
-        )
-      : h("div", { class: "empty" }, icon("timer"), h("strong", {}, t("generatorHistoryEmpty"))),
-    list.length
-      ? h(
-          "button",
-          {
-            type: "button",
-            class: "btn text",
-            onclick: async () => ((await send({ type: "generatorHistoryClear" })).ok ? ((st.history = []), ctx.rerender()) : undefined),
-          },
-          t("clear"),
-        )
-      : null,
-    errorBox(),
-  );
-}
-
-export function generatorScreen(ctx: Ctx): HTMLElement {
-  if (st.history) return historyScreen(ctx, st.history);
-  if (st.gen.type !== "alias" && !st.generated && !st.error) void regenerate(ctx);
-  const g = st.gen;
-  const set = (k: string, v: unknown) => {
-    g[k] = v;
-    try {
-      localStorage.setItem(GEN_KEY, JSON.stringify(g));
-    } catch {
-      /* no storage */
-    }
-    void regenerate(ctx);
-  };
-  const toggle = (k: string, label: string) =>
-    h(
-      "label",
-      { class: "row" },
-      h("div", { class: "body" }, h("span", { class: "title" }, label)),
-      h("span", { class: "switch" }, h("input", { type: "checkbox", checked: g[k] === true, onchange: (e: Event) => set(k, (e.target as HTMLInputElement).checked) }), h("span")),
-    );
-  const slider = (k: string, label: string, min: number, max: number, suffix = "") => {
-    const badge = h("span", { class: "value-badge" }, `${String(g[k])}${suffix}`);
-    const input = h("input", { type: "range", min, max, value: String(g[k]), "aria-label": label });
-    // The filled part of the track is a CSS gradient driven by --fill.
-    const paint = (v: number) => {
-      const ratio = max === min ? 0 : (v - min) / (max - min);
-      input.style.setProperty("--fill", `${Math.round(Math.min(Math.max(ratio, 0), 1) * 100)}%`);
-    };
-    paint(Number(g[k]));
-    input.addEventListener("input", () => {
-      const v = Number(input.value);
-      badge.textContent = `${v}${suffix}`;
-      paint(v);
-    });
-    input.addEventListener("change", () => set(k, Number(input.value)));
-    return h(
-      "div",
-      { class: "row slider-row" },
-      h("div", { class: "body" }, h("span", { class: "title" }, label)),
-      input,
-      badge,
-    );
-  };
-  g.email ||= ctx.email() ?? "";
-  const chip = (type: string, label: string, key = "type") => h("button", { type: "button", class: "chip", "aria-pressed": String(g[key] === type), onclick: () => set(key, type) }, label);
-  const text = (k: string, label: string, props: Record<string, unknown> = {}) =>
-    h(
-      "label",
-      { class: "row" },
-      h("div", { class: "body" }, h("span", { class: "title" }, label)),
-      h("input", { ...props, value: str(g[k]), "aria-label": label, spellcheck: false, onchange: (e: Event) => set(k, (e.target as HTMLInputElement).value) }),
-    );
-  const custom = g.type === "passphrase" && savedWordlist().length >= 100;
-  // The alias settings live in the worker's session storage (a token is a secret; no localStorage).
-  const aliasVendor: AliasVendor = (ALIAS_VENDORS as readonly string[]).includes(str(g.aliasVendor)) ? (g.aliasVendor as AliasVendor) : "simplelogin";
-  if (g.type === "alias" && st.alias === undefined && st.aliasLoadingFor !== aliasVendor) void loadAlias(ctx, aliasVendor);
-  const aliasReady = !!st.alias && st.alias.vendor === aliasVendor && missingAliasFields(st.alias).length === 0;
-  const switchAlias = (v: AliasVendor) => {
-    st.alias = undefined;
-    st.generated = "";
-    st.error = undefined;
-    set("aliasVendor", v);
-  };
-  let options: HTMLElement;
-  if (g.type === "password")
-    options = h(
-      "div",
-      { class: "group" },
-      slider("length", t("length"), 5, 128),
-      toggle("uppercase", "A–Z"),
-      g.uppercase === true ? slider("minUppercase", t("minUppercase"), 0, 9) : null,
-      toggle("lowercase", "a–z"),
-      g.lowercase === true ? slider("minLowercase", t("minLowercase"), 0, 9) : null,
-      toggle("numbers", "0–9"),
-      toggle("special", "!@#$%^&*"),
-      toggle("avoidAmbiguous", t("avoidAmbiguous")),
-      g.numbers === true ? slider("minNumber", t("minDigits"), 0, 9) : null,
-      g.special === true ? slider("minSpecial", t("minSymbols"), 0, 9) : null,
-    );
-  else if (g.type === "passphrase")
-    options = h(
-      "div",
-      { class: "group" },
-      slider("numWords", t("words"), 3, 20),
-      text("wordSeparator", t("separator"), { class: "small-input", maxLength: 3 }),
-      toggle("capitalize", t("capitalize")),
-      toggle("includeNumber", t("includeNumber")),
-      h(
-        "div",
-        { class: "row" },
-        h("div", { class: "body" }, h("span", { class: "title" }, t("wordlist")), h("span", { class: "sub" }, custom ? t("wordlistCustom", String(savedWordlist().length)) : t("wordlistDefault"))),
-        custom
-          ? iconButton("close", t("wordlistReset"), () => {
-              try {
-                localStorage.removeItem(WORDLIST_KEY);
-              } catch {
-                /* no storage */
-              }
-              void regenerate(ctx);
-            })
-          : null,
-        h("label", { class: "btn text small" }, t("wordlistImport"), h("input", { type: "file", class: "sr-only", accept: ".txt,.wordlist,text/plain", onchange: (e: Event) => void importWordlist(ctx, (e.target as HTMLInputElement).files?.[0]) })),
-      ),
-    );
-  else if (g.type === "pin") options = h("div", { class: "group" }, slider("pinLength", t("length"), 3, 12));
-  else if (g.type === "alias") {
-    const info = ALIAS_INFO[aliasVendor];
-    const saved = st.alias;
-    const save = (patch: Partial<AliasSettings>) => {
-      if (!saved) return;
-      const next = { ...saved, ...patch, vendor: aliasVendor };
-      st.alias = next;
-      // The address on screen was made with the old settings, and making a new one is the user's
-      // click, not a side effect of typing a key.
-      st.generated = "";
-      st.error = undefined;
-      void (async () => {
-        const r = await send({ type: "setAliasSettings", settings: next });
-        if (!r.ok) st.error = r.error;
-        ctx.rerender();
-      })();
-    };
-    const input = (field: AliasField, label: string, hint: string, props: Record<string, unknown>) =>
-      h(
-        "label",
-        { class: "row" },
-        h("div", { class: "body" }, h("span", { class: "title" }, label), h("span", { class: "sub" }, hint)),
-        h("input", {
-          ...props,
-          value: saved ? str(saved[field]) : "",
-          disabled: !saved, // edits before the settings arrive would be dropped
-          "aria-label": label,
-          spellcheck: false,
-          autocomplete: "off",
-          onchange: (e: Event) => save({ [field]: (e.target as HTMLInputElement).value } as Partial<AliasSettings>),
-        }),
-      );
-    options = h(
-      "div",
-      {},
-      h(
-        "div",
-        { class: "group" },
-        h(
-          "div",
-          { class: "row" },
-          h("div", { class: "body" }, h("span", { class: "title" }, t("aliasService")), h("span", { class: "sub" }, t("aliasServiceHint"))),
-          withChevron(
-            h(
-              "select",
-              { "aria-label": t("aliasService"), onchange: (e: Event) => switchAlias((e.target as HTMLSelectElement).value as AliasVendor) },
-              ...ALIAS_VENDORS.map((v) => h("option", { value: v, selected: v === aliasVendor }, ALIAS_INFO[v].name)),
-            ),
-          ),
-        ),
-        input("token", t("aliasApiKey"), t("aliasApiKeyHint"), { type: "password" }),
-        info.fields.includes("domain") ? input("domain", t("aliasDomain"), t("aliasDomainHint"), { type: "text", placeholder: "example.com" }) : null,
-        info.selfHost ? input("baseUrl", t("aliasBaseUrl"), t("aliasBaseUrlHint"), { type: "text", placeholder: info.baseUrl }) : null,
-        info.fields.includes("prefix")
-          ? h(
-              "label",
-              { class: "row" },
-              h("div", { class: "body" }, h("span", { class: "title" }, t("aliasWebsitePrefix")), h("span", { class: "sub" }, t("aliasWebsitePrefixHint"))),
-              h("span", { class: "switch" }, h("input", { type: "checkbox", checked: saved?.prefix === true, disabled: !saved, "aria-label": t("aliasWebsitePrefix"), onchange: (e: Event) => save({ prefix: (e.target as HTMLInputElement).checked }) }), h("span")),
-            )
-          : null,
-      ),
-      info.help
-        ? h("button", { type: "button", class: "btn text small", onclick: () => void chrome.tabs.create({ url: info.help! }) }, t("aliasGetToken", info.name))
-        : null,
-    );
-  } else
-    options = h(
-      "div",
-      {},
-      h("div", { class: "chips", role: "group", "aria-label": t("usernameType") }, chip("word", t("usernameWord"), "usernameType"), chip("plus", t("usernamePlus"), "usernameType"), chip("catchall", t("usernameCatchAll"), "usernameType"), chip("subdomain", t("usernameSubdomain"), "usernameType")),
-      h(
-        "div",
-        { class: "group" },
-        ...(g.usernameType === "plus" || g.usernameType === "subdomain"
-          ? [text("email", t("email"), { type: "email" })]
-          : g.usernameType === "catchall"
-            ? [text("domain", t("domain"), { placeholder: "example.com" })]
-            : [toggle("capitalize", t("capitalize")), toggle("includeNumber", t("includeNumber"))]),
-      ),
-    );
-  return h(
-    "div",
-    { class: "page" },
-    topBar(h("h1", { class: "grow" }, t("generator")), iconButton("timer", t("generatorHistory"), () => void openHistory(ctx))),
-    h(
-      "div",
-      { class: "chips", role: "group", "aria-label": t("generator") },
-      chip("password", t("typePassword")),
-      chip("passphrase", t("typePassphrase")),
-      chip("pin", t("typePin")),
-      chip("username", t("username")),
-      chip("alias", t("forwardedEmail")),
-    ),
-    h(
-      "div",
-      { class: "generated" },
-      h(
-        "div",
-        { class: "generated-row" },
-        h(
-          "output",
-          { class: "mono", "aria-live": "polite", "aria-label": t("generatedValue") },
-          ...(st.generated ? colorize(st.generated) : [g.type === "alias" && !aliasReady ? t("aliasNotConfigured") : "…"]),
-        ),
-        h(
-          "div",
-          { class: "trailing" },
-          iconButton("refresh", t("regenerate"), () => void (g.type === "alias" ? generateAliasNow(ctx) : regenerate(ctx))),
-          iconButton(
-            "copy",
-            t("copyField", t("generatedValue")),
-            () => {
-              void copy(ctx, st.generated);
-              void send({ type: "generatorHistoryAdd", value: st.generated });
-            },
-            { disabled: !st.generated },
-          ),
-        ),
-      ),
-      h("div", { class: "generated-foot" }, st.generated && g.type !== "alias" ? strengthBar(st.generated) : null, st.generated && g.type !== "alias" ? h("span", { class: "meter-label" }, strength(st.generated).label) : null),
-    ),
-    options,
-    g.type === "alias" && aliasReady && !st.generated ? actionRow("refresh", t("generateEmail"), () => void generateAliasNow(ctx)) : null,
-    st.suggestions.length
-      ? h(
-          "div",
-          {},
-          sectionTitle(t("suggestions")),
-          h("div", { class: "group", role: "list" }, ...st.suggestions.map((v, i) => h("div", { class: "row", role: "listitem" }, h("div", { class: "body" }, h("span", { class: "title mono ellipsis" }, ...colorize(v)), h("span", { class: "sub" }, t("characters", String(v.length)))), copyButton(ctx, `sug.${i}`, v, t("copyField", t("generatedValue")))))),
-        )
-      : null,
-    st.generated
-      ? actionRow("plus", t(g.type === "alias" ? "createLoginWithEmail" : g.type === "username" ? "createLoginWithUsername" : "createLoginWithPassword"), () => {
-          ctx.goto("vault");
-          startEdit(ctx, undefined, { data: { [g.type === "username" || g.type === "alias" ? "username" : "password"]: st.generated } });
-        })
-      : null,
-    errorBox(),
-  );
 }

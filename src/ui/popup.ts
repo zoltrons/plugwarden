@@ -7,7 +7,8 @@ import { icon, type IconName } from "./icons.ts";
 import { createBiometricCredential, getBiometricPrf, platformAuthenticatorAvailable } from "./biometric.ts";
 import { passkeyRequestId, passkeyScreen } from "./passkey.ts";
 import { resetSend, sendScreen, startTextSend } from "./send.ts";
-import { type Ctx, generatorScreen, iconButton, monogramHue, refreshPageMatches, resetVault, setIconBase, toastEl, uriMatchLabel, vaultRouteKey, vaultScreen } from "./vault.ts";
+import { generatorScreen } from "./generator.ts";
+import { type Ctx, iconButton, monogramHue, refreshPageMatches, resetVault, setIconBase, toastEl, uriMatchLabel, vaultRouteKey, vaultScreen } from "./vault.ts";
 
 // ---------- state ----------
 

@@ -43,7 +43,7 @@ menu.html/bar.html frames      --FrameRequest-->  background/inline.ts
 - `src/transport/` — thin fetch client (`http.ts` bounded bodies, `auth.ts`, `vault.ts`); no keys here.
 - `src/autofill/` — content scripts (`content.ts` idle until a field is focused, `page.ts` injected
   fill, `passkey-*.ts`), `match.ts` URI matching.
-- `src/ui/` — `popup.ts` shell/auth screens/settings, `vault.ts` list/item/edit (largest file), `send.ts`,
+- `src/ui/` — `popup.ts` shell/auth screens/settings, `vault.ts` list/item/edit (largest file), `generator.ts` (generator + email aliases), `send.ts`,
   `biometric.ts`, `dom.ts` (`h`, `send`, `t`), strings in `src/_locales/en/messages.json` (English only).
 - `crates/core-wasm/` — `api.rs` (session, keys), `cipher.rs`, `send.rs`, `totp.rs`, `generator.rs`;
   `lib.rs` is the `wasm_bindgen` surface. Depends on `bitwarden-crypto` at the rev in `upstream.lock`.
