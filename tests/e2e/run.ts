@@ -1000,7 +1000,7 @@ try {
     await loginPage.bringToFront();
     assert.deepEqual(await shortcut(), { filled: true });
     const decoy = await loginPage.evaluate(() => ["decoy", "u", "p"].map((id) => (document.getElementById(id) as HTMLInputElement).value));
-    assert.deepEqual(decoy, ["", "local-user", "local-pass-2"]);
+    assert.deepEqual(decoy, ["", "local-user", "local-pass"]);
     await loginPage.goto(`${SITE}/useronly`);
     await loginPage.bringToFront();
     assert.deepEqual(await shortcut(), { filled: true });
