@@ -179,6 +179,7 @@ export async function handleFrame(req: FrameRequest, tabId: number): Promise<unk
     return null;
   }
   if (req.type === "inlinePasskey") {
+    await touchAutoLock(); // a pick counts as activity
     await openConditional(tabId, ctx.frameId);
     return null;
   }

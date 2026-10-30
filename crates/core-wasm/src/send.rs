@@ -100,8 +100,8 @@ pub fn decrypt_list(s: &Session, sends: Vec<Value>) -> Value {
 }
 
 /// Encrypts a plaintext send for POST/PUT /api/sends. A new send (no `key`) gets a fresh secret.
-/// A plaintext `password` is replaced by its PBKDF2 hash salted with the secret; a `passwordHash`
-/// (an edit that keeps the current access password) is passed through untouched, never hashed twice.
+/// A plaintext `password` is replaced by its PBKDF2 hash salted with the secret. An edit that keeps the
+/// current access password sends none at all: the server keeps the stored one and would hash anything we send.
 pub fn encrypt(s: &Session, send: &mut Value) -> Result<()> {
     let obj = send.as_object_mut().ok_or("send is not an object")?;
     obj.retain(|k, _| !k.eq_ignore_ascii_case("urlKey"));
@@ -119,13 +119,10 @@ pub fn encrypt(s: &Session, send: &mut Value) -> Result<()> {
     let key = content_key(&secret);
     apply(obj, &mut |v| Ok(v.encrypt_with_key(&key).map_err(err)?.to_string()))?;
     let typed = get_str(obj, "password").map(str::to_owned);
-    let kept = get_str(obj, "passwordHash").map(str::to_owned);
-    obj.retain(|k, _| !k.eq_ignore_ascii_case("password") && !k.eq_ignore_ascii_case("passwordHash"));
+    obj.retain(|k, _| !k.eq_ignore_ascii_case("password"));
     if let Some(password) = typed {
         let hash = pbkdf2(password.as_bytes(), secret.as_slice(), SEND_ITERATIONS);
         obj.insert("password".into(), STANDARD.encode(hash).into());
-    } else if let Some(hash) = kept {
-        obj.insert("password".into(), hash.into());
     }
     Ok(())
 }
@@ -175,7 +172,7 @@ mod tests {
     }
 
     #[test]
-    fn edit_keeps_a_stored_password_hash() {
+    fn edit_without_a_new_password_sends_none() {
         let s = Session {
             user: SymmetricCryptoKey::make(SymmetricKeyAlgorithm::Aes256CbcHmac),
             private: None,
@@ -184,11 +181,10 @@ mod tests {
         let mut send = json!({ "type": 0, "name": "n", "text": { "text": "t" }, "password": "pw" });
         encrypt(&s, &mut send).unwrap();
         let hash = send["password"].as_str().unwrap().to_owned();
-        // An edit that does not retype the password sends the stored hash back under `passwordHash`.
-        let mut edit = json!({ "type": 0, "name": "n2", "text": { "text": "t" }, "passwordHash": hash });
+        // An edit that does not retype the password carries none: the server keeps the stored one.
+        let mut edit = json!({ "type": 0, "name": "n2", "text": { "text": "t" } });
         encrypt(&s, &mut edit).unwrap();
-        assert_eq!(edit["password"].as_str(), Some(hash.as_str()));
-        assert!(edit.get("passwordHash").is_none(), "the helper key must not reach the server");
+        assert!(edit.get("password").is_none());
         assert_ne!(edit["name"], "n2", "content is still encrypted");
         // A newly typed password is hashed once, never passed through.
         let mut retyped = json!({ "type": 0, "name": "n3", "text": { "text": "t" }, "password": "pw2" });

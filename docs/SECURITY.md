@@ -92,6 +92,23 @@ freed rather than zeroed in place.
 
 ## Known gaps
 
+- **The inline menu's "Sign in with passkey" signs in without a window.** Picking the entry is the
+  decision: with exactly one matching passkey `openConditional` (`src/background/passkey.ts`) asserts
+  right away. Several passkeys (a choice to make) or a `reprompt`-flagged item open the approval
+  window instead, so the flag is never bypassed by this path. The request is still tied to the
+  frame's per-document nonce and the browser-reported origin (invariants 1 and 4).
+
+- **One request leaves for a third party, on an explicit click only.** "Check for data breaches" on a
+  login sends the first 5 hex digits of the password's SHA-1 to `api.pwnedpasswords.com` (k-anonymity,
+  padded responses, no cookies, no referrer; `src/ui/pwned.ts`). It needs no new permission (the broad
+  host permission already covers it) and nothing runs automatically. Maps links go to OpenStreetMap
+  only when the user opens them.
+- **The list carries two derived flags, not secrets.** `reused` (how many items share a password) and
+  `weak` are computed in the worker (`listVault`) and shipped on list entries so the popup can filter
+  by them without ever receiving a password. They are not part of what the inline menu / save bar get.
+- **Values the user reveals can be re-shown.** Large Type, QR code and "Share as a Send" take the
+  value the item view already holds; they sit behind the same re-prompt gate as viewing the item.
+
 - **Master password re-prompt (`reprompt`) is enforced, with one exception.** Items flagged in the web
   vault are gated in the service worker for the item view (and therefore editing), copy, TOTP, filling
   (popup, inline menu and "fill the first match") and attachment downloads — see

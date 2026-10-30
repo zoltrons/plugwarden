@@ -281,6 +281,10 @@ export interface VaultItem {
   favorite: boolean;
   readOnly: boolean;
   hasTotp: boolean;
+  /** Login only, in the main list only: how many items share this password (absent: unique). */
+  reused?: number;
+  /** Login only, in the main list only: the password scores "weak". */
+  weak?: boolean;
   /** Flagged for a master-password re-prompt (enforced in the service worker, see background/reprompt.ts). */
   reprompt?: boolean;
   /** Tri-state "Autofill on page load" of a login (absent: inherit the account default). */

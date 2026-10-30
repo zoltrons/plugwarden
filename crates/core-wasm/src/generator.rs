@@ -51,7 +51,7 @@ fn opt_u32(o: &Map<String, Value>, k: &str, d: u32) -> u32 {
 
 /// Options (camelCase, all optional): `type` ("password" | "passphrase"),
 /// password: `length` (5..=128, default 14), `lowercase`, `uppercase`, `numbers`, `special`,
-/// `minNumber`, `minSpecial`, `avoidAmbiguous`;
+/// `minLowercase`, `minUppercase`, `minNumber`, `minSpecial`, `avoidAmbiguous`;
 /// passphrase: `numWords` (3..=20, default 6), `wordSeparator`, `capitalize`, `includeNumber`.
 pub fn generate(options_json: &str) -> Result<String> {
     let v: Value = serde_json::from_str(options_json).map_err(crate::api::err)?;
@@ -69,12 +69,12 @@ fn password(o: &Map<String, Value>) -> Result<String> {
         (
             opt_bool(o, "lowercase", true),
             charset(LOWER, LOWER_AMBIGUOUS, avoid),
-            1,
+            opt_u32(o, "minLowercase", 1),
         ),
         (
             opt_bool(o, "uppercase", true),
             charset(UPPER, UPPER_AMBIGUOUS, avoid),
-            1,
+            opt_u32(o, "minUppercase", 1),
         ),
         (
             opt_bool(o, "numbers", true),
@@ -147,6 +147,16 @@ mod tests {
             assert!(p.chars().filter(char::is_ascii_digit).count() >= 3);
             assert!(p.chars().filter(|c| SPECIAL.contains(*c)).count() >= 2);
             assert!(!p.contains(['l', 'I', 'O', '0', '1']));
+        }
+    }
+
+    #[test]
+    fn password_respects_letter_minimums() {
+        for _ in 0..200 {
+            let p = generate(r#"{"length":12,"special":false,"minLowercase":5,"minUppercase":4}"#).unwrap();
+            assert_eq!(p.chars().count(), 12);
+            assert!(p.chars().filter(char::is_ascii_lowercase).count() >= 5);
+            assert!(p.chars().filter(char::is_ascii_uppercase).count() >= 4);
         }
     }
 

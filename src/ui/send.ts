@@ -50,6 +50,11 @@ const sd = {
   confirmDelete: "",
 };
 
+/** Starts a new text send holding `text` (from "Share as Send" on a vault value). */
+export function startTextSend(text: string): void {
+  Object.assign(sd, { draft: { ...newDraft(), text, hidden: true }, error: undefined });
+}
+
 export function resetSend(): void {
   Object.assign(sd, { list: undefined, loading: false, busy: false, error: undefined, draft: undefined, confirmDelete: "" });
 }

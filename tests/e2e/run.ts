@@ -433,6 +433,9 @@ try {
     const tok = await passwordToken(BASE, { email: keyUser.email, authHash: authHash(keyUser), deviceId: crypto.randomUUID() });
     const json = { masterPasswordHash: authHash(keyUser) };
     const challenge = await call(BASE, "POST", "/api/two-factor/get-webauthn-challenge", { token: tok.access_token, json });
+    // The passkey shim offers to save this key in the vault; hand it to the security key instead.
+    const handBack = ctx.waitForEvent("page", { predicate: (p) => p.url().includes("popup.html?passkey=") })
+      .then((w) => w.getByRole("button", { name: "Use another device or browser" }).click());
     const deviceResponse = await regPage.evaluate(async (opts: any) => {
       const bytes = (s: string) => Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));
       const b64u = (b: ArrayBuffer) => btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
@@ -443,6 +446,7 @@ try {
       const r = c.response as AuthenticatorAttestationResponse;
       return { id: c.id, rawId: b64u(c.rawId), type: c.type, response: { attestationObject: b64u(r.attestationObject), clientDataJson: b64u(r.clientDataJSON) } };
     }, challenge);
+    await handBack;
     await call(BASE, "POST", "/api/two-factor/webauthn", { token: tok.access_token, json: { ...json, id: 1, name: "e2e key", deviceResponse } });
   }
   const { credentials } = await regCdp.send("WebAuthn.getCredentials", { authenticatorId: regAuth });
@@ -645,7 +649,10 @@ try {
     await fill("Name", "Example");
     await fill("Username", "alice");
     await page.getByRole("button", { name: "Generate password" }).click();
-    await fill("Websites (one per line)", "example.com\nhttps://login.example.com");
+    await page.getByRole("button", { name: "Add website" }).click();
+    await fill("Website 1", "example.com");
+    await page.getByRole("button", { name: "Add website" }).click();
+    await fill("Website 2", "https://login.example.com");
     await page.getByRole("button", { name: "Save" }).click();
     await rows().filter({ hasText: "Example" }).waitFor();
     const s = await apiSession(vaultUser);
@@ -1248,7 +1255,7 @@ try {
     assert.deepEqual([...Buffer.from(g.user, "base64")], [1, 2, 3, 4]);
   });
 
-  await step("passkeys: conditional mediation offers the passkey in the inline menu and signs in", async () => {
+  await step("passkeys: the inline menu entry signs in directly, without an approval window", async () => {
     // A passkey form: the site starts a conditional get (passkey autofill) and focuses the username field.
     await loginPage.goto(`${SITE}/login`);
     const got = loginPage.evaluate(async (ch) => {
@@ -1256,21 +1263,22 @@ try {
         mediation: "conditional",
         publicKey: { challenge: Uint8Array.from(ch), rpId: "localhost" },
       }) as Promise<PublicKeyCredential>;
-      (document.getElementById("u") as HTMLInputElement).focus();
       const c = await pending;
       const r = c.response as AuthenticatorAssertionResponse;
       const b = (x: ArrayBuffer) => btoa(String.fromCharCode(...new Uint8Array(x)));
       return { clientData: b(r.clientDataJSON), authData: b(r.authenticatorData), sig: b(r.signature), user: b(r.userHandle!) };
     }, [...challenge]);
-    const menu = await frameOf(loginPage, "menu.html");
-    const entry = menu.getByRole("button", { name: "Sign in with passkey" });
+    await loginPage.locator("#u").click(); // a real focus, once the content script is listening
+    got.catch(() => undefined); // a failing step must report its own error, not this call dying with the page
+    const entry = (await frameOf(loginPage, "menu.html")).getByRole("button", { name: "Sign in with passkey" });
     await entry.waitFor();
-    const approval = approve(async (w) => {
-      await w.getByRole("listitem").filter({ hasText: "pk-user" }).click();
-    });
+    const opened: Page[] = [];
+    const watch = (p: Page) => opened.push(p);
+    ctx.on("page", watch);
     await entry.click();
-    await approval;
     const g = await got;
+    ctx.off("page", watch);
+    assert.deepEqual(opened.filter((p) => p.url().includes("popup.html?passkey=")), [], "an approval window opened");
     const clientData = Buffer.from(g.clientData, "base64");
     assert.equal(JSON.parse(clientData.toString()).type, "webauthn.get");
     const signed = Buffer.concat([Buffer.from(g.authData, "base64"), createHash("sha256").update(clientData).digest()]);
@@ -1279,38 +1287,10 @@ try {
     assert.deepEqual([...Buffer.from(g.user, "base64")], [1, 2, 3, 4]);
   });
 
-  await step("passkeys: a re-requested conditional call takes over the open approval window", async () => {
-    // The site restarts passkey autofill while the user is choosing: the window stays open and answers the
-    // newest call (its challenge), the replaced call ends with AbortError.
-    await loginPage.goto(`${SITE}/login`);
-    type Win = { pkGet: (ch: number[]) => Promise<string>; first: Promise<string> };
-    await loginPage.evaluate((ch) => {
-      const w = window as unknown as Win;
-      // Resolves to the clientDataJSON text, or to the error name.
-      w.pkGet = (c) =>
-        navigator.credentials
-          .get({ mediation: "conditional", publicKey: { challenge: Uint8Array.from(c), rpId: "localhost" } })
-          .then((cred) => new TextDecoder().decode((cred as PublicKeyCredential).response.clientDataJSON), (e: DOMException) => e.name);
-      w.first = w.pkGet(ch);
-      (document.getElementById("u") as HTMLInputElement).focus();
-    }, [...challenge]);
-    const entry = (await frameOf(loginPage, "menu.html")).getByRole("button", { name: "Sign in with passkey" });
-    await entry.waitFor();
-    const opened = ctx.waitForEvent("page", { predicate: (p) => p.url().includes("popup.html?passkey=") });
-    await entry.click();
-    const w = await opened;
-    await w.getByRole("listitem").filter({ hasText: "pk-user" }).waitFor();
-    const second = randomBytes(32);
-    const got = loginPage.evaluate((ch) => (window as unknown as Win).pkGet(ch), [...second]);
-    assert.equal(await loginPage.evaluate(() => (window as unknown as Win).first), "AbortError");
-    assert.equal(w.isClosed(), false, "the approval window was closed instead of taken over");
-    await w.getByRole("listitem").filter({ hasText: "pk-user" }).click();
-    assert.equal(JSON.parse(await got).challenge, second.toString("base64url"));
-  });
-
   await step("passkeys: closing the window hands the call back to the browser", async () => {
     // An empty virtual authenticator without UI makes the browser's own WebAuthn fail at once (headless
     // Chromium otherwise sometimes waits for UI that never comes).
+    await loginPage.locator("#u").click(); // the shim leaves an unfocused document to the browser; the menu frame that held the focus is gone
     const cdp = await ctx.newCDPSession(loginPage);
     await cdp.send("WebAuthn.enable", { enableUI: false });
     await cdp.send("WebAuthn.addVirtualAuthenticator", { options: authenticator });

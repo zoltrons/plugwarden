@@ -1,6 +1,7 @@
 // Decrypted vault held in the crypto worker's memory. Dropped when the worker is terminated (lock).
 import * as core from "../../dist/wasm/core_wasm.js";
 import type { Folder, PasskeyCandidate, SendItem, VaultItem, VaultList } from "../shared/messages.ts";
+import { passwordLevel } from "../shared/strength.ts";
 import { ci } from "../shared/validate.ts";
 import { Psl, uriMatches } from "../autofill/match.ts";
 import * as fido2 from "./fido2.ts";
@@ -95,7 +96,19 @@ function summary(c: Json): VaultItem {
 export function listVault(): VaultList | null {
   if (!ciphers) return null;
   const sorted = (m: Map<string, Json>) => [...m.values()].map(summary).sort((a, b) => a.name.localeCompare(b.name));
-  return { items: sorted(ciphers), folders, trash: sorted(trash), organizations, collections };
+  // Reuse and weakness are worked out here so the list can flag them without ever receiving a password.
+  const passwordOf = (c: Json) => (Number(ci(c, "type")) === 1 ? s(ci(o(ci(c, "login")), "password")) : "");
+  const uses = new Map<string, number>();
+  for (const c of ciphers.values()) uses.set(passwordOf(c), (uses.get(passwordOf(c)) ?? 0) + 1);
+  const items = [...ciphers.values()]
+    .map((c) => {
+      const pw = passwordOf(c);
+      const item = summary(c);
+      if (!pw) return item;
+      return { ...item, ...(uses.get(pw)! > 1 ? { reused: uses.get(pw)! } : {}), ...(passwordLevel(pw) === 0 ? { weak: true } : {}) };
+    })
+    .sort((a, b) => a.name.localeCompare(b.name));
+  return { items, folders, trash: sorted(trash), organizations, collections };
 }
 
 function get(id: string): Json {
@@ -142,9 +155,35 @@ const gen = (options: Json) => core.generatePassword(JSON.stringify(options));
 const randomChars = (n: number, digitsOnly = false) =>
   gen({ length: Math.max(n, 5), lowercase: !digitsOnly, uppercase: false, numbers: true, special: false, minNumber: 0 }).slice(0, n);
 
-/** Passwords and passphrases come from core; usernames (Bitwarden's word / plus-addressed / catch-all) are built on it. */
+/** Uniform integer in `0..n` (rejection sampling, no modulo bias). */
+function randBelow(n: number): number {
+  const zone = 2 ** 32 - (2 ** 32 % n);
+  const b = new Uint32Array(1);
+  do crypto.getRandomValues(b);
+  while (b[0]! >= zone);
+  return b[0]! % n;
+}
+
+/** A passphrase from the user's own list (core only knows the EFF list). */
+function customPassphrase(o: Json, words: string[]): string {
+  const n = Math.min(Math.max(Number(o.numWords) || 5, 3), 20);
+  const picked = Array.from({ length: n }, () => words[randBelow(words.length)]!);
+  const cased = o.capitalize === true ? picked.map((w) => w.charAt(0).toUpperCase() + w.slice(1)) : picked;
+  if (o.includeNumber === true) cased[randBelow(n)] += String(randBelow(10));
+  return cased.join(s(o.wordSeparator));
+}
+
+/** Passwords and passphrases come from core; PINs and usernames (word / plus / catch-all / subdomain) are built on it. */
 export function generate(o: Json): string {
+  if (o.type === "pin") return randomChars(Math.min(Math.max(Number(o.length) || 4, 3), 12), true);
+  if (o.type === "passphrase" && Array.isArray(o.wordlist) && o.wordlist.length >= 100) return customPassphrase(o, o.wordlist.filter((w): w is string => typeof w === "string" && !!w));
   if (o.type !== "username") return gen(o);
+  if (o.usernameType === "subdomain") {
+    const email = s(o.email).trim();
+    const at = email.lastIndexOf("@");
+    if (at < 1 || at === email.length - 1) throw new Error("Enter an email address");
+    return `${email.slice(0, at)}@${randomChars(8)}.${email.slice(at + 1)}`;
+  }
   if (o.usernameType === "plus") {
     const email = s(o.email).trim();
     const at = email.lastIndexOf("@");
@@ -288,12 +327,11 @@ export function prepareSend(send: Json): Json {
   if (id) {
     const cur = sends.get(id);
     if (!cur || cur.failed) throw new Error("send not found");
-    // `cur.password` is the server's PBKDF2 hash. A newly typed password stays `password` (and is
-    // hashed by the core); otherwise the hash is carried over as `passwordHash`, which the core copies
-    // verbatim. Dropping it would leave the send unprotected on the server.
-    const { password: hash, ...rest } = cur;
+    // `cur.password` is the server's own hash and the server hashes whatever `password` it receives, so
+    // sending it back would double-hash it and lock everyone out. Leaving `password` out keeps the stored
+    // one (vaultwarden `update_send_from_data`); only a newly typed password is sent, hashed by the core.
+    const { password: _stored, ...rest } = cur;
     plain = { ...rest, ...send };
-    if (hash && !s(ci(send, "password"))) plain.passwordHash = hash;
   }
   return JSON.parse(core.encryptSend(JSON.stringify(plain))) as Json;
 }

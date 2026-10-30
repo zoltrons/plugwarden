@@ -918,7 +918,7 @@
     "message": "Pick a type"
   },
   "searchHint": {
-    "message": "Search names, usernames and websites"
+    "message": "Search names, usernames and websites. Use \"quotes\", -exclude, or title: username: domain: url: folder: type: is:"
   },
   "showItem": {
     "message": "Open $P1$",
@@ -1185,5 +1185,211 @@
   },
   "repromptConfirm": {
     "message": "Confirm"
+  },
+  "minDigits": {
+    "message": "Minimum digits"
+  },
+  "minSymbols": {
+    "message": "Minimum symbols"
+  },
+  "wordlist": {
+    "message": "Wordlist"
+  },
+  "wordlistCustom": {
+    "message": "Custom list ($P1$ words)",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "wordlistDefault": {
+    "message": "EFF long list"
+  },
+  "wordlistReset": {
+    "message": "Use the default list"
+  },
+  "wordlistImport": {
+    "message": "Import"
+  },
+  "wordlistTooShort": {
+    "message": "The list needs at least 100 words, one per line."
+  },
+  "wordlistNotSaved": {
+    "message": "The list is too large to keep on this device."
+  },
+  "typePin": {
+    "message": "PIN"
+  },
+  "usernameSubdomain": {
+    "message": "Subdomain email"
+  },
+  "suggestions": {
+    "message": "Suggestions"
+  },
+  "characters": {
+    "message": "$P1$ characters",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "createLoginWithPassword": {
+    "message": "Create a login with this value"
+  },
+  "createLoginWithUsername": {
+    "message": "Create a login with this username"
+  },
+  "largeType": {
+    "message": "Large Type"
+  },
+  "shareAsSend": {
+    "message": "Share as a Send"
+  },
+  "checkBreaches": {
+    "message": "Check for data breaches"
+  },
+  "checking": {
+    "message": "Checking…"
+  },
+  "pwnedFound": {
+    "message": "Found in $P1$ known data breaches. Change this password.",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "pwnedClean": {
+    "message": "Not found in known data breaches."
+  },
+  "pwnedFailed": {
+    "message": "Could not reach the breach service. Try again later."
+  },
+  "memoryTest": {
+    "message": "Test your memory"
+  },
+  "memoryHint": {
+    "message": "Type the password from memory. It is compared with the saved one on this device."
+  },
+  "check": {
+    "message": "Check"
+  },
+  "memoryMatch": {
+    "message": "Password matches"
+  },
+  "memoryMismatch": {
+    "message": "Password does not match"
+  },
+  "expiry": {
+    "message": "Expires"
+  },
+  "copyMonth": {
+    "message": "Copy month"
+  },
+  "copyYear": {
+    "message": "Copy year"
+  },
+  "expired": {
+    "message": "Expired"
+  },
+  "expiringSoon": {
+    "message": "Expires soon"
+  },
+  "sendEmail": {
+    "message": "Send an email"
+  },
+  "callPhone": {
+    "message": "Call"
+  },
+  "textPhone": {
+    "message": "Send a text"
+  },
+  "showOnMap": {
+    "message": "Show on map"
+  },
+  "openMainPage": {
+    "message": "Open the main page"
+  },
+  "switchToHttps": {
+    "message": "Switch to https"
+  },
+  "insecureUri": {
+    "message": "Not secure (http)"
+  },
+  "reusedNotice": {
+    "message": "This password is used by $P1$ items.",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "showReused": {
+    "message": "Show them"
+  },
+  "filterReused": {
+    "message": "Reused"
+  },
+  "filterWeak": {
+    "message": "Weak"
+  },
+  "copyAuthKey": {
+    "message": "Copy authenticator key"
+  },
+  "formatNotes": {
+    "message": "Format"
+  },
+  "showQr": {
+    "message": "Show as QR code"
+  },
+  "qrCode": {
+    "message": "QR code"
+  },
+  "showAuthQr": {
+    "message": "Show authenticator QR code"
+  },
+  "authQrNote": {
+    "message": "Scan this with another authenticator app to copy the key."
+  },
+  "invalidCardNumber": {
+    "message": "This number does not pass the card checksum. Check for a typo."
+  },
+  "scanQrImage": {
+    "message": "Read the key from a QR image"
+  },
+  "qrNotFound": {
+    "message": "No QR code was found in that image."
+  },
+  "qrNotAuthenticator": {
+    "message": "That QR code is not an authenticator key."
+  },
+  "moveUp": {
+    "message": "Move up"
+  },
+  "moveDown": {
+    "message": "Move down"
+  },
+  "previewNotes": {
+    "message": "Preview"
+  },
+  "repromptToggle": {
+    "message": "Ask for the master password"
+  },
+  "repromptToggleHint": {
+    "message": "Before this item is shown, copied or filled"
+  },
+  "sortOpened": {
+    "message": "Most opened"
+  },
+  "recentlyOpened": {
+    "message": "Recently opened"
+  },
+  "minUppercase": {
+    "message": "Minimum uppercase letters"
+  },
+  "minLowercase": {
+    "message": "Minimum lowercase letters"
   }
 }

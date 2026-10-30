@@ -6,7 +6,7 @@ import { applyTheme, type Child, h, inPanel, savedTheme, send, t, THEMES, withCh
 import { icon, type IconName } from "./icons.ts";
 import { createBiometricCredential, getBiometricPrf, platformAuthenticatorAvailable } from "./biometric.ts";
 import { passkeyRequestId, passkeyScreen } from "./passkey.ts";
-import { resetSend, sendScreen } from "./send.ts";
+import { resetSend, sendScreen, startTextSend } from "./send.ts";
 import { type Ctx, generatorScreen, iconButton, refreshPageMatches, resetVault, setIconBase, toastEl, uriMatchLabel, vaultRouteKey, vaultScreen } from "./vault.ts";
 
 // ---------- state ----------
@@ -839,6 +839,15 @@ const vaultCtx: Ctx = {
   lock: () => void act({ type: "lock" }),
   email: () => state?.email,
   settings: () => state?.settings,
+  goto: (tab) => {
+    ui.tab = tab;
+    render();
+  },
+  shareAsSend: (text) => {
+    startTextSend(text);
+    ui.tab = "send";
+    render();
+  },
 };
 let firstRender = true;
 

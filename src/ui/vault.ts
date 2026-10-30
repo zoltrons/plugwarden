@@ -2,9 +2,18 @@
 // Talks to the service worker only; decrypted data lives here just while the popup is open.
 import type { FillResult, PageLogin } from "../autofill/page.ts";
 import { URI_MATCH, URI_MATCH_ADVANCED } from "../shared/constants.ts";
+import { cardBrand, groupCardNumber, luhnValid } from "../shared/card.ts";
+import { hasMarkup } from "../shared/markdown.ts";
+import { MAX_QR_BYTES } from "../shared/qr.ts";
+import { type Clause, matchesQuery, parseQuery, type Searchable } from "../shared/search.ts";
+import { passwordLevel } from "../shared/strength.ts";
+import { isInsecureUri, mainPage, toHttps } from "../shared/uri-tools.ts";
 import type { HistoryEntry, PageMatches, Settings, VaultItem, VaultList } from "../shared/messages.ts";
 import { type Child, h, send, t, withChevron } from "./dom.ts";
 import { icon, type IconName } from "./icons.ts";
+import { renderMarkdown } from "./markdown.ts";
+import { pwnedCount } from "./pwned.ts";
+import { qrSvg } from "./qr.ts";
 
 type Json = Record<string, unknown>;
 export interface Ctx {
@@ -14,9 +23,13 @@ export interface Ctx {
   email(): string | undefined;
   /** Current settings (per-item options depend on the account-level ones). */
   settings(): Settings | undefined;
+  /** Switch the popup's tab (e.g. from the generator to a new vault item). */
+  goto(tab: "vault" | "send"): void;
+  /** Open the Send tab with a new text send holding `text`. */
+  shareAsSend(text: string): void;
 }
 
-type Sort = "name" | "nameDesc" | "updated" | "created";
+type Sort = "name" | "nameDesc" | "updated" | "created" | "opened";
 type Route = { kind: "list" } | { kind: "item"; id: string } | { kind: "edit"; isNew: boolean } | { kind: "folders" };
 
 interface EditDraft {
@@ -26,6 +39,8 @@ interface EditDraft {
   notes: string;
   folderId: string;
   favorite: boolean;
+  /** Ask for the master password before this item is shown, copied or filled. */
+  reprompt: boolean;
   /** Type-specific fields (SCHEMA) by key. */
   data: Record<string, string>;
   /** Login websites with their own match strategy (null = the account default). */
@@ -36,10 +51,51 @@ interface EditDraft {
 }
 
 const GEN_DEFAULTS: Json = {
-  type: "password", length: 20, lowercase: true, uppercase: true, numbers: true, special: true, avoidAmbiguous: false,
-  numWords: 5, wordSeparator: "-", capitalize: true, includeNumber: true,
+  type: "password", length: 20, lowercase: true, uppercase: true, numbers: true, special: true, avoidAmbiguous: false, minLowercase: 1, minUppercase: 1, minNumber: 1, minSpecial: 1,
+  numWords: 5, wordSeparator: "-", capitalize: true, includeNumber: true, pinLength: 4,
   usernameType: "word", email: "", domain: "",
 };
+const GEN_KEY = "genOptions";
+const WORDLIST_KEY = "genWordlist";
+
+/** The generator's last options (a device preference, like the sort order). */
+function savedGen(): Json {
+  try {
+    const v = JSON.parse(localStorage.getItem(GEN_KEY) ?? "null");
+    return { ...GEN_DEFAULTS, ...(v && typeof v === "object" && !Array.isArray(v) ? v : {}) };
+  } catch {
+    return { ...GEN_DEFAULTS }; // no storage in framed pages, or damaged JSON
+  }
+}
+
+function savedWordlist(): string[] {
+  try {
+    return (localStorage.getItem(WORDLIST_KEY) ?? "").split("\n").filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+/** One word per line; empty lines and lines starting with # ; - / are comments (Keyguard's format). */
+function parseWordlist(text: string): string[] {
+  const words = new Set<string>();
+  for (const line of text.split(/\r?\n/)) {
+    const w = line.trim();
+    if (w && w.length <= 24 && !/^[#;\-/]/.test(w)) words.add(w);
+  }
+  return [...words].slice(0, 100_000);
+}
+
+/** What the worker gets: the saved options, plus the custom list for a passphrase. */
+function genOptions(): Json {
+  const o: Json = { ...st.gen };
+  if (o.type === "pin") o.length = o.pinLength;
+  if (o.type === "passphrase") {
+    const words = savedWordlist();
+    if (words.length >= 100) o.wordlist = words;
+  }
+  return o;
+}
 
 const SORT_KEY = "vaultSort";
 const SORTS: { id: Sort; label: string }[] = [
@@ -47,7 +103,31 @@ const SORTS: { id: Sort; label: string }[] = [
   { id: "nameDesc", label: "sortNameDesc" },
   { id: "updated", label: "sortUpdated" },
   { id: "created", label: "sortCreated" },
+  { id: "opened", label: "sortOpened" },
 ];
+
+// How often and when each item was opened: a device habit like the sort order, never synced.
+const OPENED_KEY = "vaultOpened";
+type Opened = Record<string, { n: number; at: number }>;
+
+function loadOpened(): Opened {
+  try {
+    return JSON.parse(localStorage.getItem(OPENED_KEY) ?? "{}") as Opened;
+  } catch {
+    return {};
+  }
+}
+
+function noteOpened(id: string) {
+  try {
+    const all = loadOpened();
+    all[id] = { n: (all[id]?.n ?? 0) + 1, at: Date.now() };
+    const keep = Object.entries(all).sort((a, b) => b[1].at - a[1].at).slice(0, 200); // bounded
+    localStorage.setItem(OPENED_KEY, JSON.stringify(Object.fromEntries(keep)));
+  } catch {
+    /* no storage */
+  }
+}
 
 function savedSort(): Sort {
   try {
@@ -83,11 +163,23 @@ const st = {
   /** Timestamp of the first tap of a two-tap destructive action; 0 when idle. */
   confirmDelete: 0,
   draft: undefined as EditDraft | undefined,
-  gen: { ...GEN_DEFAULTS },
+  gen: savedGen(),
   generated: "",
+  /** Ready-made password variants shown under the generator. */
+  suggestions: [] as string[],
   /** Generator history screen, while open. */
   history: undefined as HistoryEntry[] | undefined,
   toast: "",
+  /** Large Type screen: the text being shown. */
+  large: undefined as string | undefined,
+  /** Editor: show the rendered notes under the text box. */
+  notesPreview: false,
+  /** QR screen: what is encoded, and an optional line under the code. */
+  qr: undefined as { text: string; note?: string } | undefined,
+  /** Breach check result for the open item's password. */
+  pwned: undefined as { text: string; bad: boolean } | undefined,
+  /** Memory test of the open item's password: asking, then the last verdict. */
+  memory: undefined as { ok?: boolean } | undefined,
   /** Key of the field/row that was copied last (shows a check instead of the copy icon). */
   copied: "",
   /** The search box was focused once for this session; later renders keep the user's focus. */
@@ -112,7 +204,8 @@ export function resetVault(): void {
   Object.assign(st, {
     list: undefined, page: undefined, loading: false, syncing: false, busy: false, error: undefined, route: { kind: "list" }, query: "",
     folder: "", item: undefined, reveal: new Set(), totp: undefined, confirmDelete: 0, draft: undefined,
-    gen: { ...GEN_DEFAULTS }, generated: "", history: undefined, toast: "", copied: "", sawList: false, uriOpen: new Set(),
+    large: undefined, qr: undefined, pwned: undefined, memory: undefined, notesPreview: false,
+    gen: savedGen(), generated: "", suggestions: [], history: undefined, toast: "", copied: "", sawList: false, uriOpen: new Set(),
   });
 }
 
@@ -338,8 +431,9 @@ async function syncNow(ctx: Ctx, force: boolean) {
 function open(ctx: Ctx, route: Route) {
   clearInterval(totpTimer);
   stopRepromptWatch();
-  Object.assign(st, { route, error: undefined, confirmDelete: 0, totp: undefined, reveal: new Set(), copied: "", uriOpen: new Set(), repromptFor: undefined, itemFailedFor: undefined });
+  Object.assign(st, { route, error: undefined, confirmDelete: 0, totp: undefined, large: undefined, qr: undefined, notesPreview: false, pwned: undefined, memory: undefined, reveal: new Set(), copied: "", uriOpen: new Set(), repromptFor: undefined, itemFailedFor: undefined });
   if (route.kind !== "edit") st.draft = undefined;
+  if (route.kind === "item") noteOpened(route.id);
   ctx.rerender();
 }
 
@@ -347,17 +441,35 @@ function open(ctx: Ctx, route: Route) {
 
 const TYPE_LABEL: Record<number, string> = { 1: "typeLogin", 2: "typeNote", 3: "typeCard", 4: "typeIdentity", 5: "typeSshKey" };
 
-function matches(i: VaultItem, q: string): boolean {
+const TYPE_ENGLISH: Record<number, string> = { 1: "login", 2: "note", 3: "card", 4: "identity", 5: "ssh" };
+
+function searchable(i: VaultItem): Searchable {
+  const typeKey = TYPE_LABEL[i.type];
+  const flags = [i.favorite && "favorite", i.reused && "reused", i.weak && "weak", i.hasTotp && "totp", i.reprompt && "reprompt"].filter((f): f is string => !!f);
+  return {
+    name: i.name,
+    sub: i.sub,
+    uris: i.uris,
+    folder: st.list?.folders.find((f) => f.id === i.folderId)?.name ?? "",
+    type: [typeKey ? t(typeKey) : "", TYPE_ENGLISH[i.type] ?? ""].filter(Boolean),
+    flags,
+  };
+}
+
+function matches(i: VaultItem, clauses: Clause[]): boolean {
   const f = st.folder;
   if (f === "fav") {
     if (!i.favorite) return false;
   } else if (f.startsWith("t:")) {
     if (i.type !== Number(f.slice(2))) return false;
+  } else if (f === "reused") {
+    if (!i.reused) return false;
+  } else if (f === "weak") {
+    if (!i.weak) return false;
   } else if (f === "none") {
     if (i.folderId) return false;
   } else if (f && f !== "trash" && i.folderId !== f) return false;
-  if (!q) return true;
-  return [i.name, i.sub, ...i.uris].some((s) => s.toLowerCase().includes(q));
+  return !clauses.length || matchesQuery(clauses, searchable(i));
 }
 
 function sortItems(items: VaultItem[]): VaultItem[] {
@@ -366,6 +478,10 @@ function sortItems(items: VaultItem[]): VaultItem[] {
   if (st.sort === "nameDesc") return list.sort((a, b) => byName(b, a));
   if (st.sort === "updated") return list.sort((a, b) => (b.revisionDate ?? 0) - (a.revisionDate ?? 0) || byName(a, b));
   if (st.sort === "created") return list.sort((a, b) => (b.creationDate ?? 0) - (a.creationDate ?? 0) || byName(a, b));
+  if (st.sort === "opened") {
+    const opened = loadOpened();
+    return list.sort((a, b) => (opened[b.id]?.n ?? 0) - (opened[a.id]?.n ?? 0) || byName(a, b));
+  }
   return list.sort(byName);
 }
 
@@ -388,6 +504,7 @@ function itemRow(ctx: Ctx, i: VaultItem): HTMLElement {
       h("span", { class: "sub" }, i.sub || t(TYPE_LABEL[i.type] ?? "untitled")),
     ),
     i.hasTotp ? h("span", { class: "meta" }, icon("timer", t("oneTimeCode"))) : null,
+    i.reused || i.weak ? h("span", { class: "meta warn" }, icon("error", t(i.reused ? "filterReused" : "filterWeak"))) : null,
     i.favorite ? h("span", { class: "meta fav" }, icon("star", t("favorite"))) : null,
     icon("chevron"),
   );
@@ -426,6 +543,15 @@ function fillList(ctx: Ctx, box: HTMLElement, items: VaultItem[], q: string) {
   if (!items.length) {
     nodes.push(emptyState(ctx, q));
   } else {
+    // Recently opened items come first while browsing a vault big enough to need them.
+    if (!q && !st.folder && items.length > 8) {
+      const opened = loadOpened();
+      const recent = items.filter((i) => opened[i.id]).sort((a, b) => opened[b.id]!.at - opened[a.id]!.at).slice(0, 3);
+      if (recent.length) {
+        nodes.push(sectionTitle(t("recentlyOpened")));
+        pushGroup(recent);
+      }
+    }
     // Favorites float to the top while browsing; a letter index is kept for the rest.
     const favs = q ? [] : items.filter((i) => i.favorite);
     const rest = favs.length ? items.filter((i) => !i.favorite) : items;
@@ -492,7 +618,8 @@ function listView(ctx: Ctx): HTMLElement {
   const redraw = () => {
     const q = st.query.trim().toLowerCase();
     const source = st.folder === "trash" ? st.list?.trash : st.list?.items;
-    const items = sortItems((source ?? []).filter((i) => matches(i, q)));
+    const clauses = parseQuery(st.query);
+    const items = sortItems((source ?? []).filter((i) => matches(i, clauses)));
     fillList(ctx, listBox, items, q);
   };
   redraw();
@@ -596,6 +723,8 @@ function listView(ctx: Ctx): HTMLElement {
       chip("t:3", t("typeCard"), "card"),
       chip("t:4", t("typeIdentity"), "user"),
       chip("t:2", t("typeNote"), "note"),
+      st.list?.items.some((i) => i.reused) ? chip("reused", t("filterReused"), "error") : null,
+      st.list?.items.some((i) => i.weak) ? chip("weak", t("filterWeak"), "error") : null,
       ...folders.map((f) => chip(f.id, f.name, "folder")),
       folders.length ? chip("none", t("noFolder"), "folder") : null,
       st.list?.trash.length ? chip("trash", t("trashCount", String(st.list.trash.length)), "trash") : null,
@@ -726,11 +855,8 @@ const SCHEMA: Record<number, { obj: string; fields: Spec[] }> = {
 };
 const label = (key: string) => t(`field_${key}`);
 
-/** Rough strength from length and character classes (no dictionary check). */
 function strength(pw: string): { label: string; level: number } {
-  const pool = [/[a-z]/, /[A-Z]/, /\d/, /[^a-zA-Z\d]/].reduce((n, re, i) => n + (re.test(pw) ? [26, 26, 10, 33][i]! : 0), 0);
-  const bits = pw.length * Math.log2(Math.max(pool, 2));
-  const level = bits < 40 ? 0 : bits < 60 ? 1 : bits < 80 ? 2 : 3;
+  const level = passwordLevel(pw);
   return { level, label: t(["strengthWeak", "strengthFair", "strengthStrong", "strengthVeryStrong"][level]!) };
 }
 
@@ -776,13 +902,13 @@ function fieldRow(
   ic: IconName,
   title: string,
   value: string,
-  opts: { secret?: boolean; mono?: boolean; extra?: Child } = {},
+  opts: { secret?: boolean; mono?: boolean; extra?: Child; copyValue?: string; menu?: MenuItem[]; display?: string } = {},
 ): HTMLElement {
   const shown = !opts.secret || st.reveal.has(key);
   const valueEl = h("span", { class: `value${opts.mono ? " mono" : ""}` });
   if (shown) {
-    if (opts.mono && opts.secret) valueEl.append(...colorize(value));
-    else valueEl.textContent = value;
+    if (opts.mono && opts.secret) valueEl.append(...colorize(opts.display ?? value));
+    else valueEl.textContent = opts.display ?? value;
   } else {
     valueEl.textContent = "•".repeat(Math.min(Math.max(value.length, 8), 16));
   }
@@ -801,7 +927,51 @@ function fieldRow(
             ctx.rerender();
           })
         : null,
-      copyButton(ctx, key, value, t("copyField", title)),
+      copyButton(ctx, key, opts.copyValue ?? value, t("copyField", title)),
+      moreButton(ctx, value, opts.menu),
+    ),
+  );
+}
+
+/** "⋮" for a value: Large Type, share as a Send, plus whatever the row adds. */
+function moreButton(ctx: Ctx, value: string, extra: MenuItem[] = []): HTMLElement {
+  const items: MenuItem[] = [
+    ...extra,
+    { label: t("largeType"), icon: "search", onClick: () => ((st.large = value), ctx.rerender()) },
+    ...(new TextEncoder().encode(value).length <= MAX_QR_BYTES ? [{ label: t("showQr"), onClick: () => ((st.qr = { text: value }), ctx.rerender()) }] : []),
+    { label: t("shareAsSend"), icon: "send", onClick: () => ctx.shareAsSend(value) },
+  ];
+  const b: HTMLElement = iconButton("more", t("moreActions"), () => menu(b, t("moreActions"), items), { "aria-haspopup": "menu" });
+  return b;
+}
+
+function qrView(ctx: Ctx): HTMLElement {
+  const { text, note } = st.qr!;
+  return h(
+    "div",
+    { class: "page" },
+    topBar(iconButton("back", t("back"), () => ((st.qr = undefined), ctx.rerender())), h("h1", { class: "grow" }, t("qrCode"))),
+    h("div", { class: "qr-box" }, qrSvg(text, t("qrCode"))),
+    note ? h("p", { class: "caption center" }, note) : null,
+  );
+}
+
+/** The authenticator key as an otpauth:// URI, which is what authenticator apps scan. */
+function otpauthUri(secret: string, name: string): string {
+  return secret.includes("://") ? secret : `otpauth://totp/${encodeURIComponent(name)}?secret=${encodeURIComponent(secret.replace(/\s+/g, ""))}`;
+}
+
+/** Every character on its own tile with its position, so look-alikes (O/0, l/1) can be told apart. */
+function largeTypeView(ctx: Ctx): HTMLElement {
+  const text = st.large!;
+  return h(
+    "div",
+    { class: "page" },
+    topBar(iconButton("back", t("back"), () => ((st.large = undefined), ctx.rerender())), h("h1", { class: "grow" }, t("largeType"))),
+    h(
+      "div",
+      { class: "large mono", role: "img", "aria-label": text },
+      ...[...text].map((c, i) => h("span", { class: `ch${/\d/.test(c) ? " d" : /[^\p{L}\s]/u.test(c) ? " s" : ""}` }, c === " " ? "␣" : c, h("small", {}, String(i + 1)))),
     ),
   );
 }
@@ -832,7 +1002,7 @@ function ring(fraction: number): SVGSVGElement {
   return svg;
 }
 
-function totpRow(ctx: Ctx, id: string): HTMLElement {
+function totpRow(ctx: Ctx, id: string, secret: string, name: string): HTMLElement {
   if (!st.totp) {
     void refreshTotp(ctx, id);
     return h("div", { class: "row" }, icon("timer"), h("div", { class: "body" }, h("span", { class: "label" }, t("oneTimeCode")), h("span", { class: "value" }, "…")));
@@ -854,6 +1024,10 @@ function totpRow(ctx: Ctx, id: string): HTMLElement {
         h("span", { class: "totp-seconds", "aria-hidden": "true" }, String(remaining)),
       ),
       copyButton(ctx, "totp", code, t("copyField", t("oneTimeCode"))),
+      moreButton(ctx, code, [
+        { label: t("copyAuthKey"), icon: "copy", onClick: () => void copy(ctx, secret) },
+        { label: t("showAuthQr"), onClick: () => ((st.qr = { text: otpauthUri(secret, name), note: t("authQrNote") }), ctx.rerender()) },
+      ]),
     ),
   );
 }
@@ -979,6 +1153,106 @@ function quickActions(ctx: Ctx, id: string, uris: string[]): Child {
   );
 }
 
+async function checkBreach(ctx: Ctx, id: string, password: string) {
+  st.pwned = { text: t("checking"), bad: false };
+  ctx.rerender();
+  let result: { text: string; bad: boolean };
+  try {
+    const n = await pwnedCount(password);
+    result = n > 0 ? { text: t("pwnedFound", n.toLocaleString()), bad: true } : { text: t("pwnedClean"), bad: false };
+  } catch {
+    result = { text: t("pwnedFailed"), bad: false };
+  }
+  if (st.route.kind !== "item" || st.route.id !== id) return; // the user moved on
+  st.pwned = result;
+  ctx.rerender();
+}
+
+/** "Type it from memory": compared here, against the password the open item already holds. */
+function memoryForm(ctx: Ctx, password: string): HTMLElement {
+  const input = h("input", { type: "password", autocomplete: "off", spellcheck: false, "aria-label": t("memoryTest"), "data-autofocus": "1" });
+  const verdict = st.memory?.ok;
+  return h(
+    "form",
+    {
+      class: "field-card add",
+      onsubmit: (e: Event) => {
+        e.preventDefault();
+        const ok = input.value === password;
+        input.value = "";
+        st.memory = { ok };
+        ctx.rerender();
+      },
+    },
+    h("p", { class: "caption" }, t("memoryHint")),
+    h("div", { class: "field-card-bottom" }, input, h("button", { type: "submit", class: "btn tonal small" }, t("check"))),
+    verdict === undefined ? null : h("div", { class: `notice ${verdict ? "info" : "warn"}` }, icon(verdict ? "check" : "error"), h("div", {}, t(verdict ? "memoryMatch" : "memoryMismatch"))),
+  );
+}
+
+/** One row for a card's expiry: copies MMYY (what payment forms want), flags an expired or soon-to-expire card. */
+function expiryRow(ctx: Ctx, month: string, year: string): HTMLElement | undefined {
+  const m = Number(month);
+  const y = Number(year);
+  if (!(m >= 1 && m <= 12) || !Number.isInteger(y) || y < 0) return undefined;
+  const y4 = y < 100 ? 2000 + y : y;
+  const mm = String(m).padStart(2, "0");
+  const left = new Date(y4, m, 1).getTime() - Date.now(); // a card works through the end of its month
+  const status = left <= 0 ? "expired" : left < 60 * 86_400_000 ? "expiringSoon" : "";
+  return fieldRow(ctx, "expiry", "timer", t("expiry"), `${mm}/${y4}`, {
+    copyValue: `${mm}${String(y4).slice(-2)}`,
+    menu: [
+      { label: t("copyMonth"), icon: "copy", onClick: () => void copy(ctx, mm) },
+      { label: t("copyYear"), icon: "copy", onClick: () => void copy(ctx, String(y4)) },
+    ],
+    extra: status ? h("span", { class: `badge ${status === "expired" ? "s0" : "s1"}` }, t(status)) : null,
+  });
+}
+
+/** Mail, call, text and show-on-map shortcuts for an identity. Maps go to OpenStreetMap, not an ad network. */
+function identityActions(data: Json): Child {
+  const email = str(data.email).trim();
+  const phone = str(data.phone).replace(/[^\d+*#]/g, "");
+  const address = ["address1", "address2", "address3", "city", "state", "postalCode", "country"].map((k) => str(data[k]).trim()).filter(Boolean).join(", ");
+  const link = (ic: IconName, label: string, href: string) => h("a", { class: "row", href, target: "_blank", rel: "noopener noreferrer", onclick: (e: Event) => (e.preventDefault(), void chrome.tabs.create({ url: href })) }, icon(ic), h("div", { class: "body" }, h("span", { class: "title" }, label)), icon("external"));
+  const rows = [
+    email ? link("mail", t("sendEmail"), `mailto:${encodeURIComponent(email)}`) : null,
+    phone ? link("phone", t("callPhone"), `tel:${phone}`) : null,
+    phone ? link("phone", t("textPhone"), `sms:${phone}`) : null,
+    address ? link("home", t("showOnMap"), `https://www.openstreetmap.org/search?query=${encodeURIComponent(address)}`) : null,
+  ].filter(Boolean);
+  return rows.length ? h("div", { class: "group" }, ...rows) : null;
+}
+
+/** A website row: open, copy, and a menu with the main page and the https upgrade. */
+function uriRow(ctx: Ctx, index: number, uri: string, match: number | null, onHttps: ((to: string) => void) | undefined): HTMLElement {
+  const href = webUrl(uri);
+  const insecure = isInsecureUri(uri);
+  const front = mainPage(uri);
+  const https = onHttps ? toHttps(uri) : undefined;
+  const items: MenuItem[] = [];
+  if (front) items.push({ label: t("openMainPage"), icon: "home", onClick: () => void chrome.tabs.create({ url: front }) });
+  if (https) items.push({ label: t("switchToHttps"), icon: "shield", onClick: () => onHttps!(https) });
+  const sub = [insecure ? t("insecureUri") : "", match !== null ? uriMatchLabel(match) : ""].filter(Boolean).join(" · ");
+  const more: HTMLElement = iconButton("more", t("moreActions"), () => menu(more, t("moreActions"), items), { "aria-haspopup": "menu" });
+  return h(
+    "div",
+    { class: "row" },
+    icon(insecure ? "error" : "globe"),
+    h("div", { class: "body" }, h("span", { class: "title ellipsis" }, uri), sub ? h("span", { class: `sub${insecure ? " warn" : ""}` }, sub) : null),
+    h("span", { class: "field-actions" }, href ? iconButton("external", t("openWebsite"), () => void chrome.tabs.create({ url: href })) : null, copyButton(ctx, `uri.${index}`, uri, t("copyField", uri)), items.length ? more : null),
+  );
+}
+
+const NOTES_KEY = "formatNotes";
+const notesFormatted = (): boolean => {
+  try {
+    return localStorage.getItem(NOTES_KEY) === "1";
+  } catch {
+    return false;
+  }
+};
+
 function itemView(ctx: Ctx, id: string): HTMLElement {
   const item = st.item && st.item.id === id ? st.item : undefined;
   if (!item) {
@@ -1017,15 +1291,20 @@ function itemView(ctx: Ctx, id: string): HTMLElement {
   const schema = SCHEMA[type];
   const data = schema ? (obj(item[schema.obj]) ?? {}) : {};
   const rows: Child[] = [];
+  const expiry = type === 3 ? expiryRow(ctx, str(data.expMonth), str(data.expYear)) : undefined;
   for (const f of schema?.fields ?? []) {
     const v = str(data[f.key]);
     if (!v) continue;
+    if (expiry && (f.key === "expMonth" || f.key === "expYear")) {
+      if (f.key === "expMonth") rows.push(expiry);
+      continue;
+    }
     if (type === 1 && f.key === "totp") {
-      rows.push(totpRow(ctx, id));
+      rows.push(totpRow(ctx, id, v, str(item.name)));
       continue;
     }
     const s = type === 1 && f.key === "password" ? strength(v) : undefined;
-    rows.push(fieldRow(ctx, f.key, f.icon, label(f.key), v, { secret: f.secret, mono: f.mono, extra: s ? h("span", { class: `badge s${s.level}` }, s.label) : null }));
+    rows.push(fieldRow(ctx, f.key, f.icon, label(f.key), v, { secret: f.secret, mono: f.mono, display: type === 3 && f.key === "number" ? groupCardNumber(v) : undefined, extra: s ? h("span", { class: `badge s${s.level}` }, s.label) : null }));
   }
   const login = type === 1 ? data : undefined;
   const uriEntries = (Array.isArray(login?.uris) ? (login!.uris as Json[]) : [])
@@ -1041,10 +1320,24 @@ function itemView(ctx: Ctx, id: string): HTMLElement {
   const date = (v: unknown) => (typeof v === "string" && v ? new Date(v).toLocaleString() : "");
   const passkeys = Array.isArray(login?.fido2Credentials) ? (login!.fido2Credentials as Json[]).length : 0;
   const confirm = st.confirmDelete > 0;
+  const password = type === 1 ? str(data.password) : "";
+  const reused = summary?.reused ?? 0;
+  const formatted = notesFormatted();
+  const notes = str(item.notes);
+  const fixUri = (from: string, to: string) =>
+    void vaultAction(ctx, { type: "saveItem", item: { ...item, login: { ...login, uris: (Array.isArray(login?.uris) ? (login!.uris as Json[]) : []).map((x) => (str(x.uri) === from ? { ...x, uri: to } : x)) } } }, "saved", false);
 
   return h(
     "div",
-    { class: "page item-page" },
+    {
+      class: "page item-page",
+      // A dropped file must never navigate the popup away; on an editable personal item it becomes an attachment.
+      ondragover: (e: DragEvent) => e.preventDefault(),
+      ondrop: (e: DragEvent) => {
+        e.preventDefault();
+        if (editable && !item.organizationId) void upload(ctx, id, e.dataTransfer?.files[0]);
+      },
+    },
     topBar(
       iconButton("back", t("back"), () => open(ctx, { kind: "list" })),
       spacer(),
@@ -1066,32 +1359,26 @@ function itemView(ctx: Ctx, id: string): HTMLElement {
     errorBox(),
     inTrash ? h("div", { class: "notice warn" }, icon("trash"), h("div", {}, t("inTrash"))) : summary?.readOnly ? h("div", { class: "notice" }, icon("lock"), h("div", {}, t("readOnlyItem"))) : null,
     rows.length ? h("div", { class: "group" }, ...rows) : null,
+    type === 4 ? identityActions(data) : null,
+    password
+      ? h("div", { class: "group" }, actionRow("shield", t("checkBreaches"), () => void checkBreach(ctx, id, password)), actionRow("key", t("memoryTest"), () => ((st.memory = st.memory ? undefined : {}), ctx.rerender())))
+      : null,
+    st.pwned ? h("div", { class: `notice ${st.pwned.bad ? "warn" : "info"}` }, icon(st.pwned.bad ? "error" : "info"), h("div", {}, st.pwned.text)) : null,
+    st.memory && password ? memoryForm(ctx, password) : null,
+    reused
+      ? h(
+          "div",
+          { class: "notice warn" },
+          icon("error"),
+          h("div", {}, t("reusedNotice", String(reused))),
+          h("button", { type: "button", class: "btn text small", onclick: () => ((st.folder = "reused"), open(ctx, { kind: "list" })) }, t("showReused")),
+        )
+      : null,
     login?.passwordRevisionDate ? h("p", { class: "caption" }, t("passwordChanged", date(login.passwordRevisionDate))) : null,
     passkeys ? h("div", { class: "notice info" }, icon("key"), h("div", {}, t("passkeyAvailable"))) : null,
     ...section(
       t("websites"),
-      ...uriEntries.map(({ uri: u, match }) => {
-        const href = webUrl(u);
-        const body = h("div", { class: "body" }, h("span", { class: "title ellipsis" }, u), match !== null ? h("span", { class: "sub" }, uriMatchLabel(match)) : null);
-        return href
-          ? h(
-              "a",
-              {
-                class: "row",
-                href,
-                target: "_blank",
-                rel: "noopener noreferrer",
-                onclick: (e: Event) => {
-                  e.preventDefault();
-                  void chrome.tabs.create({ url: href });
-                },
-              },
-              icon("globe"),
-              body,
-              icon("external"),
-            )
-          : h("div", { class: "row" }, icon("globe"), body);
-      }),
+      ...uriEntries.map(({ uri: u, match }, i) => uriRow(ctx, i, u, match, editable ? (to) => fixUri(u, to) : undefined)),
     ),
     ...section(
       t("customFields"),
@@ -1099,11 +1386,31 @@ function itemView(ctx: Ctx, id: string): HTMLElement {
         Number(f.type) === 3
           ? null
           : Number(f.type) === 2
-            ? h("div", { class: "row" }, icon("note"), h("div", { class: "body" }, h("span", { class: "label" }, str(f.name)), h("span", { class: "value" }, t(str(f.value) === "true" ? "yes" : "no"))))
+            ? h(
+                editable ? "button" : "div",
+                {
+                  class: "row",
+                  ...(editable ? { type: "button", disabled: st.busy, onclick: () => void vaultAction(ctx, { type: "saveItem", item: { ...item, fields: fields.map((x, j) => (j === i ? { ...x, value: str(x.value) === "true" ? "false" : "true" } : x)) } }, "saved", false) } : {}),
+                },
+                icon("note"),
+                h("div", { class: "body" }, h("span", { class: "label" }, str(f.name)), h("span", { class: "value" }, t(str(f.value) === "true" ? "yes" : "no"))),
+              )
             : fieldRow(ctx, `field.${i}`, "note", str(f.name) || t("untitled"), str(f.value), { secret: Number(f.type) === 1 }),
       ),
     ),
-    ...(str(item.notes) ? [sectionTitle(t("notes")), h("div", { class: "notes" }, str(item.notes))] : []),
+    ...(notes
+      ? [
+          h(
+            "div",
+            { class: "section-head" },
+            sectionTitle(t("notes")),
+            hasMarkup(notes)
+              ? h("button", { type: "button", class: "chip small", "aria-pressed": String(formatted), onclick: () => (localStorage.setItem(NOTES_KEY, formatted ? "0" : "1"), ctx.rerender()) }, t("formatNotes"))
+              : null,
+          ),
+          formatted ? renderMarkdown(notes) : h("div", { class: "notes" }, notes),
+        ]
+      : []),
     ...section(
       t("passwordHistory"),
       ...(st.reveal.has("history")
@@ -1178,6 +1485,7 @@ function startEdit(ctx: Ctx, item: Json | undefined, prefill: Prefill = {}, asNe
     notes: str(base.notes),
     folderId: str(base.folderId),
     favorite: base.favorite === true,
+    reprompt: Number(base.reprompt) === 1,
     data: { ...data, ...prefill.data },
     uris:
       prefill.uris ??
@@ -1192,7 +1500,7 @@ function startEdit(ctx: Ctx, item: Json | undefined, prefill: Prefill = {}, asNe
 
 function buildItem(d: EditDraft): Json {
   const orNull = (s: string) => (s.trim() ? s : null);
-  const item: Json = { ...d.base, type: d.type, name: d.name.trim(), notes: orNull(d.notes), folderId: d.folderId || null, favorite: d.favorite };
+  const item: Json = { ...d.base, type: d.type, name: d.name.trim(), notes: orNull(d.notes), folderId: d.folderId || null, favorite: d.favorite, reprompt: d.reprompt ? 1 : 0 };
   const schema = SCHEMA[d.type];
   for (const k of ["login", "secureNote", "card", "identity"]) if (k !== schema?.obj) delete item[k];
   if (schema) {
@@ -1296,6 +1604,7 @@ function uriEditor(ctx: Ctx): Child[] {
           class: `icon-btn sm${open ? " on" : ""}`,
           "aria-pressed": String(open),
         }),
+        ...moveButtons(ctx, d.uris, i, () => st.uriOpen.clear()),
         d.uris.length > 1
           ? iconButton("trash", t("removeWebsite"), () => (d.uris.splice(i, 1), st.uriOpen.clear(), ctx.rerender()), { class: "icon-btn sm" })
           : null,
@@ -1314,11 +1623,41 @@ function uriEditor(ctx: Ctx): Child[] {
   ];
 }
 
+/** The usernames used most across the vault's logins (list summaries only: no secrets involved). */
+function usernameSuggestions(): string[] {
+  const counts = new Map<string, number>();
+  for (const i of st.list?.items ?? []) if (i.type === 1 && i.sub) counts.set(i.sub, (counts.get(i.sub) ?? 0) + 1);
+  return [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 5).map(([u]) => u);
+}
+
+type Detector = new (o: { formats: string[] }) => { detect(i: ImageBitmapSource): Promise<{ rawValue: string }[]> };
+/** The platform's QR reader (macOS, Android, ChromeOS builds); absent elsewhere, where the button is hidden. */
+const barcodeDetector = (): Detector | undefined => (globalThis as { BarcodeDetector?: Detector }).BarcodeDetector;
+
+async function scanQr(file: File): Promise<string | undefined> {
+  const Reader = barcodeDetector();
+  if (!Reader) return undefined;
+  return (await new Reader({ formats: ["qr_code"] }).detect(await createImageBitmap(file)))[0]?.rawValue;
+}
+
+/** Swap `list[i]` with its neighbour, for the editor's move up / down buttons. */
+function moveItem<T>(list: T[], i: number, by: -1 | 1) {
+  const j = i + by;
+  if (j < 0 || j >= list.length) return;
+  [list[i], list[j]] = [list[j]!, list[i]!];
+}
+
+const moveButtons = (ctx: Ctx, list: unknown[], i: number, reset?: () => void): Child[] => [
+  i > 0 ? iconButton("chevron", t("moveUp"), () => (moveItem(list, i, -1), reset?.(), ctx.rerender()), { class: "icon-btn sm up" }) : null,
+  i < list.length - 1 ? iconButton("chevron", t("moveDown"), () => (moveItem(list, i, 1), reset?.(), ctx.rerender()), { class: "icon-btn sm down" }) : null,
+];
+
 function editView(ctx: Ctx, isNew: boolean): HTMLElement {
   const d = st.draft!;
   const back = () => open(ctx, isNew ? { kind: "list" } : { kind: "item", id: str(d.base.id) });
   const field = (id: string, ic: IconName, title: string, control: HTMLElement, trailing?: Child) => {
-    control.id = id;
+    // A select is wrapped for its chevron: the label must point at the select itself.
+    (control.querySelector("select") ?? control).id = id;
     return h("div", { class: "field" }, icon(ic), h("label", { for: id }, h("span", {}, title), control), trailing);
   };
   const text = (get: () => string, set: (v: string) => void, props: Record<string, unknown> = {}) => {
@@ -1333,9 +1672,27 @@ function editView(ctx: Ctx, isNew: boolean): HTMLElement {
     const set = (v: string) => (d.data[f.key] = v);
     const id = `edit-${f.key}`;
     if (f.options) return field(id, f.icon, label(f.key), select(get, set, [["", "—"], ...f.options.map((o): [string, string] => [o, o])]));
-    if (!f.secret) return field(id, f.icon, label(f.key), text(get, set, { autocomplete: "off", spellcheck: false, area: f.area }));
+    // Card number: fill in the brand once the number is entered, and warn (never block) on a typo.
+    const cardNumber = d.type === 3 && f.key === "number";
+    const cardWarn = () => !!get() && !luhnValid(get());
+    const shownWarn = cardNumber && cardWarn();
+    const onchange = cardNumber
+      ? () => {
+          const brand = d.data.brand ? undefined : cardBrand(get());
+          if (brand) d.data.brand = brand;
+          if (brand || cardWarn() !== shownWarn) ctx.rerender();
+        }
+      : undefined;
+    const below: Child[] = [];
+    if (shownWarn) below.push(h("p", { class: "caption warn", role: "status" }, t("invalidCardNumber")));
+    if (d.type === 1 && f.key === "username" && !get()) {
+      const known = usernameSuggestions();
+      if (known.length) below.push(h("div", { class: "chips scroll", role: "group", "aria-label": t("suggestions") }, ...known.map((u) => h("button", { type: "button", class: "chip", onclick: () => ((d.data.username = u), ctx.rerender()) }, u))));
+    }
+    const wrap = (block: HTMLElement) => (below.length ? h("div", { class: "field-block" }, block, ...below) : block);
+    if (!f.secret) return wrap(field(id, f.icon, label(f.key), text(get, set, { autocomplete: "off", spellcheck: false, area: f.area })));
     const reveal = st.reveal.has(id);
-    const control = text(get, set, { type: reveal ? "text" : "password", autocomplete: "new-password", spellcheck: false, class: "mono" });
+    const control = text(get, set, { type: reveal ? "text" : "password", autocomplete: "new-password", spellcheck: false, class: "mono", onchange, inputMode: cardNumber ? "numeric" : undefined });
     const block = field(
       id,
       f.icon,
@@ -1351,16 +1708,36 @@ function editView(ctx: Ctx, isNew: boolean): HTMLElement {
         }),
         d.type === 1 && f.key === "password"
           ? iconButton("dice", t("generatePassword"), async () => {
-              const r = await send<string>({ type: "generate", options: st.gen });
+              const r = await send<string>({ type: "generate", options: st.gen.type === "password" || st.gen.type === "passphrase" ? genOptions() : { ...GEN_DEFAULTS } }); // a PIN or username is no password
               if (!r.ok) return;
               d.data.password = r.data;
               st.reveal.add(id);
               ctx.rerender();
             })
           : null,
+        d.type === 1 && f.key === "totp" && barcodeDetector()
+          ? h(
+              "label",
+              { class: "icon-btn", title: t("scanQrImage") },
+              icon("search"),
+              h("span", { class: "sr-only" }, t("scanQrImage")),
+              h("input", {
+                type: "file",
+                accept: "image/*",
+                class: "sr-only",
+                onchange: async (e: Event) => {
+                  const file = (e.target as HTMLInputElement).files?.[0];
+                  const text = file ? await scanQr(file).catch(() => undefined) : undefined;
+                  if (text?.startsWith("otpauth://")) d.data.totp = text;
+                  else st.error = t(text ? "qrNotAuthenticator" : "qrNotFound");
+                  ctx.rerender();
+                },
+              }),
+            )
+          : null,
       ),
     );
-    return d.type === 1 && f.key === "password" ? h("div", { class: "field-block" }, block, strengthMeter(control, get())) : block;
+    return d.type === 1 && f.key === "password" ? h("div", { class: "field-block" }, block, strengthMeter(control, get())) : wrap(block);
   };
 
   const onsubmit = async (e: Event) => {
@@ -1396,6 +1773,7 @@ function editView(ctx: Ctx, isNew: boolean): HTMLElement {
               value: f.name,
               oninput: (e: Event) => (f.name = (e.target as HTMLInputElement).value),
             }),
+            ...moveButtons(ctx, d.fields, i),
             iconButton("trash", t("removeField"), () => (d.fields.splice(i, 1), ctx.rerender()), { class: "icon-btn sm" }),
           ),
           h(
@@ -1447,8 +1825,19 @@ function editView(ctx: Ctx, isNew: boolean): HTMLElement {
     ...d.fields.map(customRow),
     h("button", { type: "button", class: "btn text small add-field", onclick: () => (d.fields.push({ name: "", value: "", type: 0 }), ctx.rerender()) }, icon("plus"), t("addField")),
     field("edit-notes", "note", t("notes"), text(() => d.notes, (v) => (d.notes = v), { area: true, rows: 3 })),
+    hasMarkup(d.notes)
+      ? h("button", { type: "button", class: "chip small", "aria-pressed": String(st.notesPreview), onclick: () => ((st.notesPreview = !st.notesPreview), ctx.rerender()) }, t("previewNotes"))
+      : null,
+    st.notesPreview && hasMarkup(d.notes) ? renderMarkdown(d.notes) : null,
     field("edit-folder", "folder", t("folder"), select(() => d.folderId, (v) => (d.folderId = v), [["", t("noFolder")], ...(st.list?.folders ?? []).map((f): [string, string] => [f.id, f.name])])),
     h("label", { class: "row check-card" }, icon("star"), h("div", { class: "body" }, h("span", { class: "title" }, t("favorite"))), h("span", { class: "switch" }, fav, h("span"))),
+    h(
+      "label",
+      { class: "row check-card" },
+      icon("lock"),
+      h("div", { class: "body" }, h("span", { class: "title" }, t("repromptToggle")), h("span", { class: "sub" }, t("repromptToggleHint"))),
+      h("span", { class: "switch" }, h("input", { type: "checkbox", checked: d.reprompt, onchange: (e: Event) => (d.reprompt = (e.target as HTMLInputElement).checked) }), h("span")),
+    ),
     st.busy ? progress() : null,
     h("div", { class: "editor-footer" }, h("button", { type: "submit", class: "btn filled wide", disabled: st.busy }, icon("check"), t("save"))),
   );
@@ -1502,6 +1891,8 @@ export function vaultScreen(ctx: Ctx): HTMLElement {
   closeMenu(); // a re-render invalidates any open popover menu
   if (!st.list && !st.loading && !st.error) void loadList(ctx);
   const r = st.route;
+  if (st.large) return largeTypeView(ctx);
+  if (st.qr) return qrView(ctx);
   if (r.kind === "item") return itemView(ctx, r.id);
   if (r.kind === "edit" && st.draft) return editView(ctx, r.isNew);
   if (r.kind === "folders") return foldersView(ctx);
@@ -1511,10 +1902,31 @@ export function vaultScreen(ctx: Ctx): HTMLElement {
 // ---------- generator ----------
 
 async function regenerate(ctx: Ctx) {
-  const r = await send<string>({ type: "generate", options: st.gen });
+  const r = await send<string>({ type: "generate", options: genOptions() });
   st.generated = r.ok ? r.data : "";
   st.error = r.ok ? undefined : r.error;
+  st.suggestions = [];
   ctx.rerender();
+  if (!r.ok || st.gen.type !== "password") return;
+  // Three ready-made variants next to the configured one: a short site-friendly one and two long ones.
+  const variants = [{ length: 16, special: false }, { length: 24 }, { length: 32 }];
+  const all = await Promise.all(variants.map((v) => send<string>({ type: "generate", options: { ...genOptions(), ...v } })));
+  if (st.gen.type !== "password") return;
+  st.suggestions = all.flatMap((x) => (x.ok ? [x.data] : []));
+  ctx.rerender();
+}
+
+async function importWordlist(ctx: Ctx, file: File | undefined) {
+  if (!file) return;
+  const words = parseWordlist(await file.slice(0, 2 * 1024 * 1024).text());
+  if (words.length < 100) return ((st.error = t("wordlistTooShort")), ctx.rerender());
+  try {
+    localStorage.setItem(WORDLIST_KEY, words.join("\n"));
+  } catch {
+    return ((st.error = t("wordlistNotSaved")), ctx.rerender());
+  }
+  st.error = undefined;
+  void regenerate(ctx);
 }
 
 async function openHistory(ctx: Ctx) {
@@ -1565,6 +1977,11 @@ export function generatorScreen(ctx: Ctx): HTMLElement {
   const g = st.gen;
   const set = (k: string, v: unknown) => {
     g[k] = v;
+    try {
+      localStorage.setItem(GEN_KEY, JSON.stringify(g));
+    } catch {
+      /* no storage */
+    }
     void regenerate(ctx);
   };
   const toggle = (k: string, label: string) =>
@@ -1604,6 +2021,7 @@ export function generatorScreen(ctx: Ctx): HTMLElement {
       h("div", { class: "body" }, h("span", { class: "title" }, label)),
       h("input", { ...props, value: str(g[k]), "aria-label": label, spellcheck: false, onchange: (e: Event) => set(k, (e.target as HTMLInputElement).value) }),
     );
+  const custom = g.type === "passphrase" && savedWordlist().length >= 100;
   let options: HTMLElement;
   if (g.type === "password")
     options = h(
@@ -1611,10 +2029,14 @@ export function generatorScreen(ctx: Ctx): HTMLElement {
       { class: "group" },
       slider("length", t("length"), 5, 128),
       toggle("uppercase", "A–Z"),
+      g.uppercase === true ? slider("minUppercase", t("minUppercase"), 0, 9) : null,
       toggle("lowercase", "a–z"),
+      g.lowercase === true ? slider("minLowercase", t("minLowercase"), 0, 9) : null,
       toggle("numbers", "0–9"),
       toggle("special", "!@#$%^&*"),
       toggle("avoidAmbiguous", t("avoidAmbiguous")),
+      g.numbers === true ? slider("minNumber", t("minDigits"), 0, 9) : null,
+      g.special === true ? slider("minSpecial", t("minSymbols"), 0, 9) : null,
     );
   else if (g.type === "passphrase")
     options = h(
@@ -1624,16 +2046,33 @@ export function generatorScreen(ctx: Ctx): HTMLElement {
       text("wordSeparator", t("separator"), { class: "small-input", maxLength: 3 }),
       toggle("capitalize", t("capitalize")),
       toggle("includeNumber", t("includeNumber")),
+      h(
+        "div",
+        { class: "row" },
+        h("div", { class: "body" }, h("span", { class: "title" }, t("wordlist")), h("span", { class: "sub" }, custom ? t("wordlistCustom", String(savedWordlist().length)) : t("wordlistDefault"))),
+        custom
+          ? iconButton("close", t("wordlistReset"), () => {
+              try {
+                localStorage.removeItem(WORDLIST_KEY);
+              } catch {
+                /* no storage */
+              }
+              void regenerate(ctx);
+            })
+          : null,
+        h("label", { class: "btn text small" }, t("wordlistImport"), h("input", { type: "file", class: "sr-only", accept: ".txt,.wordlist,text/plain", onchange: (e: Event) => void importWordlist(ctx, (e.target as HTMLInputElement).files?.[0]) })),
+      ),
     );
+  else if (g.type === "pin") options = h("div", { class: "group" }, slider("pinLength", t("length"), 3, 12));
   else
     options = h(
       "div",
       {},
-      h("div", { class: "chips", role: "group", "aria-label": t("usernameType") }, chip("word", t("usernameWord"), "usernameType"), chip("plus", t("usernamePlus"), "usernameType"), chip("catchall", t("usernameCatchAll"), "usernameType")),
+      h("div", { class: "chips", role: "group", "aria-label": t("usernameType") }, chip("word", t("usernameWord"), "usernameType"), chip("plus", t("usernamePlus"), "usernameType"), chip("catchall", t("usernameCatchAll"), "usernameType"), chip("subdomain", t("usernameSubdomain"), "usernameType")),
       h(
         "div",
         { class: "group" },
-        ...(g.usernameType === "plus"
+        ...(g.usernameType === "plus" || g.usernameType === "subdomain"
           ? [text("email", t("email"), { type: "email" })]
           : g.usernameType === "catchall"
             ? [text("domain", t("domain"), { placeholder: "example.com" })]
@@ -1649,6 +2088,7 @@ export function generatorScreen(ctx: Ctx): HTMLElement {
       { class: "chips", role: "group", "aria-label": t("generator") },
       chip("password", t("typePassword")),
       chip("passphrase", t("typePassphrase")),
+      chip("pin", t("typePin")),
       chip("username", t("username")),
     ),
     h(
@@ -1675,6 +2115,20 @@ export function generatorScreen(ctx: Ctx): HTMLElement {
       h("div", { class: "generated-foot" }, st.generated ? strengthBar(st.generated) : null, st.generated ? h("span", { class: "meter-label" }, strength(st.generated).label) : null),
     ),
     options,
+    st.suggestions.length
+      ? h(
+          "div",
+          {},
+          sectionTitle(t("suggestions")),
+          h("div", { class: "group", role: "list" }, ...st.suggestions.map((v, i) => h("div", { class: "row", role: "listitem" }, h("div", { class: "body" }, h("span", { class: "title mono ellipsis" }, ...colorize(v)), h("span", { class: "sub" }, t("characters", String(v.length)))), copyButton(ctx, `sug.${i}`, v, t("copyField", t("generatedValue")))))),
+        )
+      : null,
+    st.generated
+      ? actionRow("plus", t(g.type === "username" ? "createLoginWithUsername" : "createLoginWithPassword"), () => {
+          ctx.goto("vault");
+          startEdit(ctx, undefined, { data: { [g.type === "username" ? "username" : "password"]: st.generated } });
+        })
+      : null,
     errorBox(),
   );
 }

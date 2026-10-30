@@ -2,7 +2,8 @@
 // (passkey-page.js) + isolated relay (passkey-relay.js) are registered on every secure origin, so a
 // WebAuthn call that a stored passkey can answer is served by Plugwarden, and everything else is
 // handed straight back to the browser. Conditional mediation (passkey autofill) additionally shows
-// "Sign in with a passkey" in the inline menu while the website is waiting for an assertion.
+// "Sign in with a passkey" in the inline menu while the website is waiting for an assertion; picking it
+// signs in directly when one passkey matches (see openConditional).
 // Crypto runs in the worker (offscreen/fido2.ts); credentials are stored as Bitwarden's
 // `login.fido2Credentials[]`, so they round-trip through the SDK model and sync with the official apps.
 import {
@@ -14,6 +15,7 @@ import {
 } from "../shared/messages.ts";
 import { UserError } from "./account.ts";
 import { coreAlive, coreCall } from "./core.ts";
+import { repromptPending } from "./reprompt.ts";
 import { getLocal, getSession } from "./store.ts";
 import { ensureLoaded, requireUnlocked, save } from "./vault.ts";
 
@@ -210,10 +212,23 @@ export async function conditionalReady(tabId: number, frameId: number): Promise<
   }
 }
 
-/** Inline menu "Sign in with a passkey": ask the user to pick one in the approval window. */
+/**
+ * Inline menu "Sign in with a passkey". Clicking the entry is the user's decision: with exactly one
+ * matching passkey it signs in right away, no window. The approval window opens only when there is a
+ * choice to make (several passkeys) or the item asks for the master password again (`reprompt`).
+ */
 export async function openConditional(tabId: number, frameId: number): Promise<void> {
   const p = conditionalFor(tabId, frameId);
   if (!p) throw new UserError("sessionExpired", "This passkey request is no longer active");
+  if (p.call.kind === "get") {
+    await requireUnlocked();
+    const found = await candidates(p, p.call.options.allow);
+    const only = found.length === 1 ? found[0] : undefined;
+    if (only && !repromptPending(await coreCall<Record<string, unknown>>({ op: "getCipher", id: only.itemId }))) {
+      await passkeyDecision(p.id, "use", only.itemId, only.credentialId);
+      return;
+    }
+  }
   await openWindow(p);
 }
 

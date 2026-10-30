@@ -66,11 +66,11 @@ const item = (i: Partial<VaultItem> & { id: string; name: string }): VaultItem =
 
 const items: VaultItem[] = [
   item({ id: "1", name: "GitHub", sub: "octo", uris: ["https://github.com/login"], favorite: true, hasTotp: true }),
-  item({ id: "2", name: "Google", sub: "ada@gmail.com", uris: ["https://accounts.google.com"], favorite: true }),
+  item({ id: "2", name: "Google", sub: "ada@gmail.com", uris: ["https://accounts.google.com"], favorite: true, reused: 2 }),
   item({ id: "3", name: "Work Amex", type: 3, sub: "Ada Lovelace" }),
   item({ id: "4", name: "Office Wi-Fi", type: 2, sub: "SSID: office" }),
-  item({ id: "5", name: "PayPal", sub: "ada@example.com", uris: ["https://www.paypal.com"] }),
-  item({ id: "6", name: "Amazon", sub: "ada@example.com", uris: ["https://www.amazon.com"] }),
+  item({ id: "5", name: "PayPal", sub: "ada@example.com", uris: ["https://www.paypal.com"], reused: 2 }),
+  item({ id: "6", name: "Amazon", sub: "ada@example.com", uris: ["https://www.amazon.com"], weak: true }),
   item({ id: "7", name: "Ada Lovelace", type: 4, sub: "Ada Lovelace" }),
   item({ id: "8", name: "Router", sub: "admin", uris: ["http://192.168.1.1"], folderId: "f1" }),
   item({ id: "9", name: "Banking", sub: "ada@example.com", uris: ["https://bank.example"], folderId: "f1" }),
@@ -173,6 +173,7 @@ const chromeStub = {
   sidePanel: { open: async () => undefined },
   permissions: { request: async () => true },
   tabs: { create: async () => ({}), getCurrent: async () => undefined },
+  storage: { onChanged: { addListener: () => undefined } },
 };
 
 (globalThis as unknown as { chrome: unknown }).chrome = chromeStub;

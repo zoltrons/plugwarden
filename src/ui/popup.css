@@ -795,3 +795,27 @@ body.frame .row:last-child { border-radius: 0 0 var(--r-xs) var(--r-xs); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
 }
+
+/* ---------- Large Type, notes toggle, rendered notes, warning sub-line ---------- */
+.large { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 4px; padding: 12px 4px; }
+.large .ch { display: flex; flex-direction: column; align-items: center; min-width: 22px; font-size: 30px; font-weight: 600; line-height: 1.15; }
+.large .ch.d { color: var(--link); }
+.large .ch.s { color: var(--critical); }
+.large .ch small { font-size: 10px; font-weight: 400; color: var(--faint); font-family: inherit; }
+.section-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.chip.small { padding: 0 8px; font-size: 12px; min-height: 24px; }
+.row .sub.warn { color: var(--critical); }
+.notes.md { white-space: normal; }
+.notes.md p { margin: 0 0 6px; white-space: pre-wrap; }
+.notes.md p:last-child { margin-bottom: 0; }
+.notes.md h3 { margin: 0 0 6px; font-size: 15px; }
+.notes.md ul { margin: 0 0 6px; padding-left: 18px; }
+.notes.md code { font-family: var(--mono); font-size: 13px; background: var(--tint); padding: 0 4px; border-radius: var(--r-xs); }
+.notes.md a { color: var(--link); }
+.qr-box { display: grid; place-items: center; padding: 8px 0; }
+.qr { width: min(280px, 80vw); height: auto; border-radius: var(--r-md); border: 1px solid var(--outline); }
+.caption.center { text-align: center; margin: 0 8px; }
+.row .meta.warn { color: var(--critical); }
+.icon-btn.up svg { transform: rotate(-90deg); }
+.icon-btn.down svg { transform: rotate(90deg); }
+.caption.warn { color: var(--critical); }
