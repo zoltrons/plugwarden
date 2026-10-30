@@ -3,7 +3,7 @@
   "name": "Plugwarden",
   "short_name": "Plugwarden",
   "description": "A small, fast password manager client for self-hosted Vaultwarden servers.",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "default_locale": "en",
   "minimum_chrome_version": "156",
   "update_url": "https://github.com/zoltrons/plugwarden/releases/latest/download/updates.xml",
