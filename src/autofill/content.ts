@@ -97,7 +97,7 @@ async function open(el: HTMLInputElement, kind: Kind) {
   close();
   anchor = el;
   host = document.createElement("plugwarden-menu");
-  host.style.cssText = "all:initial;position:fixed;z-index:2147483647;display:block";
+  host.style.cssText = "all:initial!important;position:fixed!important;z-index:2147483647!important;display:block!important;opacity:1!important;transform:none!important;filter:none!important";
   frame = document.createElement("iframe");
   frame.src = `${chrome.runtime.getURL("menu.html")}#${nonce}`;
   frame.allow = "clipboard-write";
@@ -212,7 +212,7 @@ chrome.runtime.onMessage.addListener((msg: { type?: string }) => {
     // Rebuilt on every show so the frame always carries the current save's token.
     bar?.remove();
     bar = document.createElement("plugwarden-bar");
-    bar.style.cssText = "all:initial;position:fixed;top:12px;right:12px;z-index:2147483647;display:block;width:380px;max-width:calc(100vw - 24px)";
+    bar.style.cssText = "all:initial!important;position:fixed!important;top:12px!important;right:12px!important;z-index:2147483647!important;display:block!important;opacity:1!important;transform:none!important;filter:none!important;width:380px!important;max-width:calc(100vw - 24px)!important";
     const f = document.createElement("iframe");
     f.src = `${chrome.runtime.getURL("bar.html")}#${String((msg as { token?: unknown }).token ?? "")}`;
     f.style.cssText = "all:initial;display:block;width:100%;height:132px;border:0;border-radius:16px;box-shadow:0 8px 28px rgba(0,0,0,.28);color-scheme:normal";

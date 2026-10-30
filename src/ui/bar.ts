@@ -1,12 +1,13 @@
 // Save / update bar (bar.html), framed by the content script at the top of the page after a login
 // was submitted. The credentials stay in the service worker; this page only shows host and username.
 import type { BarInfo } from "../shared/messages.ts";
-import { h, send as ask, t } from "./dom.ts";
+import { guardClicks, h, send as ask, t } from "./dom.ts";
 import { icon } from "./icons.ts";
 
 const app = document.getElementById("app")!;
 /** The secret of the save prompt that opened this bar (see showBar); the worker checks it. */
 const token = location.hash.slice(1);
+guardClicks();
 
 async function act(action: "save" | "never" | "close") {
   for (const b of app.querySelectorAll("button")) b.disabled = true;

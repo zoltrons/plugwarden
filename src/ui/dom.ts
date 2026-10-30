@@ -19,6 +19,31 @@ export function applyTheme(theme = savedTheme()) {
 }
 applyTheme();
 
+/**
+ * For frames the content script embeds in a website: ignore clicks unless the browser reports the frame
+ * as really visible (IntersectionObserver v2: not transparent, transformed away or covered) for 300 ms,
+ * so a page cannot hide it under the cursor and harvest a click (clickjacking).
+ */
+export function guardClicks(): void {
+  let since = 0;
+  new IntersectionObserver(
+    (es) => {
+      since = (es.at(-1) as { isVisible?: boolean }).isVisible ? since || Date.now() : 0;
+    },
+    // trackVisibility / delay are Chromium-only and missing from lib.dom.
+    { threshold: 0.5, trackVisibility: true, delay: 100 } as IntersectionObserverInit,
+  ).observe(document.body);
+  addEventListener(
+    "click",
+    (e) => {
+      if (since && Date.now() - since >= 300) return;
+      e.stopImmediatePropagation();
+      e.preventDefault();
+    },
+    true,
+  );
+}
+
 /** True in the side panel (sidepanel.html), false in the action popup or a tab. */
 export const inPanel = document.body.classList.contains("panel");
 

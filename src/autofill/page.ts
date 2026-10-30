@@ -194,7 +194,7 @@ export function fillInPage(req: FillRequest): FillResult | PageLogin | null {
       const form = f.el.form;
       let score = f.weight;
       if (form) score += 2;
-      if (form && SIGNUP_FORM.test(form.innerText.toLowerCase())) score -= 12;
+      if (form && SIGNUP_FORM.test((typeof form.innerText === "string" ? form.innerText : (form.textContent ?? "")).toLowerCase())) score -= 12;
       if (candidates.some((u) => u.el.form === form && before(u.el, f.el))) score += 6;
       return { f, score };
     })

@@ -26,7 +26,7 @@ async function closeInPageUi(): Promise<void> {
 export async function lockNow(): Promise<void> {
   // First and synchronous: a re-prompt grant must survive no lock, even one that fails halfway.
   revokeReprompts();
-  await updateSession({ unlocked: false, pending: undefined });
+  await updateSession({ unlocked: false, unlockedUntil: undefined, pending: undefined });
   await chrome.alarms.clear(AUTOLOCK_ALARM);
   await coreShutdown();
   await closeInPageUi();
@@ -38,7 +38,10 @@ export async function touchAutoLock(): Promise<void> {
   if (autoLockMinutes < 0) {
     // "On browser restart": storage.session and the offscreen document die with the browser.
     await chrome.alarms.clear(AUTOLOCK_ALARM);
+    await updateSession({ unlockedUntil: undefined });
     return;
   }
-  await chrome.alarms.create(AUTOLOCK_ALARM, { delayInMinutes: Math.max(autoLockMinutes, 0.5) });
+  const minutes = Math.max(autoLockMinutes, 0.5);
+  await updateSession({ unlockedUntil: Date.now() + minutes * 60_000 });
+  await chrome.alarms.create(AUTOLOCK_ALARM, { delayInMinutes: minutes });
 }

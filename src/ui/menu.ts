@@ -1,7 +1,7 @@
 // Inline menu (menu.html), framed by the content script under a login / card / identity field.
 // An extension page, so the website cannot read the list. Fill happens in the service worker.
 import type { MenuData } from "../shared/messages.ts";
-import { h, send as ask, t } from "./dom.ts";
+import { guardClicks, h, send as ask, t } from "./dom.ts";
 import { icon } from "./icons.ts";
 import { tile } from "./vault.ts";
 
@@ -47,4 +47,5 @@ async function render() {
   );
 }
 
+guardClicks();
 void render();

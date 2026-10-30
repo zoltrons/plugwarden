@@ -35,6 +35,8 @@ export interface PendingLogin {
 
 export interface Session {
   unlocked: boolean;
+  /** epoch ms the auto-lock alarm is due; a late alarm (system sleep) must not extend the unlock. */
+  unlockedUntil?: number;
   accessToken?: string;
   accessExpiresAt?: number;
   pending?: PendingLogin;
@@ -130,13 +132,16 @@ export const setLocal = <K extends keyof LocalSchema>(key: K, value: LocalSchema
 
 export const removeLocal = (...keys: (keyof LocalSchema)[]) => chrome.storage.local.remove(keys);
 
+const readSession = async (): Promise<Session> =>
+  ((await chrome.storage.session.get("session")).session as SessionSchema["session"] | undefined) ?? { unlocked: false };
+
 export async function getSession(): Promise<Session> {
-  const s = (await chrome.storage.session.get("session")).session as SessionSchema["session"] | undefined;
-  return s ?? { unlocked: false };
+  const s = await readSession();
+  return s.unlocked && s.unlockedUntil !== undefined && Date.now() >= s.unlockedUntil ? { ...s, unlocked: false } : s;
 }
 
 export async function updateSession(patch: Partial<Session>): Promise<Session> {
-  const next = { ...(await getSession()), ...patch };
+  const next = { ...(await readSession()), ...patch };
   for (const k of Object.keys(patch) as (keyof Session)[]) if (patch[k] === undefined) delete next[k];
   await chrome.storage.session.set({ session: next });
   return next;

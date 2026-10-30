@@ -185,7 +185,8 @@ export async function readPageLogin(): Promise<PageLogin | null> {
   const tab = await activeTab();
   if (!httpUrl(tab) || tab?.id === undefined) return null;
   const [res] = await chrome.scripting.executeScript({ target: { tabId: tab.id, frameIds: [0] }, func: fillInPage, args: [{ mode: "read" } satisfies ReadFill] });
-  return (res?.result as PageLogin | null | undefined) ?? null;
+  const login = (res?.result as PageLogin | null | undefined) ?? null;
+  return login && { ...login, url: tab.url! }; // the browser's URL, not the page's own location.href
 }
 
 /** Keyboard shortcut / context menu: fill the first match, or open the popup (locked, or nothing to fill). */
