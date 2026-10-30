@@ -91,7 +91,8 @@ const vault: VaultList = {
 
 const matches: PageMatches = {
   host: "github.com",
-  items: [items[0]!, items[9]!],
+  // Logins match by URI; the card and the identity only ride along because the settings show them.
+  items: [items[0]!, items[9]!, items[2]!, items[6]!],
 };
 
 const github: Json = {

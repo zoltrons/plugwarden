@@ -112,7 +112,7 @@ No new permissions, dependencies or remote code.
 | Autofill on page load | Off by default (experimental, like upstream). Worker picks a candidate using the per-item tri-state and the account default, prefers the login last used for the site, and fills only empty fields; copies the TOTP when that setting is on | unit (`pageload.test.ts`) |
 | Per-login autofill on page load | Tri-state select in the login editor (Default (On/Off) / On / Off), shown only while the account setting is on | render |
 | Inline menu type toggles | Cards and identities can be hidden from the inline menu (logins are always offered) | — |
-| Tab view type toggles | Cards and identities can be hidden from "On this site"; when shown, their **Fill** button fills the card/identity fields (previously only logins could be filled there) | — |
+| Tab view type toggles | Cards and identities can be hidden from the tab view; when shown they are listed under their own **Cards** / **Identities** headings (never under "On this site", which only holds URI-matched logins), and their **Fill** button fills the card/identity fields | render |
 | Context-menu toggle | "Show the context menu entry" removes/creates the menu and no-ops the handler | — |
 | Sync now | Settings → Vault: sync button, last-sync time (from the encrypted cache) and a completion toast | render |
 | About | Extension version, help center, web vault links | render |

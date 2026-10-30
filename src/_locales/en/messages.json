@@ -526,6 +526,12 @@
   "typeIdentity": {
     "message": "Identity"
   },
+  "typeCards": {
+    "message": "Cards"
+  },
+  "typeIdentities": {
+    "message": "Identities"
+  },
   "typeSshKey": {
     "message": "SSH key"
   },

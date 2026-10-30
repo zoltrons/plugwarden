@@ -762,28 +762,37 @@ async function saveFromPage(ctx: Ctx) {
   startEdit(ctx, undefined, { name: url.hostname, data: { username: login.username, password: login.password }, uris: [{ uri: url.origin, match: null }] });
 }
 
+/** A row of the site section: the body opens the item, the button fills it (cards and identities too). */
+function suggestionRow(ctx: Ctx, i: VaultItem): HTMLElement {
+  const name = i.name || t("untitled");
+  return h(
+    "div",
+    { class: "row" },
+    h(
+      "button",
+      { type: "button", class: "row-main", "aria-label": t("showItem", name), onclick: () => open(ctx, { kind: "item", id: i.id }) },
+      tile(i.name, i.type, i.uris),
+      h("div", { class: "body" }, h("span", { class: "title" }, name), i.sub ? h("span", { class: "sub" }, i.sub) : null),
+    ),
+    h("button", { type: "button", class: "btn tonal small", "aria-label": `${t("fill")} ${i.name}`, onclick: () => void fill(ctx, i.id) }, icon("key"), t("fill")),
+  );
+}
+
 function suggestions(ctx: Ctx): Child {
   const page = st.page;
   if (!page?.host) return null;
+  // Only logins are tied to the page by their URIs. A card or an identity belongs to no site, so it
+  // never appears under the site heading: it gets a heading of its own, like the official client.
+  const group = (title: string, type: number): Child[] => {
+    const items = page.items.filter((i) => i.type === type);
+    return items.length ? [sectionTitle(title), h("div", { class: "group" }, ...items.map((i) => suggestionRow(ctx, i)))] : [];
+  };
   return h(
     "section",
-    { class: "suggestions", "aria-label": t("onThisSite", page.host) },
-    h("div", { class: "suggestions-head" }, h("h2", { class: "section-title" }, t("onThisSite", page.host))),
-    page.items.length
-      ? h(
-          "div",
-          { class: "group" },
-          ...page.items.map((i) =>
-            h(
-              "div",
-              { class: "row" },
-              tile(i.name, i.type, i.uris),
-              h("div", { class: "body" }, h("span", { class: "title" }, i.name), i.sub ? h("span", { class: "sub" }, i.sub) : null),
-              h("button", { type: "button", class: "btn tonal small", "aria-label": `${t("fill")} ${i.name}`, onclick: () => void fill(ctx, i.id) }, icon("key"), t("fill")),
-            ),
-          ),
-        )
-      : null,
+    { class: "suggestions", "aria-label": page.host },
+    ...group(t("onThisSite", page.host), 1),
+    ...group(t("typeCards"), 3),
+    ...group(t("typeIdentities"), 4),
     h("button", { type: "button", class: "btn text small add-page", onclick: () => void saveFromPage(ctx) }, icon("plus"), t("saveFromPage")),
   );
 }
@@ -1126,7 +1135,7 @@ async function upload(ctx: Ctx, cipherId: string, file: File | undefined) {
 
 /** Fill / open actions for the item, when the active tab has a matching login or the item has a site. */
 function quickActions(ctx: Ctx, id: string, uris: string[]): Child {
-  const onSite = st.page?.items.some((i) => i.id === id);
+  const onSite = st.page?.items.some((i) => i.type === 1 && i.id === id);
   const url = uris.map(webUrl).find(Boolean);
   if (!onSite && !url) return null;
   return h(

@@ -410,6 +410,18 @@ button.row, a.row, label.row { cursor: pointer; }
 button.row:hover, a.row:hover, label.row:hover { background-image: linear-gradient(var(--tint), var(--tint)); }
 button.row:active, a.row:active { background-image: linear-gradient(var(--tint-strong), var(--tint-strong)); }
 a.row { text-decoration: none; color: var(--text); }
+/* A row whose body opens the item, with its own action on the right: the button fills the row so the
+   whole left side is a hit target, while the row itself paints the hover (the button is transparent). */
+.row-main {
+  flex: 1; min-width: 0; margin: -8px 0 -8px -12px; padding: 8px 0 8px 12px;
+  display: flex; align-items: center; gap: 12px;
+  background: transparent; border: 0;
+  text-align: left; color: inherit;
+  font-size: 14px; line-height: var(--line);
+  cursor: pointer;
+}
+.row:has(> .row-main:hover) { background-image: linear-gradient(var(--tint), var(--tint)); }
+.row:has(> .row-main:active) { background-image: linear-gradient(var(--tint-strong), var(--tint-strong)); }
 .row > svg.i { color: var(--muted); }
 .row > svg.i:last-child { color: var(--faint); width: 16px; height: 16px; }
 /* Secondary state markers (one-time code, favorite) stay small and quiet. */
@@ -623,9 +635,6 @@ a.row { text-decoration: none; color: var(--text); }
 /* ---------- vault list ---------- */
 
 .suggestions { display: flex; flex-direction: column; gap: 8px; }
-.suggestions-head { display: flex; align-items: center; gap: 6px; }
-.suggestions-head .section-title { margin: 0; flex: 1; }
-.suggestions-head svg.i { width: 14px; height: 14px; color: var(--faint); }
 .add-page { align-self: flex-start; }
 .fab {
   position: fixed; right: 12px; bottom: 64px; z-index: 5;
