@@ -85,8 +85,9 @@ export function fillInPage(req: FillRequest): FillResult | PageLogin | null {
     if (el.disabled || (el instanceof HTMLInputElement && el.type === "hidden")) return false;
     const r = el.getBoundingClientRect();
     if (r.width < 24 || r.height < 8) return false;
-    const s = getComputedStyle(el);
-    return s.visibility !== "hidden" && s.opacity !== "0";
+    // Off the page's origin (document coordinates, so scrolled-away fields still count): unreachable decoys.
+    if (r.right + scrollX <= 0 || r.bottom + scrollY <= 0) return false;
+    return el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true });
   };
   /** A field a fill may write to: shown, and not a read-only copy the page only displays. */
   const onScreen = (el: Field) => shown(el) && !(el instanceof HTMLInputElement && el.readOnly);
@@ -186,6 +187,11 @@ export function fillInPage(req: FillRequest): FillResult | PageLogin | null {
     return document.body; // disjoint trees (shadow roots) count as page-wide, like a shared <body>
   };
 
+  // Named inputs clobber form.innerText / form.textContent with elements: only trust strings.
+  const formText = (form: HTMLFormElement) => {
+    const t = [form.innerText, form.textContent].find((v) => typeof v === "string");
+    return (t as string | undefined)?.toLowerCase() ?? "";
+  };
   const candidates = fields.filter((f) => f.kind === "user" || f.kind === "text");
   // A login form beats a registration form, and a current password beats a new one.
   const pass = fields
@@ -194,7 +200,7 @@ export function fillInPage(req: FillRequest): FillResult | PageLogin | null {
       const form = f.el.form;
       let score = f.weight;
       if (form) score += 2;
-      if (form && SIGNUP_FORM.test((typeof form.innerText === "string" ? form.innerText : (form.textContent ?? "")).toLowerCase())) score -= 12;
+      if (form && SIGNUP_FORM.test(formText(form))) score -= 12;
       if (candidates.some((u) => u.el.form === form && before(u.el, f.el))) score += 6;
       return { f, score };
     })

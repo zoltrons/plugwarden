@@ -31,6 +31,9 @@ test("host, startsWith, exact, regex, never", () => {
   assert.ok(!uriMatches("https://a.example.com", MATCH.Host, page("https://b.example.com"), psl));
   assert.ok(uriMatches("https://example.com/app", MATCH.StartsWith, page("https://example.com/app/login"), psl));
   assert.ok(!uriMatches("https://example.com/app", MATCH.StartsWith, page("https://example.com/other"), psl));
+  assert.ok(!uriMatches("https://example.com", MATCH.StartsWith, page("https://example.com.evil.net/"), psl));
+  assert.ok(!uriMatches("https://mybank.com", null, page("http://mybank.com"), psl));
+  assert.ok(uriMatches("https://localhost", MATCH.Host, page("http://localhost"), psl));
   assert.ok(uriMatches("https://example.com/login", MATCH.Exact, page("https://example.com/login"), psl));
   assert.ok(uriMatches("^https://([a-z]+\\.)?example\\.com/", MATCH.RegularExpression, page("https://www.example.com/x"), psl));
   assert.ok(!uriMatches("([", MATCH.RegularExpression, page("https://example.com"), psl));

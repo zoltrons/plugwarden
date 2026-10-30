@@ -1,6 +1,7 @@
 // URI matching with Bitwarden's UriMatchType semantics (clients: libs/common/src/models/domain/login-uri).
 // A null `match` means "Default": the account's default URI match strategy (Domain unless changed).
 import { URI_MATCH as MATCH } from "../shared/constants.ts";
+import { isLoopback } from "../shared/url.ts";
 export { MATCH };
 
 /** Public Suffix List lookup (rules as in public_suffix_list.dat, punycode). */
@@ -47,6 +48,8 @@ export function parseUri(uri: string): URL | undefined {
 
 export function uriMatches(saved: string, match: number | null | undefined, page: URL, psl: Psl, defaultMatch: number = MATCH.Domain): boolean {
   if (page.protocol !== "https:" && page.protocol !== "http:") return false;
+  // A login saved for https must not be offered on a cleartext page (downgrade / SSL stripping).
+  if (page.protocol === "http:" && /^https:\/\//i.test(saved) && !isLoopback(page.hostname)) return false;
   switch (match ?? defaultMatch) {
     case MATCH.Domain: {
       const s = parseUri(saved);
@@ -56,7 +59,8 @@ export function uriMatches(saved: string, match: number | null | undefined, page
     case MATCH.Host:
       return parseUri(saved)?.host === page.host;
     case MATCH.StartsWith:
-      return page.href.startsWith(saved);
+      // The prefix must end at a URL boundary: "https://example.com" is not "https://example.com.evil.net".
+      return page.href.startsWith(saved) && (saved.endsWith("/") || "/?#".includes(page.href[saved.length] ?? "/"));
     case MATCH.Exact:
       return page.href === saved;
     case MATCH.RegularExpression:
