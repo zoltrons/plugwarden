@@ -1993,23 +1993,25 @@ export function generatorScreen(ctx: Ctx): HTMLElement {
     );
   const slider = (k: string, label: string, min: number, max: number, suffix = "") => {
     const badge = h("span", { class: "value-badge" }, `${String(g[k])}${suffix}`);
+    const input = h("input", { type: "range", min, max, value: String(g[k]), "aria-label": label });
+    // The filled part of the track is a CSS gradient driven by --fill.
+    const paint = (v: number) => {
+      const ratio = max === min ? 0 : (v - min) / (max - min);
+      input.style.setProperty("--fill", `${Math.round(Math.min(Math.max(ratio, 0), 1) * 100)}%`);
+    };
+    paint(Number(g[k]));
+    input.addEventListener("input", () => {
+      const v = Number(input.value);
+      badge.textContent = `${v}${suffix}`;
+      paint(v);
+    });
+    input.addEventListener("change", () => set(k, Number(input.value)));
     return h(
       "div",
       { class: "row slider-row" },
       h("div", { class: "body" }, h("span", { class: "title" }, label)),
+      input,
       badge,
-      h(
-        "input",
-        {
-          type: "range",
-          min,
-          max,
-          value: String(g[k]),
-          "aria-label": label,
-          oninput: (e: Event) => (badge.textContent = `${(e.target as HTMLInputElement).value}${suffix}`),
-          onchange: (e: Event) => set(k, Number((e.target as HTMLInputElement).value)),
-        },
-      ),
     );
   };
   g.email ||= ctx.email() ?? "";
