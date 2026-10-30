@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Field-detection smoke test: bundles the injected page functions and runs them against fixture pages in
-// Helium (Chromium), no extension host and no server needed. Covers the login/card heuristics that the
+// Helium or Chromium, no extension host and no server needed. Covers the login/card heuristics that the
 // autofill path depends on (decoys, registration-vs-login, labels, forms, shadow roots, page load).
 //   node tools/smoke-fill.mjs        HEADED=1 to watch it
 import assert from "node:assert/strict";
@@ -79,10 +79,10 @@ const server = createServer((req, res) => {
 await new Promise((r) => server.listen(0, "127.0.0.1", r));
 const base = `http://127.0.0.1:${server.address().port}`;
 
-// The extension targets Chromium; Helium is the browser on this machine (HELIUM_PATH overrides).
+// The extension targets Chromium: HELIUM_PATH, else Helium on this machine, else Playwright's Chromium (CI).
 const helium = process.env.HELIUM_PATH ?? join(homedir(), "Applications/Helium.app/Contents/MacOS/Helium");
-if (!existsSync(helium)) throw new Error(`Helium not found at ${helium}; set HELIUM_PATH`);
-const browser = await chromium.launch({ executablePath: helium, headless: !process.env.HEADED });
+const executablePath = existsSync(helium) ? helium : chromium.executablePath();
+const browser = await chromium.launch({ executablePath, headless: !process.env.HEADED });
 const errors = [];
 let pass = 0;
 

@@ -1360,6 +1360,14 @@ try {
 
   await step("SSO: a callback with a foreign state is refused", async () => {
     await logout();
+    // Hold the connector page back until the state is replaced: otherwise a fast redirect finishes the
+    // login before the test gets to it, and the callback is not foreign at all.
+    let replaced!: () => void;
+    const held = new Promise<void>((r) => (replaced = r));
+    await ctx.route("**/sso-connector.html*", async (route) => {
+      await held;
+      await route.continue();
+    });
     const tab = ctx.waitForEvent("page") // the SSO tab (its URL is still about:blank or mid-redirect here);
     await click("Log in with SSO");
     const t = await tab;
@@ -1368,7 +1376,9 @@ try {
       const s = (await chrome.storage.session.get("session")).session as Record<string, any>;
       await chrome.storage.session.set({ session: { ...s, sso: { ...s.sso, state: "other:clientId=browser" } } });
     });
+    replaced();
     await t.waitForEvent("close", { timeout: 20_000 });
+    await ctx.unroute("**/sso-connector.html*");
     await open();
     await page.getByRole("heading", { name: "Log in" }).waitFor();
     await page.getByRole("alert").filter({ hasText: "did not come from this browser" }).waitFor();
