@@ -87,6 +87,8 @@ export function fillInPage(req: FillRequest): FillResult | PageLogin | null {
     if (r.width < 24 || r.height < 8) return false;
     // Off the page's origin (document coordinates, so scrolled-away fields still count): unreachable decoys.
     if (r.right + scrollX <= 0 || r.bottom + scrollY <= 0) return false;
+    // Parked far to the right of the viewport, or clipped away: a trap field, not a form.
+    if (r.left >= innerWidth || getComputedStyle(el).clipPath !== "none") return false;
     return el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true });
   };
   /** A field a fill may write to: shown, and not a read-only copy the page only displays. */

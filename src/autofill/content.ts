@@ -40,7 +40,9 @@ function active(): Element | null {
 }
 
 /** A password field near `el`: in its form, else in its own root (a shadow root is its own document). */
-const hasPassword = (el: HTMLInputElement) => !!(el.form ?? (el.getRootNode() as ParentNode)).querySelector?.("input[type=password]");
+const hasPassword = (el: HTMLInputElement) =>
+  // A named input ("querySelector") clobbers the form's own method: call the native one.
+  !!(el.form ? Element.prototype.querySelector.call(el.form, "input[type=password]") : (el.getRootNode() as ParentNode).querySelector("input[type=password]"));
 
 /** True when this frame has a password field anywhere, open shadow roots included. */
 function hasPasswordField(): boolean {

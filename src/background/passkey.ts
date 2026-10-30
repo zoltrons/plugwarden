@@ -15,7 +15,7 @@ import {
 } from "../shared/messages.ts";
 import { UserError } from "./account.ts";
 import { coreAlive, coreCall } from "./core.ts";
-import { repromptPending } from "./reprompt.ts";
+import { REPROMPT_MESSAGE, repromptPending } from "./reprompt.ts";
 import { getLocal, getSession } from "./store.ts";
 import { ensureLoaded, requireUnlocked, save } from "./vault.ts";
 
@@ -248,6 +248,8 @@ export async function passkeyDecision(id: string, action: "use" | "fallback", it
     if (p.call.kind === "get") {
       const c = (await candidates(p, p.call.options.allow)).find((x) => x.itemId === itemId && x.credentialId === credentialId);
       if (!c) throw new UserError("invalid", "Choose one of the passkeys for this site");
+      // The window has no password prompt: a flagged item must be confirmed in the popup first (the grant is per item).
+      if (repromptPending(await coreCall<Record<string, unknown>>({ op: "getCipher", id: c.itemId }))) throw new UserError("reprompt", REPROMPT_MESSAGE);
       const credential = await coreCall<Record<string, unknown>>({ op: "passkeyAssert", itemId: c.itemId, credentialId: c.credentialId, rpId: p.rpId, origin: p.origin, challenge: p.call.options.challenge });
       p.done({ credential });
     } else {
@@ -263,7 +265,7 @@ export async function passkeyDecision(id: string, action: "use" | "fallback", it
       p.done({ credential: r.response });
     }
   } catch (e) {
-    if (e instanceof UserError && e.code === "invalid") throw e;
+    if (e instanceof UserError && (e.code === "invalid" || e.code === "reprompt")) throw e;
     p.done(error("NotAllowedError", e instanceof Error ? e.message : String(e)));
   }
   return null;

@@ -21,6 +21,12 @@ addEventListener("message", (ev: MessageEvent) => {
   }
   if (d?.plugwarden !== "req") return;
   const id = String(d.id);
+  // Any page script can forge this message: without a real click or key press (and with a flood of open
+  // ports) the browser handles the call itself.
+  if ((d.conditional !== true && !navigator.userActivation.isActive) || ports.size >= 8) {
+    postMessage({ plugwarden: "res", id: d.id, result: { fallback: true } }, "*");
+    return;
+  }
   const port = chrome.runtime.connect({ name: PORT });
   ports.set(id, port);
   let done = false;
