@@ -81,6 +81,8 @@ export type Request =
   | { type: "exportVault"; password: string }
   /** Re-checks the master password for one item flagged with `reprompt` (see background/reprompt.ts). */
   | { type: "confirmReprompt"; id: string; password: string }
+  /** Whether that confirmation still holds; polled by an open item, so it never extends auto-lock. */
+  | { type: "repromptGranted"; id: string }
   | { type: "importVault"; text: string }
   | { type: "addAttachment"; cipherId: string; file: { name: string; data: string } }
   | { type: "saveFolder"; name: string; id?: string }
@@ -171,6 +173,7 @@ const requestValidators: { [K in Request["type"]]: Validator<Extract<Request, { 
   downloadAttachment: obj({ type: literal("downloadAttachment"), cipherId: str, attachmentId: str }),
   exportVault: obj({ type: literal("exportVault"), password: str }),
   confirmReprompt: obj({ type: literal("confirmReprompt"), id: str, password: str }),
+  repromptGranted: obj({ type: literal("repromptGranted"), id: str }),
   importVault: obj({ type: literal("importVault"), text: capped(MAX_IMPORT_CHARS) }),
   addAttachment: obj({ type: literal("addAttachment"), cipherId: str, file: obj({ name: str, data: str }) }),
   saveFolder: obj({ type: literal("saveFolder"), name: str, id: opt(str) }),

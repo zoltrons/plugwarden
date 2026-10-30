@@ -908,10 +908,14 @@ try {
     for (const m of [{ type: "getItem", id }, { type: "totp", id }, { type: "downloadAttachment", cipherId: id, attachmentId: "x" }])
       assert.equal((await ask(m)).code, "reprompt", m.type);
     assert.equal((await ask({ type: "confirmReprompt", id, password: "wrong" })).code, "wrongPassword");
+    assert.equal((await ask({ type: "repromptGranted", id })).data, false);
     assert.equal((await ask({ type: "confirmReprompt", id, password: vaultUser.password })).ok, true);
     assert.equal((await ask({ type: "getItem", id })).data.notes, "guarded secret");
+    // The open item view polls this to hide the item again once the grant is gone.
+    assert.equal((await ask({ type: "repromptGranted", id })).data, true);
     await ask({ type: "lock" });
     await unlockIfLocked();
+    assert.equal((await ask({ type: "repromptGranted", id })).data, false, "grant survived a lock");
     assert.equal((await ask({ type: "getItem", id })).code, "reprompt", "grant survived a lock");
     await ask({ type: "deleteItem", id });
     await ask({ type: "purgeItem", id });
@@ -1273,6 +1277,35 @@ try {
     const key = createPublicKey({ key: Buffer.from(spki, "base64"), format: "der", type: "spki" });
     assert.ok(verify("sha256", signed, key, Buffer.from(g.sig, "base64")), "assertion signature");
     assert.deepEqual([...Buffer.from(g.user, "base64")], [1, 2, 3, 4]);
+  });
+
+  await step("passkeys: a re-requested conditional call takes over the open approval window", async () => {
+    // The site restarts passkey autofill while the user is choosing: the window stays open and answers the
+    // newest call (its challenge), the replaced call ends with AbortError.
+    await loginPage.goto(`${SITE}/login`);
+    type Win = { pkGet: (ch: number[]) => Promise<string>; first: Promise<string> };
+    await loginPage.evaluate((ch) => {
+      const w = window as unknown as Win;
+      // Resolves to the clientDataJSON text, or to the error name.
+      w.pkGet = (c) =>
+        navigator.credentials
+          .get({ mediation: "conditional", publicKey: { challenge: Uint8Array.from(c), rpId: "localhost" } })
+          .then((cred) => new TextDecoder().decode((cred as PublicKeyCredential).response.clientDataJSON), (e: DOMException) => e.name);
+      w.first = w.pkGet(ch);
+      (document.getElementById("u") as HTMLInputElement).focus();
+    }, [...challenge]);
+    const entry = (await frameOf(loginPage, "menu.html")).getByRole("button", { name: "Sign in with passkey" });
+    await entry.waitFor();
+    const opened = ctx.waitForEvent("page", { predicate: (p) => p.url().includes("popup.html?passkey=") });
+    await entry.click();
+    const w = await opened;
+    await w.getByRole("listitem").filter({ hasText: "pk-user" }).waitFor();
+    const second = randomBytes(32);
+    const got = loginPage.evaluate((ch) => (window as unknown as Win).pkGet(ch), [...second]);
+    assert.equal(await loginPage.evaluate(() => (window as unknown as Win).first), "AbortError");
+    assert.equal(w.isClosed(), false, "the approval window was closed instead of taken over");
+    await w.getByRole("listitem").filter({ hasText: "pk-user" }).click();
+    assert.equal(JSON.parse(await got).challenge, second.toString("base64url"));
   });
 
   await step("passkeys: closing the window hands the call back to the browser", async () => {

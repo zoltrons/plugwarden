@@ -22,7 +22,7 @@ import {
   unlockWithPin,
   UserError,
 } from "./account.ts";
-import { REPROMPT_MESSAGE, repromptPending } from "./reprompt.ts";
+import { REPROMPT_MESSAGE, repromptGranted, repromptPending } from "./reprompt.ts";
 import { coreAlive, coreCall } from "./core.ts";
 import { AUTOLOCK_ALARM, lockNow, touchAutoLock } from "./lock.ts";
 import {
@@ -204,6 +204,10 @@ async function handle(req: Request): Promise<unknown> {
       await requireUnlocked();
       await confirmReprompt(req.id, req.password);
       break;
+    case "repromptGranted":
+      // No touchAutoLock: an item left open on screen must not keep the vault unlocked.
+      await requireUnlocked();
+      return repromptGranted(req.id);
     case "lock":
       await lockNow();
       break;

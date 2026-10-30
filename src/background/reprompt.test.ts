@@ -24,6 +24,16 @@ test("a flagged item is pending until it is granted, and grants are per item", (
   assert.equal(repromptPending(flagged), true, "locking revokes");
 });
 
+test("keys are read case-insensitively, so a PascalCase cipher cannot slip past the gate", () => {
+  revokeReprompts();
+  const flagged = { Id: "cipher-a", Reprompt: 1 };
+  assert.equal(repromptRequired(flagged), true);
+  assert.equal(repromptPending(flagged), true);
+  grantReprompt("cipher-a");
+  assert.equal(repromptPending(flagged), false, "the grant is found by the PascalCase id");
+  revokeReprompts();
+});
+
 test("an unflagged item is never pending", () => {
   revokeReprompts();
   assert.equal(repromptPending({ id: "cipher-a", reprompt: 0 }), false);

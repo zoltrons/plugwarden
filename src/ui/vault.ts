@@ -96,9 +96,18 @@ const st = {
   uriOpen: new Set<number>(),
 };
 let totpTimer: ReturnType<typeof setInterval> | undefined;
+/** An open flagged item re-checks its grant: it expires, and dies with the service worker. */
+let repromptTimer: ReturnType<typeof setInterval> | undefined;
+const REPROMPT_CHECK_MS = 10_000;
+
+function stopRepromptWatch() {
+  clearInterval(repromptTimer);
+  repromptTimer = undefined;
+}
 
 export function resetVault(): void {
   clearInterval(totpTimer);
+  stopRepromptWatch();
   closeMenu();
   Object.assign(st, {
     list: undefined, page: undefined, loading: false, syncing: false, busy: false, error: undefined, route: { kind: "list" }, query: "",
@@ -328,6 +337,7 @@ async function syncNow(ctx: Ctx, force: boolean) {
 
 function open(ctx: Ctx, route: Route) {
   clearInterval(totpTimer);
+  stopRepromptWatch();
   Object.assign(st, { route, error: undefined, confirmDelete: 0, totp: undefined, reveal: new Set(), copied: "", uriOpen: new Set(), repromptFor: undefined, itemFailedFor: undefined });
   if (route.kind !== "edit") st.draft = undefined;
   ctx.rerender();
@@ -600,17 +610,11 @@ function listView(ctx: Ctx): HTMLElement {
 
 // ---------- this site ----------
 
-/** A flagged item opens its master-password screen instead of failing. */
-function askReprompt(ctx: Ctx, id: string) {
-  open(ctx, { kind: "item", id });
-  st.repromptFor = id;
-  ctx.rerender();
-}
-
 async function fill(ctx: Ctx, id: string) {
   const r = await send<FillResult>({ type: "fill", id });
   if (r.ok && r.data.filled) window.close();
-  else if (!r.ok && r.code === "reprompt") askReprompt(ctx, id);
+  // A flagged item: its view shows the master-password screen (itemView gets "reprompt" from getItem).
+  else if (!r.ok && r.code === "reprompt") open(ctx, { kind: "item", id });
   else toast(ctx, r.ok ? t("fillFailed") : r.error);
 }
 
@@ -623,7 +627,7 @@ async function saveFromPage(ctx: Ctx) {
   if (same) {
     const item = await send<Json>({ type: "getItem", id: same.id });
     if (item.ok) return startEdit(ctx, item.data, { data: { password: login.password } });
-    if (item.code === "reprompt") return askReprompt(ctx, same.id); // never fall through to a duplicate
+    if (item.code === "reprompt") return open(ctx, { kind: "item", id: same.id }); // never fall through to a duplicate
   }
   const url = new URL(login.url);
   startEdit(ctx, undefined, { name: url.hostname, data: { username: login.username, password: login.password }, uris: [{ uri: url.origin, match: null }] });
@@ -854,14 +858,18 @@ function totpRow(ctx: Ctx, id: string): HTMLElement {
   );
 }
 
+/** The re-prompt grant ran out: hide the item again until the password is re-entered. */
+function hideForReprompt(ctx: Ctx, id: string) {
+  clearInterval(totpTimer);
+  stopRepromptWatch();
+  Object.assign(st, { item: undefined, totp: undefined, reveal: new Set(), copied: "", repromptFor: id });
+  ctx.rerender();
+}
+
 async function refreshTotp(ctx: Ctx, id: string) {
   const r = await send<{ code: string; period: number; remaining: number }>({ type: "totp", id });
   if (st.route.kind !== "item" || st.route.id !== id) return;
-  if (!r.ok) {
-    // The re-prompt grant ran out: hide the item again until the password is re-entered.
-    if (r.code === "reprompt") Object.assign(st, { item: undefined, totp: undefined, repromptFor: id });
-    return ctx.rerender();
-  }
+  if (!r.ok) return r.code === "reprompt" ? hideForReprompt(ctx, id) : ctx.rerender();
   st.totp = { code: r.data.code, period: r.data.period || 30, remaining: r.data.remaining };
   ctx.rerender();
   clearInterval(totpTimer);
@@ -997,6 +1005,11 @@ function itemView(ctx: Ctx, id: string): HTMLElement {
       st.error ? null : progress(),
     );
   }
+  if (Number(item.reprompt) === 1 && !repromptTimer)
+    repromptTimer = setInterval(async () => {
+      const r = await send<boolean>({ type: "repromptGranted", id });
+      if (r.ok && !r.data && st.route.kind === "item" && st.route.id === id) hideForReprompt(ctx, id);
+    }, REPROMPT_CHECK_MS);
   const inTrash = !!item.deletedDate;
   const summary = [...(st.list?.items ?? []), ...(st.list?.trash ?? [])].find((i) => i.id === id);
   const type = Number(item.type);

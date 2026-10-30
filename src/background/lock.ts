@@ -24,11 +24,11 @@ async function closeInPageUi(): Promise<void> {
 }
 
 export async function lockNow(): Promise<void> {
+  // First and synchronous: a re-prompt grant must survive no lock, even one that fails halfway.
+  revokeReprompts();
   await updateSession({ unlocked: false, pending: undefined });
   await chrome.alarms.clear(AUTOLOCK_ALARM);
   await coreShutdown();
-  // A re-prompt grant must not survive a lock.
-  revokeReprompts();
   await closeInPageUi();
 }
 
