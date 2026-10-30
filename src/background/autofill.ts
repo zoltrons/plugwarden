@@ -4,11 +4,11 @@ import { type FillRequest, type FillResult, fillInPage, type LoginFill, type Pag
 import type { PageMatches, VaultItem } from "../shared/messages.ts";
 import { pickPageLoadLogin } from "../shared/pageload.ts";
 import { UserError } from "./account.ts";
-import { coreAlive, coreCall } from "./core.ts";
+import { coreCall } from "./core.ts";
 import { touchAutoLock } from "./lock.ts";
-import { getLocal, getSession, getSettings } from "./store.ts";
+import { getLocal, getSettings } from "./store.ts";
 import { REPROMPT_MESSAGE, repromptPending } from "./reprompt.ts";
-import { copyToClipboard, ensureLoaded, list, markUsed } from "./vault.ts";
+import { copyToClipboard, ensureLoaded, isUnlocked, list, markUsed } from "./vault.ts";
 
 export const CONTEXT_MENU_ID = "plugwarden-autofill";
 export const AUTOFILL_COMMAND = "autofill-login";
@@ -54,7 +54,7 @@ export async function pageLoadFill(sender: chrome.runtime.MessageSender): Promis
   const frameId = sender.frameId;
   const url = httpUrl(sender);
   if (!settings.autofillOnPageLoad || tabId === undefined || frameId === undefined || !url) return { filled: false, reason: "noFields" };
-  if (!(await getSession()).unlocked || !(await coreAlive())) return { filled: false, reason: "locked" };
+  if (!(await isUnlocked())) return { filled: false, reason: "locked" };
   // Items flagged for a master-password re-prompt never fill on page load (no user to ask).
   const pick = pickPageLoadLogin((await matches(url)).filter((i) => !i.reprompt), settings.autofillOnPageLoadDefault, (await getLocal("lastUsed")) ?? {});
   if (!pick) return { filled: false, reason: "noMatch" };
@@ -111,10 +111,10 @@ export async function fillTab(tab: chrome.tabs.Tab | undefined, id?: string): Pr
   let values: Record<string, string> | undefined;
   if (id) {
     // The "On this site" list may offer a card or identity: fill it by its own field map.
-    const cipher = await coreCall<Record<string, unknown>>({ op: "getCipher", id }).catch(() => undefined);
+    const cipher = await coreCall<VaultItem>({ op: "cipherSummary", id }).catch(() => undefined);
     if (!cipher) return { filled: false, reason: "noMatch" };
     if (repromptPending(cipher)) throw new UserError("reprompt", REPROMPT_MESSAGE);
-    const type = Number(cipher.type);
+    const type = cipher.type;
     if (type === 1) {
       if (!(await matches(url)).some((i) => i.id === id)) return { filled: false, reason: "noMatch" };
     } else if (type === 3 || type === 4) {
@@ -156,7 +156,7 @@ export function updateTabUi(): Promise<void> {
   tabUi = tabUi.then(async () => {
     const tab = await activeTab();
     const url = httpUrl(tab);
-    const unlocked = (await getSession()).unlocked && (await coreAlive());
+    const unlocked = await isUnlocked();
     const items = unlocked && url ? await matches(url) : [];
     await chrome.contextMenus.removeAll();
     if ((await getSettings()).contextMenu) {
@@ -191,7 +191,7 @@ export async function readPageLogin(): Promise<PageLogin | null> {
 
 /** Keyboard shortcut / context menu: fill the first match, or open the popup (locked, or nothing to fill). */
 export async function autofillFromGesture(tab: chrome.tabs.Tab | undefined, id?: string): Promise<FillResult> {
-  if (!(await getSession()).unlocked || !(await coreAlive())) {
+  if (!(await isUnlocked())) {
     await chrome.action.openPopup().catch(() => undefined);
     return { filled: false, reason: "locked" };
   }

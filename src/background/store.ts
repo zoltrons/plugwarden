@@ -72,6 +72,12 @@ export async function getTabState<K extends keyof TabState>(kind: K, tabId: numb
 export const setTabState = <K extends keyof TabState>(kind: K, tabId: number, value: TabState[K] | undefined) =>
   value === undefined ? chrome.storage.session.remove(`${kind}:${tabId}`) : chrome.storage.session.set({ [`${kind}:${tabId}`]: value });
 
+/** Submitted logins waiting in a save bar hold a typed password: they must not outlive the lock. */
+export async function clearPendingSaves(): Promise<void> {
+  const keys = Object.keys(await chrome.storage.session.get(null)).filter((k) => k.startsWith("save:"));
+  await chrome.storage.session.remove(keys);
+}
+
 export const clearTabState = (tabId: number) => chrome.storage.session.remove([`inline:${tabId}`, `save:${tabId}`]);
 
 /** Biometric unlock: the user key wrapped with a key derived from the authenticator's PRF output. */
@@ -140,17 +146,27 @@ export async function getSession(): Promise<Session> {
   return s.unlocked && s.unlockedUntil !== undefined && Date.now() >= s.unlockedUntil ? { ...s, unlocked: false } : s;
 }
 
-export async function updateSession(patch: Partial<Session>): Promise<Session> {
-  const next = { ...(await readSession()), ...patch };
-  for (const k of Object.keys(patch) as (keyof Session)[]) if (patch[k] === undefined) delete next[k];
-  await chrome.storage.session.set({ session: next });
-  return next;
+/** Writes run one at a time: a read-then-write that overlaps a lock would put `unlocked: true` back. */
+let sessionWrites: Promise<unknown> = Promise.resolve();
+
+export function updateSession(patch: Partial<Session>): Promise<Session> {
+  const write = async () => {
+    const next = { ...(await readSession()), ...patch };
+    for (const k of Object.keys(patch) as (keyof Session)[]) if (patch[k] === undefined) delete next[k];
+    await chrome.storage.session.set({ session: next });
+    return next;
+  };
+  const result = sessionWrites.then(write, write);
+  sessionWrites = result;
+  return result;
 }
 
 export async function getSettings(): Promise<Settings> {
   // Older builds stored a `passkeys` toggle; passkeys are always on now, so drop it.
   const stored = ((await getLocal("settings")) ?? {}) as Settings & { passkeys?: boolean };
   const { passkeys: _ignored, ...settings } = stored;
+  // Older builds offered 10 and 20 s, which chrome.alarms always rounded up to its 30 s minimum.
+  if ((settings.clearClipboardDelay as string | undefined)?.match(/^(ten|twenty)Seconds$/)) settings.clearClipboardDelay = "thirtySeconds";
   return {
     autoLockMinutes: DEFAULT_AUTO_LOCK_MINUTES,
     timeoutAction: "lock",

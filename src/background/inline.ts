@@ -3,13 +3,13 @@
 // uses the URL of the frame the field is in, as reported by the browser (sender.url).
 import { type FillResult, fillInPage } from "../autofill/page.ts";
 import type { BarInfo, FieldKind, FrameRequest, MenuData, MenuItem, PageRequest, VaultItem } from "../shared/messages.ts";
-import { coreAlive, coreCall } from "./core.ts";
+import { coreCall } from "./core.ts";
 import { touchAutoLock } from "./lock.ts";
 import { pageLoadFill } from "./autofill.ts";
 import { conditionalReady, openConditional } from "./passkey.ts";
-import { getLocal, getSession, getSettings, getTabState, setLocal, setTabState } from "./store.ts";
+import { getLocal, getSettings, getTabState, setLocal, setTabState } from "./store.ts";
 import { REPROMPT_MESSAGE, repromptPending } from "./reprompt.ts";
-import { copyToClipboard, ensureLoaded, list, markUsed, save } from "./vault.ts";
+import { copyToClipboard, ensureLoaded, isUnlocked, list, markUsed, save } from "./vault.ts";
 
 export interface InlineContext {
   frameId: number;
@@ -34,7 +34,6 @@ export interface PendingSave {
 const SAVE_TTL_MS = 5 * 60_000;
 
 const httpUrl = (u: string | undefined) => (u && /^https?:/.test(u) ? u : undefined);
-const unlocked = async () => (await getSession()).unlocked && (await coreAlive());
 
 async function items(kind: FieldKind, url: string): Promise<MenuItem[]> {
   const pick = ({ id, type, name, sub }: VaultItem) => ({ id, type, name, sub });
@@ -83,7 +82,7 @@ export async function handlePage(req: PageRequest, sender: chrome.runtime.Messag
 async function onFocus(kind: FieldKind, nonce: string, url: string, tabId: number, frameId: number): Promise<{ rows: number }> {
   if (!(await getSettings()).inlineMenu || !(await getLocal("account"))) return { rows: 0 };
   await setTabState("inline", tabId, { frameId, url, kind, nonce });
-  if (!(await unlocked())) return { rows: 1 }; // "Unlock to fill"
+  if (!(await isUnlocked())) return { rows: 1 }; // "Unlock to fill"
   const logins = (await items(kind, url)).length;
   // A website waiting on a conditional passkey request gets one extra row for it.
   const passkey = kind === "login" && (await conditionalReady(tabId, frameId));
@@ -93,7 +92,7 @@ async function onFocus(kind: FieldKind, nonce: string, url: string, tabId: numbe
 async function loginSubmitted(tabId: number, url: string, username: string, password: string) {
   const settings = await getSettings();
   const host = new URL(url).host;
-  if (!settings.savePrompt || settings.neverSave.includes(host) || !(await unlocked())) return;
+  if (!settings.savePrompt || settings.neverSave.includes(host) || !(await isUnlocked())) return;
   await ensureLoaded();
   const matches = await coreCall<VaultItem[]>({ op: "matchUri", url, defaultMatch: settings.defaultUriMatch });
   const same = matches.find((m) => m.sub === username && !m.readOnly);
@@ -186,7 +185,7 @@ export async function handleFrame(req: FrameRequest, tabId: number): Promise<unk
     await openConditional(tabId, ctx.frameId);
     return null;
   }
-  if (!(await unlocked())) return { kind: ctx.kind, locked: true, items: [], passkey: false } satisfies MenuData;
+  if (!(await isUnlocked())) return { kind: ctx.kind, locked: true, items: [], passkey: false } satisfies MenuData;
   const available = await items(ctx.kind, ctx.url);
   const passkey = ctx.kind === "login" && (await conditionalReady(tabId, ctx.frameId));
   if (req.type === "inlineList") return { kind: ctx.kind, locked: false, items: available, passkey } satisfies MenuData;
@@ -197,8 +196,7 @@ export async function handleFrame(req: FrameRequest, tabId: number): Promise<unk
   await touchAutoLock();
   // A flagged item needs the master password, and there is no place to ask for it inside the page:
   // send the user to the extension popup, where the unlock screen is one click away.
-  const cipher = await coreCall<Record<string, unknown>>({ op: "getCipher", id: req.id });
-  if (repromptPending(cipher)) {
+  if (repromptPending(await coreCall<VaultItem>({ op: "cipherSummary", id: req.id }))) {
     await chrome.action.openPopup().catch(() => undefined);
     throw new Error(REPROMPT_MESSAGE);
   }

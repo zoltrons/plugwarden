@@ -1,7 +1,7 @@
 // Vault orchestration in the service worker: encrypted cache in storage.local, sync, and writes.
 // Decryption happens in the offscreen worker; the SW only moves encrypted JSON around.
 import { CLEAR_CLIPBOARD_MS } from "../shared/constants.ts";
-import type { HistoryEntry, SendItem, VaultList } from "../shared/messages.ts";
+import type { HistoryEntry, SendItem, VaultItem, VaultList } from "../shared/messages.ts";
 import { revisionDate } from "../transport/auth.ts";
 import {
   addAttachment as apiAddAttachment,
@@ -30,8 +30,10 @@ import { getLocal, getSession, getSettings, removeLocal, setLocal, type VaultCac
 
 export const CLIPBOARD_ALARM = "clipboard";
 
+export const isUnlocked = async (): Promise<boolean> => (await getSession()).unlocked && (await coreAlive());
+
 export async function requireUnlocked(): Promise<void> {
-  if (!(await getSession()).unlocked || !(await coreAlive())) throw new UserError("wrongPhase", "The vault is locked");
+  if (!(await isUnlocked())) throw new UserError("wrongPhase", "The vault is locked");
 }
 
 async function server(): Promise<string> {
@@ -118,8 +120,7 @@ export async function scheduleClipboardClear(): Promise<void> {
   const { clearClipboardDelay } = await getSettings();
   const ms = CLEAR_CLIPBOARD_MS[clearClipboardDelay] ?? CLEAR_CLIPBOARD_MS.fiveMinutes;
   if (!ms) return void (await chrome.alarms.clear(CLIPBOARD_ALARM));
-  // chrome.alarms will not fire sooner than 30 s, so the short choices are rounded up to that.
-  await chrome.alarms.create(CLIPBOARD_ALARM, { delayInMinutes: Math.max(ms, 30_000) / 60_000 });
+  await chrome.alarms.create(CLIPBOARD_ALARM, { delayInMinutes: ms / 60_000 });
 }
 
 /** Puts `text` on the clipboard from the offscreen document and arms the clear only if that worked. */
@@ -173,8 +174,8 @@ export async function importVault(text: string): Promise<{ imported: number; ski
 // Bodies travel base64 through the message hops like Send files (same size cap).
 
 export async function downloadAttachment(cipherId: string, attachmentId: string): Promise<{ fileName: string; data: string }> {
-  const item = await coreCall<Record<string, unknown> & { attachments?: { id: string; fileName?: string }[] }>({ op: "getCipher", id: cipherId });
-  if (repromptPending(item)) throw new UserError("reprompt", REPROMPT_MESSAGE);
+  if (repromptPending(await coreCall<VaultItem>({ op: "cipherSummary", id: cipherId }))) throw new UserError("reprompt", REPROMPT_MESSAGE);
+  const item = await coreCall<{ attachments?: { id: string; fileName?: string }[] }>({ op: "getCipher", id: cipherId });
   const att = item.attachments?.find((a) => a.id === attachmentId);
   if (!att) throw new UserError("invalid", "Attachment not found");
   const body = await apiDownloadAttachment(await server(), await accessToken(), cipherId, attachmentId);

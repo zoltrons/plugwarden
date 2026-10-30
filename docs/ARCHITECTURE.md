@@ -158,7 +158,7 @@ Other content scripts are registered at runtime (`chrome.scripting.registerConte
   log out.
 * Settings live in `chrome.storage.local` too: lock/timeout, inline menu (all/cards/identities),
   save prompt + never-save hosts, default password manager, favicons, TOTP copy, context-menu entry,
-  default URI match strategy, clear-clipboard delay (10 s … 5 min, or never), autofill on page load
+  default URI match strategy, clear-clipboard delay (30 s … 5 min, or never), autofill on page load
   + its default, and cards/identities in the tab view. `lastUsed` (cipher id → ms) is the only other
   local state: it decides which login page-load autofill prefers.
 * `chrome.storage.local` also holds biometric unlock: the user key wrapped with a key derived from

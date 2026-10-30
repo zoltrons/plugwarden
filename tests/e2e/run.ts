@@ -169,6 +169,8 @@ const pages: Record<string, string> = {
   "/card": `<form><input id="cn" autocomplete="cc-name"><input id="cc" autocomplete="cc-number"><select id="m" autocomplete="cc-exp-month"><option></option><option>01</option><option>02</option></select><input id="y" name="exp-year"><input id="cvc" name="cvc"></form>`,
   // Login fields inside an open shadow root.
   "/shadow": `<div id="host"></div><script>document.getElementById("host").attachShadow({ mode: "open" }).innerHTML = ${JSON.stringify(LOGIN_FORM)};</script>`,
+  // Fills the form and fires submit on load, with no user gesture at all.
+  "/forge": `${LOGIN_FORM}<script>onload = () => { document.getElementById("u").value = "forged-user"; document.getElementById("p").value = "forged-guess"; document.querySelector("form").dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); };</script>`,
   "/change": `<form onsubmit="return false"><input id="u" autocomplete="username"><input id="cur" type="password" autocomplete="current-password"><input id="new" type="password" autocomplete="new-password"><input id="rep" type="password"><button>Change</button></form>`,
   "/framed": `<p>outer</p><iframe id="f" src="/login" style="width:500px;height:200px"></iframe>`,
   // A zero-size password decoy in front of the real form, and a two-step login with no password at all.
@@ -369,6 +371,20 @@ try {
       await chrome.storage.local.set({ settings: { ...settings, timeoutAction: "lock" } });
     });
     await loginAs(argon);
+    await expectUnlocked();
+  });
+
+  await step("an abandoned two-step login frees its master key without the popup", async () => {
+    await logout();
+    await loginAs(totpUser);
+    await page.getByRole("heading", { name: "Two-step login" }).waitFor();
+    const pending = () => sw.evaluate(async () => !!(await chrome.storage.session.get("session")).session?.pending);
+    assert.equal(await pending(), true);
+    assert.ok(await sw.evaluate(() => chrome.alarms.get("pendingLogin")), "expiry alarm not scheduled");
+    await sw.evaluate(() => chrome.alarms.create("pendingLogin", { when: Date.now() + 100 }));
+    await poll("pending login freed", async () => !(await pending()));
+    await page.goto(popupUrl);
+    await loginAs(pbkdf2);
     await expectUnlocked();
   });
 
@@ -985,6 +1001,19 @@ try {
     assert.ok(await sw.evaluate(() => chrome.alarms.get("clipboard")), "clipboard clear alarm not scheduled");
   });
 
+  await step("a TOTP refresh is not activity: an open item cannot keep the vault unlocked", async () => {
+    await reopenPopup();
+    await page.getByRole("heading", { name: "On this site — localhost:8099" }).waitFor();
+    await page.waitForTimeout(500); // let the popup's own start-up requests settle
+    const { data } = await page.evaluate(() => chrome.runtime.sendMessage({ type: "pageMatches" }));
+    const id = data.items.find((i: { hasTotp: boolean }) => i.hasTotp).id;
+    const until = () => sw.evaluate(async () => (await chrome.storage.session.get("session")).session.unlockedUntil);
+    const before = await until();
+    const r = await page.evaluate((id) => chrome.runtime.sendMessage({ type: "totp", id }), id);
+    assert.equal(r.ok, true);
+    assert.equal(await until(), before);
+  });
+
   const shortcut = () =>
     sw.evaluate(async () => {
       const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
@@ -1033,7 +1062,8 @@ try {
     const menuId = `plugwarden-autofill:${data.items[0].id}`;
     // contextMenus has no getter; update() fails for an id that does not exist.
     const menuExists = (mid: string) => sw.evaluate((m) => new Promise((r) => chrome.contextMenus.update(m, {}, () => r(!chrome.runtime.lastError))), mid);
-    assert.equal(await menuExists(menuId), true);
+    // The popup's own sync rebuilds the menu (removeAll + create) after the badge is already up.
+    await poll("context menu entry", () => menuExists(menuId) as Promise<boolean>);
     await setFields("", "");
     const r = await sw.evaluate(async (m) => {
       const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
@@ -1080,7 +1110,10 @@ try {
   const frameOf = async (p: Page, file: string) => {
     for (let i = 0; i < 100; i++) {
       const f = p.frames().find((x) => x.url().includes(`/${file}`));
-      if (f) return f;
+      if (f) {
+        await p.waitForTimeout(1000); // guardClicks ignores clicks until the frame was visible for 300 ms
+        return f;
+      }
       await p.waitForTimeout(100);
     }
     throw new Error(`${file} did not appear`);
@@ -1133,6 +1166,12 @@ try {
     await (await frameOf(loginPage, "menu.html")).getByRole("button", { name: "Fill Visa" }).click();
     await loginPage.waitForFunction(() => (document.getElementById("cc") as HTMLInputElement).value !== "");
     assert.deepEqual(await values(loginPage, ["cn", "cc", "m", "y", "cvc"]), ["Ada L", "4111111111111111", "01", "2030", "123"]);
+  });
+
+  await step("save bar: a page's own submit events without a gesture offer nothing", async () => {
+    await loginPage.goto(`${SITE}/forge`);
+    await loginPage.waitForTimeout(1500);
+    assert.equal(await loginPage.locator("plugwarden-bar").count(), 0, "a synthetic submit showed the bar");
   });
 
   await step("save bar: a submitted new login is offered and saved", async () => {
@@ -1202,6 +1241,42 @@ try {
     const c = (await s.ciphers()).find((x) => x.login?.username === "bar-user" && !x.deletedDate);
     s.done();
     assert.equal(c?.login.password, "bar-pass-3");
+  });
+
+  await step("lock drops a typed password waiting in the save bar", async () => {
+    if (page.isClosed()) await reopenPopup();
+    await loginPage.goto(`${SITE}/login`);
+    await loginPage.fill("#u", "lock-user");
+    await loginPage.fill("#p", "lock-pass");
+    await loginPage.keyboard.press("Escape");
+    await loginPage.getByRole("button", { name: "Sign in" }).click();
+    await frameOf(loginPage, "bar.html");
+    const waiting = () => sw.evaluate(async () => Object.keys(await chrome.storage.session.get(null)).filter((k) => k.startsWith("save:")).length);
+    assert.equal(await waiting(), 1);
+    await page.evaluate(() => chrome.runtime.sendMessage({ type: "lock" }));
+    assert.equal(await waiting(), 0);
+    await unlockIfLocked();
+  });
+
+  await step("lock does not wait behind a slow server call", async () => {
+    await sw.evaluate(() => {
+      const g = globalThis as any;
+      g.realFetch = g.fetch;
+      g.fetch = (...a: Parameters<typeof fetch>) => new Promise((r) => (g.releaseFetch = () => r(g.realFetch(...a))));
+    });
+    const sync = page.evaluate(() => chrome.runtime.sendMessage({ type: "sync", force: true }));
+    await poll("sync in flight", () => sw.evaluate(() => !!(globalThis as any).releaseFetch));
+    const locked = page.evaluate(() => chrome.runtime.sendMessage({ type: "lock" })).then(() => "locked");
+    const result = await Promise.race([locked, new Promise((r) => setTimeout(() => r("still waiting"), 5000))]);
+    await sw.evaluate(() => {
+      const g = globalThis as any;
+      g.fetch = g.realFetch;
+      g.releaseFetch();
+      delete g.releaseFetch;
+    });
+    await sync;
+    assert.equal(result, "locked");
+    await unlockIfLocked();
   });
 
   await step("inline menu: a menu frame without the page's nonce is refused", async () => {

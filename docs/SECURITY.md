@@ -47,10 +47,12 @@ freed rather than zeroed in place.
 5. **Only the service worker may talk to the offscreen document.** `sender.url === background.js`,
    `sender.tab` absent (`src/offscreen/offscreen.ts`). Conversely the worker answers only its parent.
 
-6. **Secrets are never written unencrypted to disk.** `storage.local` holds the encrypted cache, the
-   protected user key, the wrapped PIN and an encrypted generator history. Access tokens and the whole
-   decrypted vault live in `storage.session` (memory only). Both stores are set to
-   `TRUSTED_CONTEXTS` on *every* worker start, so content scripts cannot read them.
+6. **Vault secrets are never written unencrypted to disk.** `storage.local` holds the encrypted cache, the
+   protected user key, the wrapped PIN and an encrypted generator history. The refresh token and the 2FA
+   remember tokens are the exception, see Known gaps. Access tokens, and a typed password waiting in the
+   save bar until it expires or the vault locks, live in `storage.session` (memory only); the decrypted
+   vault lives in the crypto worker. Both stores are set to `TRUSTED_CONTEXTS` on *every* worker start, so
+   content scripts cannot read them.
 
 7. **The server is not trusted with URLs.** `http://` is refused except for loopback
    (`src/shared/url.ts`), the API client sends `credentials: "omit"`, `redirect: "error"`, and an
@@ -59,7 +61,7 @@ freed rather than zeroed in place.
 
 8. **2FA state is scoped and short-lived.** Remember-device tokens are keyed by `<server>|<email>` so
    they are never replayed to another server; a pending 2FA login holds a master-key handle, so an
-   abandoned attempt is freed as soon as it expires (`getState` → `cancelTwoFactor`).
+   abandoned attempt is freed when it expires, by an alarm that needs no open popup (`PENDING_ALARM`).
 
 8b. **Every unlock path ends in the same place.** Master password, PIN and biometrics all go through
     `afterUnlock` (`src/background/account.ts`), which sets `unlocked` and arms the auto-lock, so no path
@@ -78,7 +80,8 @@ freed rather than zeroed in place.
 
 11. **Passkeys are bound to the origin.** `checkRpId` requires the RP ID to be the origin's host or a
     registrable parent, on a secure origin, and never a public suffix — including when the page's own
-    host *is* the public suffix. The private key stays in the worker; only signatures leave.
+    host *is* the public suffix. Signing happens in the worker. The private key leaves it only as part of
+    the full item, when the item is opened for viewing or editing (see Known gaps).
 
 12. **Rendered data is text, not markup.** No `innerHTML` anywhere; the `h()` helper sets properties
     from static keys and `textContent` for values, so vault, server and page strings cannot become
@@ -94,6 +97,13 @@ freed rather than zeroed in place.
 
 ## Known gaps
 
+- **The refresh token and 2FA remember tokens are on disk in clear text** (`storage.local`), because they must
+  survive a browser restart without the master password. Anyone who can copy the browser profile can use them to
+  fetch the still-encrypted vault and to change or delete items on the server, but not to read anything.
+- **Plain text passes through the service worker and the popup in a few places.** The fill data, a TOTP code, the
+  full item for the popup and for a save-bar update go through the service worker in transit; it does not keep
+  them. The popup holds an opened item, including a passkey's private key, because editing sends the whole item
+  back. Checks that need no secret use `cipherSummary`.
 - **Updates are only as trustworthy as the release pipeline.** Installed copies follow
   `releases/latest/download/updates.xml` (`docs/UPDATES.md`). The browser verifies each `.crx` against the
   extension's key, so a build signed with another key is refused, but anyone who can push a `v*` tag and read

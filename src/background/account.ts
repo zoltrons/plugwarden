@@ -41,6 +41,7 @@ export class UserError extends Error {
 }
 
 const PENDING_TTL_MS = 10 * 60_000;
+export const PENDING_ALARM = "pendingLogin";
 
 /**
  * A 2FA "remember me" token is only valid for the server that issued it, so it is stored per server:
@@ -139,9 +140,10 @@ export async function login(rawEmail: string, password: string): Promise<void> {
         delete all[rememberKey(base, email)];
         await setLocal("rememberTokens", all);
       }
-      await updateSession({
-        pending: { email, kdf, handle, challenge: e.challenge, expiresAt: Date.now() + PENDING_TTL_MS },
-      });
+      const expiresAt = Date.now() + PENDING_TTL_MS;
+      await updateSession({ pending: { email, kdf, handle, challenge: e.challenge, expiresAt } });
+      // The pending login holds the master key: free it on time even if the popup is never opened again.
+      await chrome.alarms.create(PENDING_ALARM, { when: expiresAt });
       return;
     }
     await coreCall({ op: "freeKey", handle }).catch(() => undefined);

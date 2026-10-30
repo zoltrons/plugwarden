@@ -59,6 +59,9 @@ export async function verifyPassword(base: string, token: string, masterPassword
 const path = (cipherId: string, attachmentId?: string) =>
   `/api/ciphers/${encodeURIComponent(cipherId)}/attachment${attachmentId ? `/${encodeURIComponent(attachmentId)}` : ""}`;
 
+/** The default request timeout is too short for a 25 MB body on a slow uplink. */
+const uploadTimeout = () => AbortSignal.timeout(5 * 60_000);
+
 /** An encrypted attachment for a 25 MB file, with the EncArrayBuffer framing: 40 MB is ample. */
 const MAX_ATTACHMENT_BYTES = 40 * 1024 * 1024;
 
@@ -92,7 +95,7 @@ export async function addAttachment(base: string, token: string, cipherId: strin
   const data = new FormData();
   data.append("data", new Blob([body as Uint8Array<ArrayBuffer>]), meta.fileName);
   // Without its body the attachment is broken: remove it again if the upload fails.
-  await call(base, "POST", path(cipherId, attachmentId), { token, data }).catch(async (e: unknown) => {
+  await call(base, "POST", path(cipherId, attachmentId), { token, data, signal: uploadTimeout() }).catch(async (e: unknown) => {
     await call(base, "DELETE", path(cipherId, attachmentId), { token }).catch(() => undefined);
     throw e;
   });
@@ -115,7 +118,7 @@ export async function createFileSend(base: string, token: string, send: Record<s
 export async function uploadSendFile(base: string, token: string, sendId: string, fileId: string, fileName: string, body: Uint8Array): Promise<void> {
   const data = new FormData();
   data.append("data", new Blob([body as Uint8Array<ArrayBuffer>]), fileName);
-  await call(base, "POST", `/api/sends/${encodeURIComponent(sendId)}/file/${encodeURIComponent(fileId)}`, { token, data });
+  await call(base, "POST", `/api/sends/${encodeURIComponent(sendId)}/file/${encodeURIComponent(fileId)}`, { token, data, signal: uploadTimeout() });
 }
 
 export async function updateSend(base: string, token: string, id: string, send: Record<string, unknown>): Promise<Record<string, unknown>> {

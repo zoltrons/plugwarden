@@ -120,6 +120,8 @@ function get(id: string): Json {
 /** Full decrypted item (incl. secrets) for the item view / edit form. */
 export const getCipher = (id: string): Json => get(id);
 
+export const cipherSummary = (id: string): VaultItem => summary(get(id));
+
 /**
  * Encrypts an edited/new personal Login or Note. Mirrors the official clients: a changed password is
  * pushed to passwordHistory (max 5), and edits carry lastKnownRevisionDate so the server refuses

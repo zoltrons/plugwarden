@@ -1,7 +1,7 @@
 // Popup. Talks only to the service worker through the typed message bus: no crypto, no network.
 import { AUTO_LOCK_CHOICES, CLEAR_CLIPBOARD_CHOICES, type ClearClipboardDelay, TWO_FACTOR, URI_MATCH, URI_MATCH_ADVANCED } from "../shared/constants.ts";
 import type { Request, State } from "../shared/messages.ts";
-import { normalizeServerUrl, originPattern } from "../shared/url.ts";
+import { normalizeServerUrl } from "../shared/url.ts";
 import { applyTheme, type Child, h, inPanel, savedTheme, send, t, THEMES, withChevron } from "./dom.ts";
 import { icon, type IconName } from "./icons.ts";
 import { createBiometricCredential, getBiometricPrf, platformAuthenticatorAvailable } from "./biometric.ts";
@@ -131,21 +131,9 @@ function setupView(): HTMLElement {
       render();
       return;
     }
-    // Must run synchronously inside the user gesture.
-    chrome.permissions.request({ origins: [originPattern(url)] }).then(
-      async (granted) => {
-        if (!granted) {
-          ui.error = t("errPermissionDenied");
-          render();
-          return;
-        }
-        if (await act({ type: "setServer", url }, t("busyCheckingServer"))) ui.editServer = false;
-      },
-      (err: unknown) => {
-        ui.error = String(err);
-        render();
-      },
-    );
+    void act({ type: "setServer", url }, t("busyCheckingServer")).then((ok) => {
+      if (ok) ui.editServer = false;
+    });
   };
   return h(
     "form",
@@ -496,8 +484,6 @@ function autoLockLabel(m: number): string {
 function clearClipboardLabel(v: ClearClipboardDelay): string {
   const key = {
     never: "never",
-    tenSeconds: "tenSeconds",
-    twentySeconds: "twentySeconds",
     thirtySeconds: "thirtySeconds",
     oneMinute: "oneMinute",
     twoMinutes: "twoMinutes",

@@ -12,12 +12,13 @@ import {
   type PasskeyPrompt,
   type PasskeyResult,
   parsePasskeyCall,
+  type VaultItem,
 } from "../shared/messages.ts";
 import { UserError } from "./account.ts";
-import { coreAlive, coreCall } from "./core.ts";
+import { coreCall } from "./core.ts";
 import { REPROMPT_MESSAGE, repromptPending } from "./reprompt.ts";
-import { getLocal, getSession } from "./store.ts";
-import { ensureLoaded, requireUnlocked, save } from "./vault.ts";
+import { getLocal } from "./store.ts";
+import { ensureLoaded, isUnlocked, requireUnlocked, save } from "./vault.ts";
 
 const SCRIPT_IDS = ["pw-passkey-page", "pw-passkey-relay"];
 /**
@@ -56,8 +57,6 @@ export async function ensurePasskeyScripts(): Promise<void> {
 }
 
 const error = (name: string, message: string): PasskeyResult => ({ error: { name, message } });
-
-const unlocked = async () => (await getSession()).unlocked && (await coreAlive());
 
 /** Lets the content script refresh its inline menu (the passkey entry may have appeared or gone). */
 const refreshMenu = (tabId: number, frameId: number) =>
@@ -153,7 +152,7 @@ export function onPasskeyPort(port: chrome.runtime.Port): void {
     mine = p;
     if (conditional) timer = setTimeout(() => void p.done({ fallback: true }), CONDITIONAL_TTL_MS);
     if (call.kind === "get") {
-      if (await unlocked()) {
+      if (await isUnlocked()) {
         // Nothing in the vault can answer this call: stay out of the way, no window.
         const found = await candidates(p, call.options.allow).catch(() => []);
         if (!found.length) return p.done({ fallback: true });
@@ -224,7 +223,7 @@ export async function openConditional(tabId: number, frameId: number): Promise<v
     await requireUnlocked();
     const found = await candidates(p, p.call.options.allow);
     const only = found.length === 1 ? found[0] : undefined;
-    if (only && !repromptPending(await coreCall<Record<string, unknown>>({ op: "getCipher", id: only.itemId }))) {
+    if (only && !repromptPending(await coreCall<VaultItem>({ op: "cipherSummary", id: only.itemId }))) {
       await passkeyDecision(p.id, "use", only.itemId, only.credentialId);
       return;
     }
@@ -249,7 +248,7 @@ export async function passkeyDecision(id: string, action: "use" | "fallback", it
       const c = (await candidates(p, p.call.options.allow)).find((x) => x.itemId === itemId && x.credentialId === credentialId);
       if (!c) throw new UserError("invalid", "Choose one of the passkeys for this site");
       // The window has no password prompt: a flagged item must be confirmed in the popup first (the grant is per item).
-      if (repromptPending(await coreCall<Record<string, unknown>>({ op: "getCipher", id: c.itemId }))) throw new UserError("reprompt", REPROMPT_MESSAGE);
+      if (repromptPending(await coreCall<VaultItem>({ op: "cipherSummary", id: c.itemId }))) throw new UserError("reprompt", REPROMPT_MESSAGE);
       const credential = await coreCall<Record<string, unknown>>({ op: "passkeyAssert", itemId: c.itemId, credentialId: c.credentialId, rpId: p.rpId, origin: p.origin, challenge: p.call.options.challenge });
       p.done({ credential });
     } else {

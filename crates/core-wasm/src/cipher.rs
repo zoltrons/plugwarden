@@ -22,6 +22,7 @@ use bitwarden_crypto::{
     SymmetricKeyAlgorithm,
 };
 use serde_json::{Map, Value, json};
+use sha2::{Digest, Sha256};
 
 use crate::api::{Result, Session, decrypt_symmetric_key, err};
 
@@ -127,10 +128,12 @@ fn apply(obj: &mut Map<String, Value>, f: &mut Leaf) -> Result<()> {
 }
 
 fn decrypt_str(key: &SymmetricCryptoKey, s: &str) -> Result<Option<String>> {
-    // Leaves that are not EncStrings (e.g. dates in new item types) are left untouched.
-    let Ok(enc) = EncString::from_str(s) else {
+    // An empty value holds nothing to protect. Anything else must decrypt and authenticate: accepting
+    // plain text here would let a compromised server forge vault items.
+    if s.is_empty() {
         return Ok(None);
-    };
+    }
+    let enc = EncString::from_str(s).map_err(err)?;
     let plain: String = enc.decrypt_with_key(key).map_err(err)?;
     Ok(Some(plain))
 }
@@ -144,10 +147,33 @@ pub fn decrypt(s: &Session, cipher: &mut Value) -> Result<()> {
     apply(obj, &mut |v| decrypt_str(key, v))
 }
 
+/// Sets every login URI's `uriChecksum` (base64 SHA-256 of the URI, bitwarden-vault `generate_checksum`).
+/// The official clients drop a URI whose checksum is missing or stale when the cipher has its own key.
+fn set_uri_checksums(cipher: &mut Map<String, Value>) {
+    let uris = cipher
+        .iter_mut()
+        .find(|(k, _)| k.eq_ignore_ascii_case("login"))
+        .and_then(|(_, login)| login.as_object_mut())
+        .and_then(|login| {
+            login
+                .iter_mut()
+                .find(|(k, _)| k.eq_ignore_ascii_case("uris"))
+        })
+        .and_then(|(_, uris)| uris.as_array_mut());
+    for uri in uris.into_iter().flatten().filter_map(Value::as_object_mut) {
+        let checksum = str_ci(uri, "uri").map(|u| STANDARD.encode(Sha256::digest(u.as_bytes())));
+        uri.retain(|k, _| !k.eq_ignore_ascii_case("uriChecksum"));
+        if let Some(checksum) = checksum {
+            uri.insert("uriChecksum".into(), checksum.into());
+        }
+    }
+}
+
 pub fn encrypt(s: &Session, cipher: &mut Value) -> Result<()> {
     let obj = cipher.as_object_mut().ok_or("cipher is not an object")?;
     let (base, item) = cipher_keys(s, obj)?;
     let key = item.as_ref().unwrap_or(base);
+    set_uri_checksums(obj);
     apply(obj, &mut |v| {
         let enc: EncString = v.encrypt_with_key(key).map_err(err)?;
         Ok(Some(enc.to_string()))
@@ -270,6 +296,47 @@ mod tests {
             user: SymmetricCryptoKey::make(SymmetricKeyAlgorithm::Aes256CbcHmac),
             private: None,
             orgs,
+        }
+    }
+
+    #[test]
+    fn edited_uri_gets_a_fresh_checksum() {
+        let s = session(HashMap::new());
+        let mut cipher = json!({ "type": 1, "name": "n", "login": { "uris": [
+            { "uri": "https://example.com", "uriChecksum": "stale", "match": null },
+            { "uri": "https://no-checksum.example" },
+        ] } });
+        encrypt(&s, &mut cipher).unwrap();
+        decrypt(&s, &mut cipher).unwrap();
+        // The vector from bitwarden-vault's test_valid_checksum.
+        let uris = &cipher["login"]["uris"];
+        assert_eq!(
+            uris[0]["uriChecksum"],
+            "EAaArVRs5qV39C9S3zO0z9ynVoWeZkuNfeMpsVDQnOk="
+        );
+        assert_eq!(uris[0]["uri"], "https://example.com");
+        assert!(uris[1]["uriChecksum"].is_string());
+    }
+
+    #[test]
+    fn empty_values_pass_and_plain_text_is_refused() {
+        let s = session(HashMap::new());
+        let mut real = json!({ "type": 1, "name": "n" });
+        encrypt(&s, &mut real).unwrap();
+        let name = real["name"].clone();
+
+        let mut empty =
+            json!({ "type": 1, "name": name, "notes": "", "login": { "username": "" } });
+        decrypt(&s, &mut empty).unwrap();
+        assert_eq!(empty["name"], "n");
+        assert_eq!(empty["login"]["username"], "");
+
+        // A compromised server cannot plant an item it could not encrypt.
+        for mut forged in [
+            json!({ "type": 1, "name": "forged" }),
+            json!({ "type": 1, "name": name, "login": { "password": "forged" } }),
+        ] {
+            assert!(decrypt(&s, &mut forged).is_err());
         }
     }
 

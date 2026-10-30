@@ -22,13 +22,11 @@ export const URI_MATCH_CHOICES = [0, 1, 2, 3, 4, 5] as const;
 export const URI_MATCH_ADVANCED: readonly number[] = [URI_MATCH.StartsWith, URI_MATCH.RegularExpression];
 
 /** ClearClipboardDelay, as in clients libs/common/src/autofill/constants. */
-export const CLEAR_CLIPBOARD_CHOICES = ["never", "tenSeconds", "twentySeconds", "thirtySeconds", "oneMinute", "twoMinutes", "fiveMinutes"] as const;
+export const CLEAR_CLIPBOARD_CHOICES = ["never", "thirtySeconds", "oneMinute", "twoMinutes", "fiveMinutes"] as const;
 export type ClearClipboardDelay = (typeof CLEAR_CLIPBOARD_CHOICES)[number];
 /** Milliseconds per choice; the official client defaults to five minutes. */
 export const CLEAR_CLIPBOARD_MS: Record<ClearClipboardDelay, number> = {
   never: 0,
-  tenSeconds: 10_000,
-  twentySeconds: 20_000,
   thirtySeconds: 30_000,
   oneMinute: 60_000,
   twoMinutes: 120_000,

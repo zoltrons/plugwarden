@@ -20,9 +20,14 @@ const html = `<!doctype html><meta charset="utf-8"><form>
 <input id="u" name="username" autocomplete="username">
 <input id="p" name="password" type="password">
 <button type="submit">Log in</button></form>`;
-const server = createServer((_req, res) => {
+// Runs on load, so without the user activation Playwright's evaluate() would grant: a forged conditional create.
+const forged = `<!doctype html><script>
+addEventListener("message", (e) => { if (e.data?.plugwarden === "res") document.title = JSON.stringify(e.data.result); });
+onload = () => postMessage({ plugwarden: "req", id: "forged", kind: "create", conditional: true, options: { rpName: "x", user: { id: "AA", name: "x", displayName: "x" }, challenge: "AA", exclude: [], discoverable: true } }, "*");
+</script>`;
+const server = createServer((req, res) => {
   res.setHeader("content-type", "text/html");
-  res.end(html);
+  res.end(req.url === "/forged" ? forged : html);
 });
 await new Promise((r) => server.listen(0, "127.0.0.1", r));
 const site = `http://localhost:${server.address().port}`;
@@ -122,6 +127,19 @@ try {
   assert.notEqual(states[0], "resolved");
   assert.equal(states[5], "pending", "a conditional call next to a modal one is not refused");
   console.log("ok  plain get opens one approval window; closing it falls back; conditional calls are not refused");
+
+  // A page cannot open the window without a click by marking its create call as conditional.
+  const forgedWindows = [];
+  const onForged = (p) => p.url().includes("popup.html?passkey=") && forgedWindows.push(p);
+  ctx.on("page", onForged);
+  const forgedPage = await ctx.newPage();
+  await forgedPage.goto(`${site}/forged`);
+  await forgedPage.waitForFunction(() => document.title !== "");
+  assert.deepEqual(JSON.parse(await forgedPage.title()), { fallback: true });
+  await new Promise((r) => setTimeout(r, 500));
+  assert.equal(forgedWindows.length, 0, "a forged conditional create opened a window");
+  ctx.off("page", onForged);
+  console.log("ok  a forged conditional create without user activation opens nothing");
 
   assert.deepEqual(pageErrors, []);
   assert.deepEqual(swErrors, []);

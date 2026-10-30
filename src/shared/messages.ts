@@ -374,7 +374,6 @@ export type ErrorCode =
   | "invalid"
   | "network"
   | "alias"
-  | "permission"
   | "badServer"
   | "badCredentials"
   | "badTwoFactor"
@@ -414,6 +413,8 @@ export type CoreRequest =
   | { op: "upsertCipher"; cipher: Record<string, unknown> }
   | { op: "listVault" }
   | { op: "getCipher"; id: string }
+  /** The list entry of one item: no secrets. Enough for a re-prompt or type check. */
+  | { op: "cipherSummary"; id: string }
   | { op: "prepareSave"; item: Record<string, unknown> }
   | { op: "totp"; id: string }
   | { op: "generate"; options: Record<string, unknown> }
@@ -490,6 +491,7 @@ const coreValidators: { [K in CoreRequest["op"]]: Validator<Extract<CoreRequest,
   upsertCipher: obj({ op: literal("upsertCipher"), cipher: record }),
   listVault: obj({ op: literal("listVault") }),
   getCipher: obj({ op: literal("getCipher"), id: str }),
+  cipherSummary: obj({ op: literal("cipherSummary"), id: str }),
   prepareSave: obj({ op: literal("prepareSave"), item: record }),
   totp: obj({ op: literal("totp"), id: str }),
   generate: obj({ op: literal("generate"), options: record }),

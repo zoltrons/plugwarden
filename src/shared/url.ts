@@ -18,6 +18,3 @@ export function normalizeServerUrl(input: string): string {
     throw new Error("Server URL must not contain credentials, a query or a fragment");
   return `${u.origin}${u.pathname.replace(/\/+$/, "")}`;
 }
-
-/** chrome.permissions origin pattern for the server. */
-export const originPattern = (serverUrl: string): string => `${new URL(serverUrl).origin}/*`;

@@ -1,15 +1,16 @@
 // Service worker entry. Stateless: listeners are registered synchronously at top level, every
 // handler reads its state from chrome.storage.
-import { type ErrorCode, PASSKEY_PORT, type PageRequest, parseFrameRequest, parsePageRequest, parseRequest, type Request, type Response, type State } from "../shared/messages.ts";
+import { type ErrorCode, PASSKEY_PORT, type PageRequest, parseFrameRequest, parsePageRequest, parseRequest, type Request, type Response, type State, type VaultItem } from "../shared/messages.ts";
 import { ValidationError } from "../shared/validate.ts";
 import { getServerInfo } from "../transport/config.ts";
-import { normalizeServerUrl, originPattern } from "../shared/url.ts";
+import { normalizeServerUrl } from "../shared/url.ts";
 import { NetworkError } from "../transport/http.ts";
 import {
   cancelTwoFactor,
   confirmReprompt,
   finishSso,
   login,
+  PENDING_ALARM,
   removeBiometric,
   setBiometric,
   setPin,
@@ -76,9 +77,6 @@ async function setServer(input: string): Promise<void> {
   } catch (e) {
     throw new UserError("invalid", (e as Error).message);
   }
-  // The popup requests the optional host permission inside the click handler (user gesture).
-  if (!(await chrome.permissions.contains({ origins: [originPattern(url)] })))
-    throw new UserError("permission", "Access to the server was not granted");
   const info = await getServerInfo(url).catch((e: unknown) => {
     if (e instanceof NetworkError) throw e;
     throw new UserError("badServer", "This does not look like a Bitwarden-compatible server");
@@ -104,7 +102,6 @@ async function handle(req: Request): Promise<unknown> {
     case "importVault":
     case "saveFolder":
     case "deleteFolder":
-    case "totp":
     case "generate":
     case "aliasSettings":
     case "setAliasSettings":
@@ -122,10 +119,9 @@ async function handle(req: Request): Promise<unknown> {
       if (req.type === "vaultList") return vaultList();
       if (req.type === "sync") return (await sync(req.force)) ? vaultList() : null;
       if (req.type === "getItem") {
-        // A flagged item is not decrypted into the popup until the master password is re-entered.
-        const item = await coreCall<Record<string, unknown>>({ op: "getCipher", id: req.id });
-        if (repromptPending(item)) throw new UserError("reprompt", REPROMPT_MESSAGE);
-        return item;
+        // A flagged item does not leave the worker until the master password is re-entered.
+        if (repromptPending(await coreCall<VaultItem>({ op: "cipherSummary", id: req.id }))) throw new UserError("reprompt", REPROMPT_MESSAGE);
+        return coreCall({ op: "getCipher", id: req.id });
       }
       if (req.type === "saveItem") return save(req.item);
       if (req.type === "deleteItem") return trash(req.id);
@@ -137,11 +133,6 @@ async function handle(req: Request): Promise<unknown> {
       if (req.type === "importVault") return importVault(req.text);
       if (req.type === "saveFolder") return saveFolder(req.name, req.id);
       if (req.type === "deleteFolder") return deleteFolder(req.id);
-      if (req.type === "totp") {
-        const item = await coreCall<Record<string, unknown>>({ op: "getCipher", id: req.id });
-        if (repromptPending(item)) throw new UserError("reprompt", REPROMPT_MESSAGE);
-        return coreCall({ op: "totp", id: req.id });
-      }
       if (req.type === "aliasSettings") return getAliasSettings(req.vendor);
       if (req.type === "setAliasSettings") return saveAliasSettings(req.settings);
       if (req.type === "generateAlias") return generateAlias(req.vendor);
@@ -154,6 +145,12 @@ async function handle(req: Request): Promise<unknown> {
       if (req.type === "deleteSend") return deleteSend(req.id);
       if (req.type === "removeSendPassword") return removeSendPassword(req.id);
       return coreCall({ op: "generate", options: req.options });
+    }
+    case "totp": {
+      // No touchAutoLock: an open item refreshes its code on a timer, which must not keep the vault unlocked.
+      await requireUnlocked();
+      if (repromptPending(await coreCall<VaultItem>({ op: "cipherSummary", id: req.id }))) throw new UserError("reprompt", REPROMPT_MESSAGE);
+      return coreCall({ op: "totp", id: req.id });
     }
     case "pageMatches":
     case "fill":
@@ -355,6 +352,8 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, reply: (r: Response<
   // Reads run immediately; anything that changes state or talks to the server is queued, and may
   // change what the badge and the context menu show (unlock, lock, sync, edits).
   if (["getState", "vaultList", "getItem", "totp", "generate", "aliasSettings", "generatorHistory", "downloadAttachment", "pageMatches", "readPageLogin", "sendList", "getSend", "passkeyPrompt", "repromptGranted"].includes(req.type)) void run();
+  // Locking must not wait behind a slow server call: it ends whatever is running by killing the worker.
+  else if (req.type === "lock") void run().then(updateTabUi);
   else queue = queue.then(run, run).then(updateTabUi);
   return true;
 });
@@ -368,6 +367,7 @@ const timeout = async () => {
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === AUTOLOCK_ALARM) void timeout();
   if (alarm.name === CLIPBOARD_ALARM) void clearClipboard();
+  if (alarm.name === PENDING_ALARM) void cancelTwoFactor();
 });
 
 chrome.runtime.onConnect.addListener((port) => {

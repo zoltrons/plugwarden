@@ -1,7 +1,7 @@
 // Lock state and auto-lock (alarms + idle).
 import { coreShutdown } from "./core.ts";
 import { revokeReprompts } from "./reprompt.ts";
-import { getSettings, updateSession } from "./store.ts";
+import { clearPendingSaves, getSettings, updateSession } from "./store.ts";
 
 export const AUTOLOCK_ALARM = "autolock";
 
@@ -27,6 +27,7 @@ export async function lockNow(): Promise<void> {
   // First and synchronous: a re-prompt grant must survive no lock, even one that fails halfway.
   revokeReprompts();
   await updateSession({ unlocked: false, unlockedUntil: undefined, pending: undefined });
+  await clearPendingSaves();
   await chrome.alarms.clear(AUTOLOCK_ALARM);
   await coreShutdown();
   await closeInPageUi();

@@ -60,6 +60,8 @@ function run(req: CoreRequest): unknown {
       return vault.listVault();
     case "getCipher":
       return vault.getCipher(req.id);
+    case "cipherSummary":
+      return vault.cipherSummary(req.id);
     case "prepareSave":
       return vault.prepareSave(req.item);
     case "totp":

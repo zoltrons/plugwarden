@@ -7,13 +7,35 @@ on:
   push:
     tags: ["v*"]
 
-permissions:
-  contents: write
+# Least privilege by default; only the signing job can write a release.
+permissions: {}
 
 jobs:
-  release:
+  # Installed copies update themselves, so a tag must never ship a commit whose CI is not green. CI runs
+  # for pushes to main: a tag on any other commit never gets a result here and fails closed.
+  ci-passed:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions: { checks: read }
+    steps:
+      - name: wait for the ci check of this commit
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          while :; do
+            conclusion="$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs?check_name=ci" --jq '.check_runs[0].conclusion // "pending"')"
+            case "$conclusion" in
+              success) exit 0 ;;
+              pending) sleep 30 ;;
+              *) echo "::error::ci finished as '$conclusion' on $GITHUB_SHA"; exit 1 ;;
+            esac
+          done
+
+  # Runs third-party install and build scripts, so it never sees CRX_KEY.
+  build:
+    needs: ci-passed
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions: { contents: read }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { persist-credentials: false }
@@ -21,12 +43,29 @@ jobs:
         with: { node-version-file: .nvmrc }
       - run: rustup toolchain install # from rust-toolchain.toml
       - run: cargo install wasm-bindgen-cli --version "$(sed -n 's/^wasm-bindgen = "\(.*\)".*/\1/p' upstream.lock)" --locked
-      # Chromium 156 from Playwright: the runner's Chrome may be older than minimum_chrome_version.
-      - run: npm ci && npx playwright-core install --with-deps chromium
+      - run: npm ci
       - run: npm i -g binaryen@132.0.0 && bash tools/build-wasm.sh --simd
       - run: node tools/fetch-psl.mjs && npm run typecheck && npm test && npm run build && npm run size
       - name: tag matches the manifest version
         run: test "v$(node -p "require('./dist/ext/manifest.json').version")" = "$GITHUB_REF_NAME"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with: { name: extension, path: dist/ext, if-no-files-found: error }
+
+  # Holds CRX_KEY: installs no build tooling and runs no package install scripts.
+  sign:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions: { contents: write }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with: { node-version-file: .nvmrc }
+      # Chromium 156 from Playwright: the runner's Chrome may be older than minimum_chrome_version.
+      - run: npm ci --ignore-scripts && npx playwright-core install --with-deps chromium
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with: { name: extension, path: dist/ext }
       - name: pack .crx and .zip
         env:
           CRX_KEY: ${{ secrets.CRX_KEY }}

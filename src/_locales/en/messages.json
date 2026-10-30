@@ -32,9 +32,6 @@
   "setupHint": {
     "message": "Plugwarden only asks for access to this one server."
   },
-  "errPermissionDenied": {
-    "message": "Access to the server was not granted."
-  },
   "busyCheckingServer": {
     "message": "Checking server…"
   },
@@ -1085,12 +1082,6 @@
   },
   "never": {
     "message": "Never"
-  },
-  "tenSeconds": {
-    "message": "10 seconds"
-  },
-  "twentySeconds": {
-    "message": "20 seconds"
   },
   "thirtySeconds": {
     "message": "30 seconds"

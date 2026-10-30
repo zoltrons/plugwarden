@@ -62,7 +62,7 @@ menu.html/bar.html frames      --FrameRequest-->  background/inline.ts
 
 - Service worker is killed at any time: no state in globals except caches you can rebuild; keep
   `storage.session` for lock state.
-- Decrypted data and keys live only in the offscreen worker; the SW and `storage.*` see ciphertext.
+- Keys and the decrypted vault live only in the offscreen worker; `storage.*` holds ciphertext (exceptions in SECURITY.md's Known gaps). Checks that need no secret use `cipherSummary`, not `getCipher`.
 - Every message crossing a trust boundary is validated (`messages.ts`); page-controlled data is size-capped.
 - Server-supplied URLs must stay on the configured server; http is allowed for loopback only.
 - Lock must go through `lockNow()` (closes in-page UI, revokes re-prompt grants, frees keys).

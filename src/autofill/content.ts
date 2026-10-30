@@ -180,14 +180,21 @@ addEventListener("pageshow", (e) => {
 
 // ---------- save / update detection ----------
 
+const REPORT_GAP_MS = 5000;
+
 let reported = "";
+let lastReport = 0;
 
 function report() {
+  // A page can fire submit events itself, and whether the bar appears tells it if a guessed password
+  // matches the saved one: only a real gesture counts, and only one guess per REPORT_GAP_MS.
+  if (!navigator.userActivation.isActive) return;
   const login = readLogin();
   if (!login) return;
   const key = `${login.username}\n${login.password}`;
-  if (key === reported) return;
+  if (key === reported || Date.now() - lastReport < REPORT_GAP_MS) return;
   reported = key;
+  lastReport = Date.now();
   void chrome.runtime.sendMessage({ type: "loginSubmitted", username: login.username, password: login.password }).catch(() => undefined);
 }
 
