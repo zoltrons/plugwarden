@@ -34,16 +34,25 @@ thread_local! {
 }
 
 /// Bitwarden KdfType: 0 = PBKDF2-SHA256, 1 = Argon2id (memory in MiB).
+///
+/// The server supplies these numbers, so they are range-checked like the official clients do: a server
+/// that answers `iterations: 1` would get a master-password hash that is cheap to brute-force, and a
+/// huge value would hang or exhaust the worker.
 pub fn kdf_from_params(kind: u8, iterations: u32, memory: u32, parallelism: u32) -> Result<Kdf> {
-    let nz = |v: u32, what: &str| NonZeroU32::new(v).ok_or_else(|| format!("{what} must be > 0"));
+    let in_range = |v: u32, min: u32, max: u32, what: &str| {
+        if !(min..=max).contains(&v) {
+            return Err(format!("KDF {what} must be between {min} and {max}, the server sent {v}"));
+        }
+        Ok(NonZeroU32::new(v).expect("min is at least 1"))
+    };
     match kind {
         0 => Ok(Kdf::PBKDF2 {
-            iterations: nz(iterations, "iterations")?,
+            iterations: in_range(iterations, 5_000, 2_000_000, "iterations")?,
         }),
         1 => Ok(Kdf::Argon2id {
-            iterations: nz(iterations, "iterations")?,
-            memory: nz(memory, "memory")?,
-            parallelism: nz(parallelism, "parallelism")?,
+            iterations: in_range(iterations, 2, 10, "iterations")?,
+            memory: in_range(memory, 15, 1024, "memory")?,
+            parallelism: in_range(parallelism, 1, 16, "parallelism")?,
         }),
         k => Err(format!("unsupported kdf type {k}")),
     }
@@ -301,6 +310,20 @@ mod tests {
 use bitwarden_crypto::SymmetricKeyAlgorithm;
 
     use super::*;
+
+    #[test]
+    fn kdf_params_are_range_checked() {
+        assert!(kdf_from_params(0, 600_000, 0, 0).is_ok());
+        assert!(kdf_from_params(1, 3, 64, 4).is_ok());
+        // A downgrade (cheap to brute-force) and an exhaustion attempt, for both KDFs.
+        assert!(kdf_from_params(0, 1, 0, 0).is_err());
+        assert!(kdf_from_params(0, u32::MAX, 0, 0).is_err());
+        assert!(kdf_from_params(1, 1, 64, 4).is_err());
+        assert!(kdf_from_params(1, 3, 1, 4).is_err());
+        assert!(kdf_from_params(1, 3, 1_000_000, 4).is_err());
+        assert!(kdf_from_params(1, 3, 64, 0).is_err());
+        assert!(kdf_from_params(2, 600_000, 0, 0).is_err());
+    }
 
     #[test]
     fn pin_unlock_roundtrip() {
