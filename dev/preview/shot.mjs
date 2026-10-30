@@ -41,7 +41,7 @@ function webkitPath() {
 const browser = await webkit.launch({ executablePath: webkitPath() });
 const errors = [];
 
-async function open(path, { width = 380, height = 640 } = {}) {
+async function open(path, { width = 380, height = 540 } = {}) {
   const page = await browser.newPage({ viewport: { width, height }, deviceScaleFactor: 2 });
   page.on("console", (m) => {
     // Favicon requests to the fake server host fail in the preview; they are expected.
@@ -73,6 +73,21 @@ const scenes = {
     await page.getByRole("searchbox").waitFor();
     await page.getByRole("navigation").getByRole("button", { name: "Generator" }).click();
   },
+  send: async (page) => {
+    await page.getByRole("searchbox").waitFor();
+    await page.getByRole("navigation").getByRole("button", { name: "Send" }).click();
+  },
+  sendFile: async (page) => {
+    await page.getByRole("searchbox").waitFor();
+    await page.getByRole("navigation").getByRole("button", { name: "Send" }).click();
+    await page.getByRole("button", { name: "New Send" }).click();
+    await page.getByRole("button", { name: "File", exact: true }).click();
+  },
+  folders: async (page) => {
+    await page.getByRole("searchbox").waitFor();
+    await page.getByRole("button", { name: "Folders", exact: true }).click();
+  },
+  passkey: async (page) => page.getByRole("heading").first().waitFor(),
   locked: async () => {},
   login: async () => {},
   twofactor: async () => {},
@@ -81,7 +96,7 @@ const scenes = {
 
 for (const scheme of ["light", "dark"]) {
   for (const [name, run] of Object.entries(scenes)) {
-    const page = await open(`/?scene=${name}`);
+    const page = await open(name === "passkey" ? "/?scene=passkey&passkey=demo" : `/?scene=${name}`);
     await page.emulateMedia({ colorScheme: scheme });
     await page.waitForTimeout(120);
     await run(page);

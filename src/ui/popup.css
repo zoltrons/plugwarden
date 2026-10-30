@@ -203,6 +203,20 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   box-shadow: 0 0 0 1px var(--focus-ring), 0 0 0 4px var(--focus-ring);
 }
 input[type="range"]:disabled { opacity: 0.45; cursor: default; }
+/* File pickers: a tinted pill instead of the browser's default button. */
+input[type="file"] { color: var(--muted); font-size: 12px; max-width: 100%; }
+input[type="file"]::file-selector-button {
+  height: 26px; margin: 0 8px 0 0; padding: 0 10px;
+  border: 0; border-radius: var(--r-sm);
+  background: var(--primary-weak); color: var(--link);
+  font: 600 12px/1 var(--font); letter-spacing: 0;
+  cursor: pointer;
+  transition: background-color var(--fast) var(--ease);
+}
+input[type="file"]::file-selector-button:hover { background-image: linear-gradient(var(--tint-strong), var(--tint-strong)); }
+/* Number inputs: no native spinners. */
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 select { -webkit-appearance: none; appearance: none; }
 /* Material Rounded glyphs are filled paths, not strokes. */
 svg.i { width: 18px; height: 18px; flex: none; fill: currentColor; stroke: none; }
@@ -272,6 +286,8 @@ svg.i { width: 18px; height: 18px; flex: none; fill: currentColor; stroke: none;
 .icon-btn.on { color: var(--primary); }
 .icon-btn.done { color: var(--success); }
 .icon-btn.danger { color: var(--critical); }
+.icon-btn.delete { color: var(--muted); }
+.icon-btn.delete:hover { color: var(--critical); }
 .icon-btn.sm { width: 26px; height: 26px; border-radius: var(--r-sm); }
 .icon-btn.sm svg.i { width: 16px; height: 16px; }
 
@@ -287,12 +303,15 @@ svg.i { width: 18px; height: 18px; flex: none; fill: currentColor; stroke: none;
 .logo svg.i { width: 26px; height: 26px; }
 .brand h1 { font-size: 18px; font-weight: 600; line-height: 1.2; margin: 0; }
 .brand p { margin: 0; color: var(--muted); font-size: 12px; }
+/* Same pastel monogram ground as the vault list tiles, tinted by the account name. */
 .avatar {
   width: 56px; height: 56px; border-radius: var(--r-lg);
   display: grid; place-items: center;
   font-size: 22px; font-weight: 600;
-  background: var(--primary-weak); color: var(--link);
+  background: hsl(var(--h, 210) 48% var(--tile-l));
+  color: hsla(0 0% 0% / var(--tile-fg));
 }
+.brand p.host { font-size: 11px; color: var(--faint); }
 
 /* ---------- fields (8 px radius, 1 px inset border, blue halo on focus) ---------- */
 
@@ -324,8 +343,9 @@ svg.i { width: 18px; height: 18px; flex: none; fill: currentColor; stroke: none;
 .select > svg.i { width: 14px; height: 14px; color: var(--link); pointer-events: none; }
 .select:hover { background-image: linear-gradient(var(--tint), var(--tint)); }
 .select:focus-within { box-shadow: inset 0 0 0 1px var(--focus-ring), 0 0 0 3px var(--focus-ring); }
-.field .select { flex: 1; width: 100%; padding: 0; }
-.field .select-value { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 14px; font-weight: 400; color: var(--text); }
+/* Inside a field the select shrinks to its value so the chevron sits right next to it. */
+.field .select { flex: 0 1 auto; align-self: flex-start; width: auto; max-width: 100%; padding: 0; }
+.field .select-value { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 14px; font-weight: 400; color: var(--text); }
 .field .select > svg.i { color: var(--muted); }
 .row .select { flex: none; max-width: 60%; }
 .field-card .select { flex: none; padding: 3px 6px; border: 1px solid var(--outline); border-radius: var(--r-sm); }
@@ -446,6 +466,16 @@ a.row { text-decoration: none; color: var(--text); }
 .row.field-row > svg.i:first-child { margin-top: -1px; }
 /* Trailing value actions stay a tight pair instead of inheriting the row gap. */
 .field-actions { display: flex; align-items: center; gap: 2px; flex: none; }
+/* Inline-editable text inside a row (folder names, the new-folder field). */
+.row-input {
+  flex: 1; min-width: 0;
+  border: 1px solid transparent; border-radius: var(--r-sm);
+  background: transparent; padding: 5px 8px;
+  font-size: 14px; line-height: var(--line); color: var(--text);
+}
+.row-input::placeholder { color: var(--faint); }
+.row-input:hover { background-image: linear-gradient(var(--tint), var(--tint)); }
+.row-input:focus { outline: 0; box-shadow: inset 0 0 0 1px var(--focus-ring), 0 0 0 3px var(--focus-ring); }
 .row .value.mono { font-size: 13px; }
 /* Password colorization: digits blue, symbols red. */
 .row .value .d, .generated .d { color: var(--link); }

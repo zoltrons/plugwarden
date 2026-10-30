@@ -110,7 +110,7 @@ function listView(ctx: Ctx): HTMLElement {
   return h(
     "div",
     { class: "page" },
-    h("div", { class: "top" }, h("h1", { style: "flex:1" }, t("send"))),
+    h("div", { class: "top" }, h("h1", { class: "grow" }, t("send"))),
     errorBox(),
     sd.loading && !sd.list
       ? h("div", { class: "progress" })
@@ -129,9 +129,13 @@ function listView(ctx: Ctx): HTMLElement {
                   h("span", { class: "title" }, s.failed ? t("decryptFailed") : s.name),
                   h("span", { class: "sub" }, [t("sendDeletes", date(s.deletionDate)), s.hasPassword ? t("password") : "", s.disabled ? t("sendDisabled") : ""].filter(Boolean).join(" · ")),
                 ),
-                s.failed ? null : iconButton("copy", `${t("copyLink")} ${s.name}`, () => void copy(ctx, s.link)),
-                s.failed ? null : iconButton("edit", `${t("edit")} ${s.name}`, () => ((sd.error = undefined), void editSend(ctx, s))),
-                iconButton("trash", sd.confirmDelete === s.id ? t("tapAgainToDelete") : `${t("delete")} ${s.name}`, () => void remove(ctx, s.id), sd.confirmDelete === s.id ? { class: "icon-btn danger" } : {}),
+                h(
+                  "span",
+                  { class: "field-actions" },
+                  s.failed ? null : iconButton("copy", `${t("copyLink")} ${s.name}`, () => void copy(ctx, s.link)),
+                  s.failed ? null : iconButton("edit", `${t("edit")} ${s.name}`, () => ((sd.error = undefined), void editSend(ctx, s))),
+                  iconButton("trash", sd.confirmDelete === s.id ? t("tapAgainToDelete") : `${t("delete")} ${s.name}`, () => void remove(ctx, s.id), sd.confirmDelete === s.id ? { class: "icon-btn danger" } : {}),
+                ),
               ),
             ),
           )

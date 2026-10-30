@@ -56,6 +56,7 @@ export function passkeyScreen(ctx: Ctx): HTMLElement {
                   { type: "button", class: "row", role: "listitem", disabled: pk.busy, onclick: () => void decide(ctx, "use", c.itemId, c.credentialId) },
                   tile(c.name, 1),
                   h("div", { class: "body" }, h("span", { class: "title" }, c.name), h("span", { class: "sub" }, c.userName)),
+                  icon("chevron"),
                 ),
               ),
             )

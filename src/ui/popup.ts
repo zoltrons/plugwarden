@@ -7,7 +7,7 @@ import { icon, type IconName } from "./icons.ts";
 import { createBiometricCredential, getBiometricPrf, platformAuthenticatorAvailable } from "./biometric.ts";
 import { passkeyRequestId, passkeyScreen } from "./passkey.ts";
 import { resetSend, sendScreen, startTextSend } from "./send.ts";
-import { type Ctx, generatorScreen, iconButton, refreshPageMatches, resetVault, setIconBase, toastEl, uriMatchLabel, vaultRouteKey, vaultScreen } from "./vault.ts";
+import { type Ctx, generatorScreen, iconButton, monogramHue, refreshPageMatches, resetVault, setIconBase, toastEl, uriMatchLabel, vaultRouteKey, vaultScreen } from "./vault.ts";
 
 // ---------- state ----------
 
@@ -368,7 +368,7 @@ function twoFactorView(s: State): HTMLElement {
         })
       : null,
     supported.length
-      ? h("label", { class: "check", for: "remember" }, h("div", { class: "body" }, t("rememberDevice")), h("span", { class: "switch" }, remember, h("span")))
+      ? h("label", { class: "check check-card", for: "remember" }, h("div", { class: "body" }, t("rememberDevice")), h("span", { class: "switch" }, remember, h("span")))
       : null,
     errorBox(),
     busyBar(),
@@ -432,10 +432,10 @@ function lockedView(s: State): HTMLElement {
     h(
       "div",
       { class: "brand" },
-      h("div", { class: "avatar", "aria-hidden": "true" }, (s.email ?? "?").slice(0, 1).toUpperCase()),
+      h("div", { class: "avatar", style: `--h:${monogramHue(s.email ?? "")}`, "aria-hidden": "true" }, (s.email ?? "?").slice(0, 1).toUpperCase()),
       h("h1", {}, t("lockedTitle")),
       h("p", {}, s.email ?? ""),
-      h("p", {}, host(s.serverUrl)),
+      h("p", { class: "host" }, host(s.serverUrl)),
     ),
     s.biometric
       ? h(
@@ -593,14 +593,16 @@ function settingsTab(s: State): HTMLElement {
             "key",
             t("autofillOnPageLoadDefault"),
             t("autofillOnPageLoadDefaultHint"),
-            h(
-              "select",
-              {
-                "aria-label": t("autofillOnPageLoadDefault"),
-                onchange: (e: Event) => void act({ type: "setSettings", autofillOnPageLoadDefault: (e.target as HTMLSelectElement).value === "true" }),
-              },
-              h("option", { value: "true", selected: s.settings.autofillOnPageLoadDefault }, t("on")),
-              h("option", { value: "false", selected: !s.settings.autofillOnPageLoadDefault }, t("off")),
+            withChevron(
+              h(
+                "select",
+                {
+                  "aria-label": t("autofillOnPageLoadDefault"),
+                  onchange: (e: Event) => void act({ type: "setSettings", autofillOnPageLoadDefault: (e.target as HTMLSelectElement).value === "true" }),
+                },
+                h("option", { value: "true", selected: s.settings.autofillOnPageLoadDefault }, t("on")),
+                h("option", { value: "false", selected: !s.settings.autofillOnPageLoadDefault }, t("off")),
+              ),
             ),
           )
         : null,
@@ -613,27 +615,31 @@ function settingsTab(s: State): HTMLElement {
         "timer",
         t("clearClipboard"),
         t("clearClipboardDesc"),
-        h(
-          "select",
-          {
-            "aria-label": t("clearClipboard"),
-            onchange: (e: Event) => void act({ type: "setSettings", clearClipboardDelay: (e.target as HTMLSelectElement).value as ClearClipboardDelay }),
-          },
-          ...CLEAR_CLIPBOARD_CHOICES.map((v) => h("option", { value: v, selected: v === s.settings.clearClipboardDelay }, clearClipboardLabel(v))),
+        withChevron(
+          h(
+            "select",
+            {
+              "aria-label": t("clearClipboard"),
+              onchange: (e: Event) => void act({ type: "setSettings", clearClipboardDelay: (e.target as HTMLSelectElement).value as ClearClipboardDelay }),
+            },
+            ...CLEAR_CLIPBOARD_CHOICES.map((v) => h("option", { value: v, selected: v === s.settings.clearClipboardDelay }, clearClipboardLabel(v))),
+          ),
         ),
       ),
       row(
         "globe",
         t("defaultUriMatchDetection"),
         t(URI_MATCH_ADVANCED.includes(s.settings.defaultUriMatch) ? "uriMatchDefaultAdvancedHint" : "uriMatchDefaultHint"),
-        h(
-          "select",
-          {
-            "aria-label": t("defaultUriMatchDetection"),
-            onchange: (e: Event) => void act({ type: "setSettings", defaultUriMatch: Number((e.target as HTMLSelectElement).value) }),
-          },
-          ...[URI_MATCH.Domain, URI_MATCH.Host, URI_MATCH.Exact, URI_MATCH.Never, URI_MATCH.StartsWith, URI_MATCH.RegularExpression].map((m) =>
-            h("option", { value: String(m), selected: m === s.settings.defaultUriMatch }, uriMatchLabel(m)),
+        withChevron(
+          h(
+            "select",
+            {
+              "aria-label": t("defaultUriMatchDetection"),
+              onchange: (e: Event) => void act({ type: "setSettings", defaultUriMatch: Number((e.target as HTMLSelectElement).value) }),
+            },
+            ...[URI_MATCH.Domain, URI_MATCH.Host, URI_MATCH.Exact, URI_MATCH.Never, URI_MATCH.StartsWith, URI_MATCH.RegularExpression].map((m) =>
+              h("option", { value: String(m), selected: m === s.settings.defaultUriMatch }, uriMatchLabel(m)),
+            ),
           ),
         ),
       ),

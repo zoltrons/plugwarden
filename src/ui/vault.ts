@@ -226,6 +226,9 @@ function hue(s: string): number {
   return x % 360;
 }
 
+/** The monogram hue for a name, shared with the account avatar on the lock screen. */
+export const monogramHue = hue;
+
 /** An absolute http(s) URL for `u`, or undefined when it is not one. */
 function webUrl(u: string): string | undefined {
   try {
@@ -1857,17 +1860,18 @@ function editView(ctx: Ctx, isNew: boolean): HTMLElement {
 function foldersView(ctx: Ctx): HTMLElement {
   const names = new Map((st.list?.folders ?? []).map((f) => [f.id, f.name]));
   const fresh = { name: "" };
+  // One compact row per folder: the name edits in place, the actions sit next to it.
   const folderRow = (id: string) =>
     h(
       "div",
-      { class: "field-card" },
-      h("div", { class: "field-card-top" }, h("input", { class: "name", value: names.get(id) ?? "", "aria-label": t("folderName"), oninput: (e: Event) => names.set(id, (e.target as HTMLInputElement).value) })),
+      { class: "row" },
+      icon("folder"),
+      h("input", { class: "row-input", value: names.get(id) ?? "", "aria-label": t("folderName"), spellcheck: false, oninput: (e: Event) => names.set(id, (e.target as HTMLInputElement).value) }),
       h(
-        "div",
-        { class: "field-card-bottom" },
-        h("span", { class: "grow" }),
+        "span",
+        { class: "field-actions" },
         iconButton("edit", t("rename"), () => void vaultAction(ctx, { type: "saveFolder", id, name: names.get(id) ?? "" }, "saved", false), { class: "icon-btn sm" }),
-        iconButton("trash", t("deleteFolder"), () => void vaultAction(ctx, { type: "deleteFolder", id }, "deleted", false), { class: "icon-btn sm danger" }),
+        iconButton("trash", t("deleteFolder"), () => void vaultAction(ctx, { type: "deleteFolder", id }, "deleted", false), { class: "icon-btn sm delete" }),
       ),
     );
   return h(
@@ -1875,20 +1879,21 @@ function foldersView(ctx: Ctx): HTMLElement {
     { class: "page" },
     topBar(iconButton("back", t("back"), () => open(ctx, { kind: "list" })), h("h1", {}, t("folders"))),
     errorBox(),
-    ...(st.list?.folders ?? []).map((f) => folderRow(f.id)),
     h(
-      "form",
-      {
-        class: "field-card add",
-        onsubmit: (e: Event) => {
-          e.preventDefault();
-          if (fresh.name.trim()) void vaultAction(ctx, { type: "saveFolder", name: fresh.name.trim() }, "saved", false);
-        },
-      },
+      "div",
+      { class: "group" },
+      ...(st.list?.folders ?? []).map((f) => folderRow(f.id)),
       h(
-        "div",
-        { class: "field-card-bottom" },
-        h("input", { placeholder: t("newFolder"), "aria-label": t("newFolder"), oninput: (e: Event) => (fresh.name = (e.target as HTMLInputElement).value) }),
+        "form",
+        {
+          class: "row",
+          onsubmit: (e: Event) => {
+            e.preventDefault();
+            if (fresh.name.trim()) void vaultAction(ctx, { type: "saveFolder", name: fresh.name.trim() }, "saved", false);
+          },
+        },
+        icon("plus"),
+        h("input", { class: "row-input", placeholder: t("newFolder"), "aria-label": t("newFolder"), oninput: (e: Event) => (fresh.name = (e.target as HTMLInputElement).value) }),
         h("button", { type: "submit", class: "btn tonal small" }, t("add")),
       ),
     ),

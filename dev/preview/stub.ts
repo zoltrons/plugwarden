@@ -150,7 +150,28 @@ function respond(req: Request): Response<unknown> {
     case "generatorHistory":
       return { ok: true, data: [{ date: Date.now() - 60_000, value: "k7#Vm2qT!pR9zLd4Xw8b" }] };
     case "sendList":
-      return { ok: true, data: [] };
+      return {
+        ok: true,
+        data: [
+          { id: "s1", type: 0, name: "Wifi for guests", link: "https://vault.example.com/#/send/s1/key", deletionDate: "2026-11-05T12:00:00.000Z", hasPassword: true, disabled: false, accessCount: 2 },
+          { id: "s2", type: 1, name: "Report Q3.pdf", link: "https://vault.example.com/#/send/s2/key", deletionDate: "2026-10-31T12:00:00.000Z", hasPassword: false, disabled: true, accessCount: 0 },
+        ],
+      };
+    case "passkeyPrompt":
+      return {
+        ok: true,
+        data: {
+          kind: "get",
+          origin: "https://github.com",
+          rpId: "github.com",
+          rpName: "GitHub",
+          userName: "octo",
+          candidates: [
+            { itemId: "1", name: "GitHub", userName: "octo", credentialId: "Y3JlZA" },
+            { itemId: "2", name: "GitHub (work)", userName: "ada@example.com", credentialId: "Y3JlZA2" },
+          ],
+        },
+      };
     case "inlineList":
       return { ok: true, data: menuData };
     case "barInfo":
