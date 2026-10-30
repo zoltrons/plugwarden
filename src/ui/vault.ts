@@ -72,6 +72,12 @@ const st = {
   folder: "",
   sort: savedSort(),
   item: undefined as Json | undefined,
+  /** The item fetch is running: an error must not retrigger it on the next render. */
+  itemLoading: false,
+  /** Cipher id whose fetch failed: never retry it until the screen is opened again. */
+  itemFailedFor: undefined as string | undefined,
+  /** Cipher id whose master-password re-prompt screen is showing. */
+  repromptFor: undefined as string | undefined,
   reveal: new Set<string>(),
   totp: undefined as { code: string; period: number; remaining: number } | undefined,
   /** Timestamp of the first tap of a two-tap destructive action; 0 when idle. */
@@ -322,7 +328,7 @@ async function syncNow(ctx: Ctx, force: boolean) {
 
 function open(ctx: Ctx, route: Route) {
   clearInterval(totpTimer);
-  Object.assign(st, { route, error: undefined, confirmDelete: 0, totp: undefined, reveal: new Set(), copied: "", uriOpen: new Set() });
+  Object.assign(st, { route, error: undefined, confirmDelete: 0, totp: undefined, reveal: new Set(), copied: "", uriOpen: new Set(), repromptFor: undefined, itemFailedFor: undefined });
   if (route.kind !== "edit") st.draft = undefined;
   ctx.rerender();
 }
@@ -594,9 +600,17 @@ function listView(ctx: Ctx): HTMLElement {
 
 // ---------- this site ----------
 
+/** A flagged item opens its master-password screen instead of failing. */
+function askReprompt(ctx: Ctx, id: string) {
+  open(ctx, { kind: "item", id });
+  st.repromptFor = id;
+  ctx.rerender();
+}
+
 async function fill(ctx: Ctx, id: string) {
   const r = await send<FillResult>({ type: "fill", id });
   if (r.ok && r.data.filled) window.close();
+  else if (!r.ok && r.code === "reprompt") askReprompt(ctx, id);
   else toast(ctx, r.ok ? t("fillFailed") : r.error);
 }
 
@@ -609,6 +623,7 @@ async function saveFromPage(ctx: Ctx) {
   if (same) {
     const item = await send<Json>({ type: "getItem", id: same.id });
     if (item.ok) return startEdit(ctx, item.data, { data: { password: login.password } });
+    if (item.code === "reprompt") return askReprompt(ctx, same.id); // never fall through to a duplicate
   }
   const url = new URL(login.url);
   startEdit(ctx, undefined, { name: url.hostname, data: { username: login.username, password: login.password }, uris: [{ uri: url.origin, match: null }] });
@@ -717,6 +732,40 @@ function strength(pw: string): { label: string; level: number } {
 
 // ---------- item view ----------
 
+/**
+ * Master-password re-prompt, for items the user flagged in the web vault (`reprompt`). The worker
+ * enforces it too: this screen only asks for the password that lifts the gate.
+ */
+function repromptView(ctx: Ctx, id: string): HTMLElement {
+  const input = h("input", { id: "reprompt-password", type: "password", autocomplete: "current-password", required: true, "data-autofocus": "1", spellcheck: false });
+  const onsubmit = async (e: Event) => {
+    e.preventDefault();
+    const password = input.value;
+    input.value = "";
+    st.busy = true;
+    st.error = undefined;
+    ctx.rerender();
+    const r = await send({ type: "confirmReprompt", id, password });
+    st.busy = false;
+    if (!r.ok) st.error = r.error;
+    else {
+      st.repromptFor = undefined;
+      st.item = undefined; // refetched with the gate lifted
+    }
+    ctx.rerender();
+  };
+  return h(
+    "form",
+    { class: "page center", onsubmit },
+    topBar(iconButton("back", t("back"), () => open(ctx, { kind: "list" }))),
+    h("div", { class: "brand" }, h("div", { class: "logo" }, icon("lock")), h("h1", {}, t("repromptTitle")), h("p", {}, t("repromptHint"))),
+    h("div", { class: "field" }, icon("key"), h("label", { for: "reprompt-password" }, h("span", {}, t("masterPassword")), input)),
+    errorBox(),
+    st.busy ? progress() : null,
+    h("div", { class: "actions" }, h("button", { type: "submit", class: "btn filled wide", disabled: st.busy }, t("repromptConfirm"))),
+  );
+}
+
 function fieldRow(
   ctx: Ctx,
   key: string,
@@ -807,7 +856,12 @@ function totpRow(ctx: Ctx, id: string): HTMLElement {
 
 async function refreshTotp(ctx: Ctx, id: string) {
   const r = await send<{ code: string; period: number; remaining: number }>({ type: "totp", id });
-  if (!r.ok || st.route.kind !== "item" || st.route.id !== id) return;
+  if (st.route.kind !== "item" || st.route.id !== id) return;
+  if (!r.ok) {
+    // The re-prompt grant ran out: hide the item again until the password is re-entered.
+    if (r.code === "reprompt") Object.assign(st, { item: undefined, totp: undefined, repromptFor: id });
+    return ctx.rerender();
+  }
   st.totp = { code: r.data.code, period: r.data.period || 30, remaining: r.data.remaining };
   ctx.rerender();
   clearInterval(totpTimer);
@@ -920,11 +974,21 @@ function quickActions(ctx: Ctx, id: string, uris: string[]): Child {
 function itemView(ctx: Ctx, id: string): HTMLElement {
   const item = st.item && st.item.id === id ? st.item : undefined;
   if (!item) {
-    void send<Json>({ type: "getItem", id }).then((r) => {
-      if (r.ok) st.item = r.data;
-      else st.error = r.error;
-      ctx.rerender();
-    });
+    // The worker refuses to hand over a flagged item until the master password is re-entered.
+    if (st.repromptFor === id) return repromptView(ctx, id);
+    if (!st.itemLoading && st.itemFailedFor !== id) {
+      st.itemLoading = true;
+      void send<Json>({ type: "getItem", id }).then((r) => {
+        st.itemLoading = false;
+        if (r.ok) st.item = r.data;
+        else if (r.code === "reprompt") st.repromptFor = id;
+        else {
+          st.error = r.error;
+          st.itemFailedFor = id; // a failed fetch is shown, not retried in a loop
+        }
+        ctx.rerender();
+      });
+    }
     return h(
       "div",
       { class: "page" },

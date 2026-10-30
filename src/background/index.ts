@@ -1,12 +1,13 @@
 // Service worker entry. Stateless: listeners are registered synchronously at top level, every
 // handler reads its state from chrome.storage.
-import { type ErrorCode, PASSKEY_PORT, parseFrameRequest, parsePageRequest, parseRequest, type Request, type Response, type State } from "../shared/messages.ts";
+import { type ErrorCode, PASSKEY_PORT, type PageRequest, parseFrameRequest, parsePageRequest, parseRequest, type Request, type Response, type State } from "../shared/messages.ts";
 import { ValidationError } from "../shared/validate.ts";
 import { getServerInfo } from "../transport/config.ts";
 import { normalizeServerUrl, originPattern } from "../shared/url.ts";
 import { NetworkError } from "../transport/http.ts";
 import {
   cancelTwoFactor,
+  confirmReprompt,
   finishSso,
   login,
   removeBiometric,
@@ -21,6 +22,7 @@ import {
   unlockWithPin,
   UserError,
 } from "./account.ts";
+import { REPROMPT_MESSAGE, repromptPending } from "./reprompt.ts";
 import { coreAlive, coreCall } from "./core.ts";
 import { AUTOLOCK_ALARM, lockNow, touchAutoLock } from "./lock.ts";
 import {
@@ -115,7 +117,12 @@ async function handle(req: Request): Promise<unknown> {
       await touchAutoLock();
       if (req.type === "vaultList") return vaultList();
       if (req.type === "sync") return (await sync(req.force)) ? vaultList() : null;
-      if (req.type === "getItem") return coreCall({ op: "getCipher", id: req.id });
+      if (req.type === "getItem") {
+        // A flagged item is not decrypted into the popup until the master password is re-entered.
+        const item = await coreCall<Record<string, unknown>>({ op: "getCipher", id: req.id });
+        if (repromptPending(item)) throw new UserError("reprompt", REPROMPT_MESSAGE);
+        return item;
+      }
       if (req.type === "saveItem") return save(req.item);
       if (req.type === "deleteItem") return trash(req.id);
       if (req.type === "restoreItem") return restore(req.id);
@@ -126,7 +133,11 @@ async function handle(req: Request): Promise<unknown> {
       if (req.type === "importVault") return importVault(req.text);
       if (req.type === "saveFolder") return saveFolder(req.name, req.id);
       if (req.type === "deleteFolder") return deleteFolder(req.id);
-      if (req.type === "totp") return coreCall({ op: "totp", id: req.id });
+      if (req.type === "totp") {
+        const item = await coreCall<Record<string, unknown>>({ op: "getCipher", id: req.id });
+        if (repromptPending(item)) throw new UserError("reprompt", REPROMPT_MESSAGE);
+        return coreCall({ op: "totp", id: req.id });
+      }
       if (req.type === "generatorHistory") return generatorHistory();
       if (req.type === "generatorHistoryAdd") return addGeneratorHistory(req.value);
       if (req.type === "generatorHistoryClear") return clearGeneratorHistory();
@@ -188,6 +199,10 @@ async function handle(req: Request): Promise<unknown> {
     case "setPin":
       await requireUnlocked();
       await setPin(req.pin);
+      break;
+    case "confirmReprompt":
+      await requireUnlocked();
+      await confirmReprompt(req.id, req.password);
       break;
     case "lock":
       await lockNow();
@@ -263,6 +278,8 @@ const FRAME_PATHS = ["/menu.html", "/bar.html"];
 
 // Serialize state-changing requests so e.g. a double-clicked "Log in" cannot interleave.
 let queue: Promise<unknown> = Promise.resolve();
+/** Submitted logins waiting in `queue`, at most one per tab (the latest). */
+const submits = new Map<number, { req: PageRequest; sender: chrome.runtime.MessageSender }>();
 
 chrome.runtime.onMessage.addListener((msg: unknown, sender, reply: (r: Response<unknown>) => void) => {
   // The SSO callback content script (registered only for <server>/sso-connector.html during a login).
@@ -286,8 +303,21 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, reply: (r: Response<
         read = req.type === "inlineList" || req.type === "barInfo";
       } else {
         const req = parsePageRequest(msg);
-        run = () => handlePage(req, sender);
         read = req.type === "inlineFocus";
+        if (req.type === "loginSubmitted") {
+          // A page can fire submits in a loop: keep one queued per tab, carrying the latest values.
+          const queued = submits.has(tabId);
+          submits.set(tabId, { req, sender });
+          if (queued) {
+            reply({ ok: true, data: null });
+            return false;
+          }
+          run = () => {
+            const latest = submits.get(tabId)!;
+            submits.delete(tabId);
+            return handlePage(latest.req, latest.sender);
+          };
+        } else run = () => handlePage(req, sender);
       }
     } catch (e) {
       reply(toError(e));

@@ -899,6 +899,24 @@ try {
     await page.getByRole("button", { name: "Vault", exact: true }).click();
   }
 
+  await step("re-prompt: a flagged item's secrets need the master password again, until the next lock", async () => {
+    await unlockIfLocked();
+    const ask = (msg: Record<string, unknown>) => page.evaluate((m) => chrome.runtime.sendMessage(m), msg);
+    const saved = await ask({ type: "saveItem", item: { type: 2, name: "Guarded note", notes: "guarded secret", secureNote: { type: 0 }, reprompt: 1 } });
+    const id: string = saved.data.items.find((i: { name: string }) => i.name === "Guarded note").id;
+    // Every path that returns secrets is gated in the service worker, not only in the UI.
+    for (const m of [{ type: "getItem", id }, { type: "totp", id }, { type: "downloadAttachment", cipherId: id, attachmentId: "x" }])
+      assert.equal((await ask(m)).code, "reprompt", m.type);
+    assert.equal((await ask({ type: "confirmReprompt", id, password: "wrong" })).code, "wrongPassword");
+    assert.equal((await ask({ type: "confirmReprompt", id, password: vaultUser.password })).ok, true);
+    assert.equal((await ask({ type: "getItem", id })).data.notes, "guarded secret");
+    await ask({ type: "lock" });
+    await unlockIfLocked();
+    assert.equal((await ask({ type: "getItem", id })).code, "reprompt", "grant survived a lock");
+    await ask({ type: "deleteItem", id });
+    await ask({ type: "purgeItem", id });
+  });
+
   await step("lock clears decrypted vault from the popup", async () => {
     await page.getByRole("button", { name: "Vault", exact: true }).click();
     await page.getByRole("button", { name: "Lock now" }).click();

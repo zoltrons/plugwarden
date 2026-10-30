@@ -1176,5 +1176,14 @@
   },
   "openInTabHint": {
     "message": "Biometric prompts can close this popup; a tab stays open."
+  },
+  "repromptTitle": {
+    "message": "Master password required"
+  },
+  "repromptHint": {
+    "message": "This item is marked for a check of your master password."
+  },
+  "repromptConfirm": {
+    "message": "Confirm"
   }
 }

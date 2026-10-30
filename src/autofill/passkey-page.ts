@@ -161,7 +161,8 @@
 
   c.create = (opts?: CredentialCreationOptions) => {
     const pk = opts?.publicKey;
-    if (!pk || !pk.pubKeyCredParams.some((p) => p.alg === -7)) return create(opts);
+    // An unfocused document is the browser's to refuse: it must not open (and focus) our window.
+    if (!pk || !pk.pubKeyCredParams.some((p) => p.alg === -7) || !document.hasFocus()) return create(opts);
     return settle(
       "create",
       {
@@ -181,6 +182,7 @@
     const pk = opts?.publicKey;
     if (!pk) return get(opts);
     if (opts.mediation === "conditional") return conditionalGet(opts, pk);
+    if (!document.hasFocus()) return get(opts);
     return settle("get", options(pk), () => get(opts), opts.signal);
   };
 })();

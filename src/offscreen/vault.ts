@@ -57,9 +57,7 @@ export function upsertCipher(enc: Json): void {
   put(JSON.parse(core.decryptCipher(JSON.stringify(enc))) as Json);
 }
 
-export function removeCipher(id: string): void {
-  ciphers?.delete(id);
-}
+export const loaded = (): boolean => ciphers !== undefined;
 
 function summary(c: Json): VaultItem {
   const type = Number(ci(c, "type"));
@@ -86,6 +84,7 @@ function summary(c: Json): VaultItem {
     favorite: ci(c, "favorite") === true,
     readOnly: !!ci(c, "organizationId") || ci(c, "edit") === false,
     hasTotp: !!s(ci(login, "totp")),
+    ...(Number(ci(c, "reprompt")) === 1 ? { reprompt: true } : {}),
     ...(typeof ci(login, "autofillOnPageLoad") === "boolean" ? { autofillOnPageLoad: ci(login, "autofillOnPageLoad") as boolean } : {}),
     revisionDate: time(ci(c, "revisionDate")),
     creationDate: time(ci(c, "creationDate")),
@@ -185,7 +184,6 @@ export async function matchUri(url: string, defaultMatch: number): Promise<Vault
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
-/** `totp` is the current code, for copying after the fill. */
 /** User-key strings (a failed one comes back empty). */
 export function decryptText(values: string[]): string[] {
   const r = JSON.parse(core.decryptFolders(JSON.stringify(values.map((name, i) => ({ id: String(i), name }))))) as { folders: Json[] };
@@ -193,6 +191,7 @@ export function decryptText(values: string[]): string[] {
   return values.map((_, i) => plain.get(String(i)) ?? "");
 }
 
+/** `totp` is the current code, for copying after the fill. */
 export function fillData(id: string): { username: string; password: string; totp?: string } {
   const login = o(ci(get(id), "login"));
   const secret = s(ci(login, "totp"));

@@ -1,7 +1,7 @@
 # Parity report: audit findings 7–9 and the official extension's remaining features
 
 Date: 2026-10-29. Helium 156.0.8078.47 (headless) against Vaultwarden 1.37.4. Follows
-`PHASE4_REPORT.md` and the parity commit `8010209` (inline menu, save bar, editing, trash, folders).
+the parity commit `8010209` (inline menu, save bar, editing, trash, folders).
 
 ## Audit findings
 

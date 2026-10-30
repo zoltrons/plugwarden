@@ -1,7 +1,7 @@
 # Compatibility notes
 
 Facts verified against **Vaultwarden 1.37.4** (`vaultwarden/server@sha256:efb3cde9…`, local Docker)
-on 2026-10-29 by `spike/vw-flow.mjs`, unless marked otherwise.
+on 2026-10-29 by the Phase 0 spike (removed; see git history), unless marked otherwise.
 
 ## Server identity / capability detection
 
@@ -164,4 +164,4 @@ on 2026-10-29 by `spike/vw-flow.mjs`, unless marked otherwise.
   offscreen document.
 * `chrome.offscreen.hasDocument()` exists (docs: Chrome 150+), used by the bench.
 * Offscreen reasons (developer.chrome.com, via Context7): no reason fits "hold secrets in memory";
-  the spike used `WORKERS`. To decide in Phase 1.
+  the Phase 0 spike used `WORKERS`. To decide in Phase 1.

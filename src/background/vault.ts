@@ -23,8 +23,9 @@ import {
   verifyPassword,
 } from "../transport/vault.ts";
 import { ApiError } from "../transport/http.ts";
-import { accessToken, UserError } from "./account.ts";
+import { accessToken, UserError, verifyMasterPassword } from "./account.ts";
 import { coreAlive, coreCall } from "./core.ts";
+import { REPROMPT_MESSAGE, repromptPending } from "./reprompt.ts";
 import { getLocal, getSession, getSettings, removeLocal, setLocal, type VaultCache } from "./store.ts";
 
 export const CLIPBOARD_ALARM = "clipboard";
@@ -66,15 +67,18 @@ export async function sync(force: boolean): Promise<boolean> {
   return true;
 }
 
+/** Makes sure the worker holds the decrypted vault, without moving the whole list around. */
+export async function ensureLoaded(): Promise<void> {
+  if (await coreCall<boolean>({ op: "vaultLoaded" })) return;
+  const cache = await getLocal("vault");
+  if (cache) await load(cache);
+  else await sync(true);
+}
+
 export async function list(): Promise<VaultList> {
-  let l = await coreCall<VaultList | null>({ op: "listVault" });
-  if (!l) {
-    const cache = await getLocal("vault");
-    if (cache) await load(cache);
-    else await sync(true);
-    l = await coreCall<VaultList>({ op: "listVault" });
-  }
-  return { ...l!, syncedAt: (await getLocal("vault"))?.syncedAt };
+  await ensureLoaded();
+  const l = await coreCall<VaultList>({ op: "listVault" });
+  return { ...l, syncedAt: (await getLocal("vault"))?.syncedAt };
 }
 
 export async function save(item: Record<string, unknown>): Promise<VaultList> {
@@ -136,30 +140,25 @@ export async function markUsed(id: string): Promise<void> {
 export const getSend = (id: string) => coreCall<Record<string, unknown>>({ op: "getSend", id });
 
 export async function clearClipboard(): Promise<void> {
-  const unlocked = (await getSession()).unlocked;
+  // Close the document only if this call opened it: an open one may hold a pending 2FA key or an unlock in progress.
+  const wasAlive = await coreAlive();
   await coreCall({ op: "writeClipboard", text: "" });
-  if (!unlocked) await chrome.offscreen.closeDocument().catch(() => undefined);
+  if (!wasAlive) await chrome.offscreen.closeDocument().catch(() => undefined);
 }
 
 // ---------- Import / export ----------
 
 export async function exportVault(password: string): Promise<string> {
-  const account = await getLocal("account");
-  if (!account) throw new UserError("sessionExpired", "Please log in again");
   // The whole vault in clear text: ask the server to confirm the master password first, like the official clients.
-  const { handle, authHash } = await coreCall<{ handle: number; authHash: string }>({ op: "prepareKey", email: account.email, password, kdf: account.kdf });
-  await coreCall({ op: "freeKey", handle });
-  await verifyPassword(await server(), await accessToken(), authHash).catch((e: unknown) => {
-    throw e instanceof ApiError && e.status === 400 ? new UserError("wrongPassword", "Wrong master password") : e;
-  });
-  await list();
+  await verifyMasterPassword(password);
+  await ensureLoaded();
   return coreCall<string>({ op: "exportJson" });
 }
 
 export async function importVault(text: string): Promise<{ imported: number; skipped: number }> {
   const account = await getLocal("account");
   if (!account?.userId) throw new UserError("sessionExpired", "Please log in again");
-  await list();
+  await ensureLoaded();
   const r = await coreCall<{ ciphers: Record<string, unknown>[]; folders: unknown[]; folderRelationships: unknown[]; skipped: number }>({ op: "prepareImport", text }).catch((e: unknown) => {
     throw new UserError("invalid", (e as Error).message);
   });
@@ -174,7 +173,8 @@ export async function importVault(text: string): Promise<{ imported: number; ski
 // Bodies travel base64 through the message hops like Send files (same size cap).
 
 export async function downloadAttachment(cipherId: string, attachmentId: string): Promise<{ fileName: string; data: string }> {
-  const item = await coreCall<{ attachments?: { id: string; fileName?: string }[] }>({ op: "getCipher", id: cipherId });
+  const item = await coreCall<Record<string, unknown> & { attachments?: { id: string; fileName?: string }[] }>({ op: "getCipher", id: cipherId });
+  if (repromptPending(item)) throw new UserError("reprompt", REPROMPT_MESSAGE);
   const att = item.attachments?.find((a) => a.id === attachmentId);
   if (!att) throw new UserError("invalid", "Attachment not found");
   const body = await apiDownloadAttachment(await server(), await accessToken(), cipherId, attachmentId);
@@ -212,7 +212,7 @@ type Json = Record<string, unknown>;
 export const MAX_SEND_FILE_BYTES = 25 * 1024 * 1024;
 
 export async function sendList(): Promise<SendItem[]> {
-  await list(); // loads the vault (and its sends) into the worker if needed
+  await ensureLoaded(); // the vault and its sends
   const base = await server();
   const entries = await coreCall<(Omit<SendItem, "link"> & { accessId: string; urlKey: string })[]>({ op: "listSends" });
   return entries.map(({ accessId, urlKey, ...e }) => ({ ...e, link: `${base}/#/send/${accessId}/${urlKey}` }));

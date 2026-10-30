@@ -20,5 +20,5 @@ Status: pins and map exist (Phase 0); the report tool and CI job are Phase 1 wor
 ## Contract tests
 
 * (a) `crates/core-wasm/tests/vectors.rs` against sdk-internal `test-vectors/` — implemented.
-* (b) Vaultwarden end-to-end (`spike/vw-flow.mjs` today; becomes `tools/e2e/` in Phase 1) plus the
+* (b) Vaultwarden end-to-end (`tests/e2e/run.ts`) plus the
   official `bw` CLI decrypting what we wrote and vice versa — to do.

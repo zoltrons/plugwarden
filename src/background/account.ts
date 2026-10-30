@@ -16,8 +16,10 @@ import {
   TwoFactorRequired,
 } from "../transport/auth.ts";
 import { ApiError } from "../transport/http.ts";
+import { verifyPassword } from "../transport/vault.ts";
 import { CoreError, coreAlive, coreCall } from "./core.ts";
 import { lockNow, touchAutoLock } from "./lock.ts";
+import { grantReprompt } from "./reprompt.ts";
 import {
   type Account,
   getDeviceId,
@@ -267,6 +269,30 @@ export async function unlockWithBiometric(prf: string): Promise<void> {
   await afterUnlock(account);
 }
 
+// ---------- Master password re-check ----------
+
+/**
+ * Confirms the master password with the server (it answers 400 when it is wrong). Used before a whole
+ * vault export and for `reprompt` items: the derived key is freed immediately, only the auth hash is
+ * used, so nothing extra stays in memory.
+ */
+export async function verifyMasterPassword(password: string): Promise<void> {
+  const base = await requireServer();
+  const account = await getLocal("account");
+  if (!account) throw new UserError("sessionExpired", "Please log in again");
+  const { handle, authHash } = await coreCall<Prepared>({ op: "prepareKey", email: account.email, password, kdf: account.kdf });
+  await coreCall({ op: "freeKey", handle }).catch(() => undefined);
+  await verifyPassword(base, await accessToken(), authHash).catch((e: unknown) => {
+    throw e instanceof ApiError && e.status === 400 ? new UserError("wrongPassword", "Wrong master password") : e;
+  });
+}
+
+/** Grants one item's re-prompt after the master password checked out. */
+export async function confirmReprompt(id: string, password: string): Promise<void> {
+  await verifyMasterPassword(password);
+  grantReprompt(id);
+}
+
 // ---------- PIN (Bitwarden "unlock with PIN", locked with the master password on browser restart) ----------
 
 const PIN_MAX_ATTEMPTS = 5;
@@ -307,8 +333,7 @@ export async function unlockWithPin(pin: string): Promise<void> {
     await updateSession({ pin: { ...p, attempts: p.attempts + 1 } });
     throw new UserError("wrongPassword", "Wrong PIN");
   }
-  await updateSession({ unlocked: true, pin: { ...p, attempts: 0 } });
-  await touchAutoLock();
+  await afterUnlock(account); // also resets the wrong-PIN count
 }
 
 export async function logout(): Promise<void> {

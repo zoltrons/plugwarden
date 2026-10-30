@@ -57,8 +57,8 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, reply: (r: CoreResul
     );
     return true;
   }
-  if (req.op === "status" && !worker) {
-    reply({ ok: true, value: { unlocked: false } });
+  if (req.op === "vaultLoaded" && !worker) {
+    reply({ ok: true, value: false });
     return false;
   }
   callWorker(req).then(reply);

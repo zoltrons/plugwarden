@@ -68,8 +68,8 @@ scripts may only send a whitelisted subset of message types).
 
 * Depends on `bitwarden-crypto` from `bitwarden/sdk-internal` by **git dependency pinned to the exact
   rev in `upstream.lock`** (no vendoring/copying; see `docs/LICENSING.md`).
-* Phase 0 decides whether `bitwarden-vault` / `bitwarden-generators` are usable (see
-  `docs/PHASE0_REPORT.md`). Both depend on `bitwarden-core`, `bitwarden-api-api`, `reqwest` and (vault)
+* Phase 0 (measured, report removed; see git history) decided whether `bitwarden-vault` / `bitwarden-generators` are usable (see
+  git history). Both depend on `bitwarden-core`, `bitwarden-api-api`, `reqwest` and (vault)
   `bitwarden-ssh`/`bitwarden-state`/`zxcvbn`, so the expected outcome is "crypto only": cipher field
   walking, TOTP and the generator become small local Rust modules, kept honest by upstream test
   vectors and tracked in `upstream-map.yaml`.
@@ -170,7 +170,6 @@ crates/core-wasm/       Rust -> WASM
 src/{shared,transport,vault,background,offscreen,autofill,ui}/
 tools/                  sync-upstream, size-budget, e2e helpers
 dev/vaultwarden/        docker-compose for the local test server
-spike/                  Phase 0 measurement harness (folded into tools/ or removed after Phase 0)
-docs/                   ARCHITECTURE, COMPATIBILITY, LICENSING, UPSTREAM_SYNC, PHASE0_REPORT
+docs/                   ARCHITECTURE, COMPATIBILITY, LICENSING, SECURITY, PARITY_REPORT, UPSTREAM_SYNC
 upstream.lock, upstream-map.yaml
 ```

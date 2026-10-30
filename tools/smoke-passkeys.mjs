@@ -93,24 +93,35 @@ try {
   console.log("ok  no inline menu without an account");
 
   // A logged-in (here: locked) account: a plain get opens the approval window, and closing it hands the
-  // call back to the browser instead of leaving the page hanging.
+  // call back to the browser instead of leaving the page hanging. Calls fired in a loop open one window
+  // (the extra modal calls are refused, like the browser does), while a conditional call is never refused.
   await sw.evaluate(() =>
     chrome.storage.local.set({ account: { email: "smoke@example.test", kdf: { type: 0, iterations: 600_000, memory: 64, parallelism: 4 }, protectedUserKey: "2.x|y|z" } }),
   );
-  const approvalPage = ctx.waitForEvent("page", { predicate: (p) => p.url().includes("popup.html?passkey=") });
+  const windows = [];
+  const onPage = (p) => p.url().includes("popup.html?passkey=") && windows.push(p);
+  ctx.on("page", onPage);
   const settled = page.evaluate(async () => {
-    let state = "pending";
-    navigator.credentials
-      .get({ publicKey: { challenge: new Uint8Array(32), rpId: "localhost" } })
-      .then(() => (state = "resolved"), (e) => (state = e?.name ?? String(e)));
+    const states = [];
+    const track = (promise) => {
+      const i = states.push("pending") - 1;
+      promise.then(() => (states[i] = "resolved"), (e) => (states[i] = e?.name ?? String(e)));
+    };
+    const publicKey = { challenge: new Uint8Array(32), rpId: "localhost" };
+    for (let i = 0; i < 5; i++) track(navigator.credentials.get({ publicKey }));
+    track(navigator.credentials.get({ mediation: "conditional", publicKey }));
     await new Promise((r) => setTimeout(r, 2500));
-    return state;
+    return states;
   });
-  const approval = await approvalPage;
-  assert.match(approval.url(), /popup\.html\?passkey=/);
-  await approval.close();
-  assert.notEqual(await settled, "resolved");
-  console.log("ok  plain get opens the approval window; closing it falls back to the browser");
+  await new Promise((r) => setTimeout(r, 2000));
+  assert.equal(windows.length, 1, "one approval window per tab");
+  await windows[0].close();
+  const states = await settled;
+  ctx.off("page", onPage);
+  assert.deepEqual(states.slice(1, 5), Array(4).fill("NotAllowedError"));
+  assert.notEqual(states[0], "resolved");
+  assert.equal(states[5], "pending", "a conditional call next to a modal one is not refused");
+  console.log("ok  plain get opens one approval window; closing it falls back; conditional calls are not refused");
 
   assert.deepEqual(pageErrors, []);
   assert.deepEqual(swErrors, []);

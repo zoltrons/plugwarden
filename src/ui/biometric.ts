@@ -15,24 +15,9 @@ type PrfClientResults = { prf?: { enabled?: boolean; results?: { first?: ArrayBu
 
 const random = (n: number) => crypto.getRandomValues(new Uint8Array(n));
 
-function b64uEncode(bytes: Uint8Array): string {
-  let raw = "";
-  for (const b of bytes) raw += String.fromCharCode(b);
-  return btoa(raw).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
-function b64uDecode(value: string): Uint8Array<ArrayBuffer> {
-  const raw = atob(value.replace(/-/g, "+").replace(/_/g, "/"));
-  const bytes = new Uint8Array(raw.length);
-  for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
-  return bytes;
-}
-
-function b64Encode(buffer: ArrayBuffer): string {
-  let raw = "";
-  for (const b of new Uint8Array(buffer)) raw += String.fromCharCode(b);
-  return btoa(raw);
-}
+const b64uEncode = (bytes: Uint8Array) => bytes.toBase64({ alphabet: "base64url", omitPadding: true });
+const b64uDecode = (value: string) => Uint8Array.fromBase64(value, { alphabet: "base64url" }) as Uint8Array<ArrayBuffer>;
+const b64Encode = (buffer: ArrayBuffer) => new Uint8Array(buffer).toBase64();
 
 function prfResults(credential: PublicKeyCredential): PrfClientResults {
   return credential.getClientExtensionResults() as PrfClientResults;

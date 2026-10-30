@@ -65,7 +65,6 @@ export const setTabState = <K extends keyof TabState>(kind: K, tabId: number, va
 
 export const clearTabState = (tabId: number) => chrome.storage.session.remove([`inline:${tabId}`, `save:${tabId}`]);
 
-/** /api/sync data exactly as the server sent it (encrypted). */
 /** Biometric unlock: the user key wrapped with a key derived from the authenticator's PRF output. */
 export interface Biometric {
   email: string;
@@ -79,6 +78,7 @@ export interface Biometric {
   createdAt: number;
 }
 
+/** /api/sync data exactly as the server sent it (encrypted). */
 export interface VaultCache {
   /** server revision date, ms */
   revision: number;
@@ -134,8 +134,6 @@ export async function updateSession(patch: Partial<Session>): Promise<Session> {
   await chrome.storage.session.set({ session: next });
   return next;
 }
-
-export const clearSession = () => chrome.storage.session.remove("session");
 
 export async function getSettings(): Promise<Settings> {
   // Older builds stored a `passkeys` toggle; passkeys are always on now, so drop it.

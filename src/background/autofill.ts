@@ -1,13 +1,14 @@
 // Autofill on the active tab from the popup, Ctrl+Shift+L or the context menu: functions from
 // src/autofill/page.ts are injected with chrome.scripting (the required host permissions cover every tab).
-import { type FillResult, fillForm, fillLogin, fillLoginIfEmpty, type PageLogin, readLogin } from "../autofill/page.ts";
+import { type FillResult, fillForm, fillLogin, type PageLogin, readLogin } from "../autofill/page.ts";
 import type { PageMatches, VaultItem } from "../shared/messages.ts";
 import { pickPageLoadLogin } from "../shared/pageload.ts";
 import { UserError } from "./account.ts";
 import { coreAlive, coreCall } from "./core.ts";
 import { touchAutoLock } from "./lock.ts";
 import { getLocal, getSession, getSettings } from "./store.ts";
-import { copyToClipboard, list, markUsed } from "./vault.ts";
+import { REPROMPT_MESSAGE, repromptPending } from "./reprompt.ts";
+import { copyToClipboard, ensureLoaded, list, markUsed } from "./vault.ts";
 
 export const CONTEXT_MENU_ID = "plugwarden-autofill";
 export const AUTOFILL_COMMAND = "autofill-login";
@@ -26,7 +27,7 @@ function httpUrl(tab: { url?: string } | undefined): URL | undefined {
 }
 
 async function matches(url: URL): Promise<VaultItem[]> {
-  await list(); // make sure the worker has the vault loaded
+  await ensureLoaded();
   const { defaultUriMatch } = await getSettings();
   return coreCall<VaultItem[]>({ op: "matchUri", url: url.href, defaultMatch: defaultUriMatch });
 }
@@ -54,18 +55,19 @@ export async function pageLoadFill(sender: chrome.runtime.MessageSender): Promis
   const url = httpUrl(sender);
   if (!settings.autofillOnPageLoad || tabId === undefined || frameId === undefined || !url) return { filled: false, reason: "noFields" };
   if (!(await getSession()).unlocked || !(await coreAlive())) return { filled: false, reason: "locked" };
-  const pick = pickPageLoadLogin(await matches(url), settings.autofillOnPageLoadDefault, (await getLocal("lastUsed")) ?? {});
+  // Items flagged for a master-password re-prompt never fill on page load (no user to ask).
+  const pick = pickPageLoadLogin((await matches(url)).filter((i) => !i.reprompt), settings.autofillOnPageLoadDefault, (await getLocal("lastUsed")) ?? {});
   if (!pick) return { filled: false, reason: "noMatch" };
   const { username, password, totp } = await coreCall<{ username: string; password: string; totp?: string }>({ op: "fillData", id: pick.id });
   const [res] = await chrome.scripting.executeScript({
     target: { tabId, frameIds: [frameId] },
-    func: fillLoginIfEmpty,
-    args: [url.origin, username, password],
+    func: fillLogin,
+    args: [url.origin, username, password, true],
   });
   const r = (res?.result as FillResult | undefined) ?? { filled: false };
   // The user did not pick this login, but the official client still copies the code.
+  // No touchAutoLock: a page load is not user activity, and a page that reloads itself must not keep the vault open.
   if (r.filled && totp && settings.autoCopyTotp) await copyToClipboard(totp);
-  await touchAutoLock();
   return r;
 }
 
@@ -79,6 +81,7 @@ export async function fillTab(tab: chrome.tabs.Tab | undefined, id?: string): Pr
     // The "On this site" list may offer a card or identity: fill it by its own field map.
     const cipher = await coreCall<Record<string, unknown>>({ op: "getCipher", id }).catch(() => undefined);
     if (!cipher) return { filled: false, reason: "noMatch" };
+    if (repromptPending(cipher)) throw new UserError("reprompt", REPROMPT_MESSAGE);
     const type = Number(cipher.type);
     if (type === 1) {
       if (!(await matches(url)).some((i) => i.id === id)) return { filled: false, reason: "noMatch" };
@@ -86,7 +89,8 @@ export async function fillTab(tab: chrome.tabs.Tab | undefined, id?: string): Pr
       values = await coreCall<Record<string, string>>({ op: "formValues", id });
     } else return { filled: false, reason: "noMatch" };
   } else {
-    item = (await matches(url))[0];
+    // "Fill the first match" is a fill nobody confirmed: skip items that need a re-prompt.
+    item = (await matches(url)).filter((i) => !i.reprompt)[0];
     if (!item) return { filled: false, reason: "noMatch" };
     id = item.id;
   }

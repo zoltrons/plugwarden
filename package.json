@@ -9,6 +9,7 @@
     "build": "node tools/build.mjs",
     "watch": "node tools/build.mjs --watch",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "check": "npm run typecheck && npm test",
     "test": "node --test --experimental-strip-types \"src/**/*.test.ts\"",
     "test:e2e": "node --experimental-strip-types tests/e2e/run.ts",
     "test:passkeys": "node tools/smoke-passkeys.mjs",

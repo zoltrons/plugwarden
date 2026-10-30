@@ -39,7 +39,7 @@ jobs:
           bash tools/build-wasm.sh --features register --out dist/wasm-register
           npm run test:biometric
       - uses: actions/upload-artifact@v4
-        with: { name: wasm, path: dist/wasm }
+        with: { name: wasm, path: "dist/wasm\ndist/wasm-register" }
 
   e2e:
     needs: extension
@@ -52,12 +52,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 24 }
-      - run: rustup target add wasm32-unknown-unknown
-      - run: cargo install wasm-bindgen-cli --version "$(sed -n 's/^wasm-bindgen = "\(.*\)".*/\1/p' upstream.lock)" --locked
       - run: npm ci && npx playwright-core install --with-deps chromium
       - run: VW_TAG=${{ matrix.vaultwarden }} docker compose -f dev/vaultwarden/docker-compose.yml up -d --wait
       - uses: actions/download-artifact@v4
-        with: { name: wasm, path: dist/wasm }
-      - run: npm i -g binaryen@132.0.0 && bash tools/build-wasm.sh --features register --out dist/wasm-register
+        with: { name: wasm, path: dist }
       - run: node tools/fetch-psl.mjs && node tools/build.mjs --e2e
       - run: npm run test:e2e

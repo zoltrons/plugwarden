@@ -67,8 +67,8 @@ export async function downloadAttachment(base: string, token: string, cipherId: 
   const { url } = parse(obj({ url: str }), await call(base, "GET", path(cipherId, attachmentId), { token }));
   // The URL is server-supplied and the extension holds host permissions for every origin, so it must
   // stay on the configured server: Vaultwarden builds it from its own domain, so no cross-origin (or
-  // metadata-endpoint) target is ever legitimate here. A redirect the server answers with is still
-  // followed, but the body is only ever handed to the attachment decryptor, which fails closed.
+  // metadata-endpoint) target is ever legitimate here. Redirects are refused too: one could leave the
+  // server. (An attachment store that answers with a redirect, e.g. S3, therefore cannot be downloaded.)
   let target: URL;
   try {
     target = new URL(url, base);
@@ -78,7 +78,7 @@ export async function downloadAttachment(base: string, token: string, cipherId: 
   if (target.origin !== new URL(base).origin) throw new ApiError(0, null, "The server returned an attachment URL that is not on this server");
   let res: Response;
   try {
-    res = await fetch(target, { credentials: "omit", cache: "no-store" });
+    res = await fetch(target, { credentials: "omit", redirect: "error", cache: "no-store" });
   } catch (e) {
     throw new NetworkError(e instanceof Error ? e.message : String(e));
   }

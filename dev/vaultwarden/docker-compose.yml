@@ -1,4 +1,4 @@
-# Local Vaultwarden for the Phase 0 spike and the e2e contract tests.
+# Local Vaultwarden for the e2e contract tests.
 # Test-only fixture: signups are open and there is no admin token. Never expose beyond 127.0.0.1.
 #   VW_TAG=1.37.4 docker compose up -d     (pinned, see upstream.lock)
 #   VW_TAG=latest docker compose up -d     (matrix leg)

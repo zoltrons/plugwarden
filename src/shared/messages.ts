@@ -20,6 +20,8 @@ const capped =
   };
 
 const field = capped(MAX_FIELD);
+/** Per-document nonce / per-save token: a UUID or 32 hex chars. */
+const secret = capped(64);
 
 // ---------- popup -> service worker ----------
 
@@ -77,6 +79,8 @@ export type Request =
   | { type: "downloadAttachment"; cipherId: string; attachmentId: string }
   // Bitwarden JSON (unencrypted); export re-checks the master password
   | { type: "exportVault"; password: string }
+  /** Re-checks the master password for one item flagged with `reprompt` (see background/reprompt.ts). */
+  | { type: "confirmReprompt"; id: string; password: string }
   | { type: "importVault"; text: string }
   | { type: "addAttachment"; cipherId: string; file: { name: string; data: string } }
   | { type: "saveFolder"; name: string; id?: string }
@@ -166,6 +170,7 @@ const requestValidators: { [K in Request["type"]]: Validator<Extract<Request, { 
   purgeItem: obj({ type: literal("purgeItem"), id: str }),
   downloadAttachment: obj({ type: literal("downloadAttachment"), cipherId: str, attachmentId: str }),
   exportVault: obj({ type: literal("exportVault"), password: str }),
+  confirmReprompt: obj({ type: literal("confirmReprompt"), id: str, password: str }),
   importVault: obj({ type: literal("importVault"), text: capped(MAX_IMPORT_CHARS) }),
   addAttachment: obj({ type: literal("addAttachment"), cipherId: str, file: obj({ name: str, data: str }) }),
   saveFolder: obj({ type: literal("saveFolder"), name: str, id: opt(str) }),
@@ -273,6 +278,8 @@ export interface VaultItem {
   favorite: boolean;
   readOnly: boolean;
   hasTotp: boolean;
+  /** Flagged for a master-password re-prompt (enforced in the service worker, see background/reprompt.ts). */
+  reprompt?: boolean;
   /** Tri-state "Autofill on page load" of a login (absent: inherit the account default). */
   autofillOnPageLoad?: boolean;
   /** epoch ms; used by the list's "recently edited / created" sorting. */
@@ -352,6 +359,7 @@ export type ErrorCode =
   | "badTwoFactor"
   | "wrongPassword"
   | "badBiometric"
+  | "reprompt"
   | "sessionExpired"
   | "wrongPhase";
 
@@ -378,11 +386,11 @@ export type CoreRequest =
   | { op: "unlockPrf"; prf: string; protectedUserKey: string; encryptedPrivateKey?: string }
   | { op: "freeKey"; handle: number }
   | { op: "lock" }
-  | { op: "status" }
+  /** Whether the decrypted vault is in memory (a fresh worker, or a sign-in, has none yet). */
+  | { op: "vaultLoaded" }
   // vault: the worker keeps the decrypted vault in memory
   | { op: "loadVault"; ciphers: unknown[]; folders: unknown[]; sends: unknown[]; orgKeys: Record<string, string>; collections: unknown[]; orgs: Folder[] }
   | { op: "upsertCipher"; cipher: Record<string, unknown> }
-  | { op: "removeCipher"; id: string }
   | { op: "listVault" }
   | { op: "getCipher"; id: string }
   | { op: "prepareSave"; item: Record<string, unknown> }
@@ -448,7 +456,7 @@ const coreValidators: { [K in CoreRequest["op"]]: Validator<Extract<CoreRequest,
   unlockPrf: obj({ op: literal("unlockPrf"), prf: str, protectedUserKey: str, encryptedPrivateKey: opt(str) }),
   freeKey: obj({ op: literal("freeKey"), handle: num }),
   lock: obj({ op: literal("lock") }),
-  status: obj({ op: literal("status") }),
+  vaultLoaded: obj({ op: literal("vaultLoaded") }),
   loadVault: obj({
     op: literal("loadVault"),
     ciphers: arr(unknownValue),
@@ -459,7 +467,6 @@ const coreValidators: { [K in CoreRequest["op"]]: Validator<Extract<CoreRequest,
     orgs: arr(obj({ id: str, name: str })),
   }),
   upsertCipher: obj({ op: literal("upsertCipher"), cipher: record }),
-  removeCipher: obj({ op: literal("removeCipher"), id: str }),
   listVault: obj({ op: literal("listVault") }),
   getCipher: obj({ op: literal("getCipher"), id: str }),
   prepareSave: obj({ op: literal("prepareSave"), item: record }),
@@ -540,7 +547,7 @@ export type PageRequest =
 
 /** A page-controlled form value: big enough for any real credential, small enough to bound storage. */
 const pageValidators: { [K in PageRequest["type"]]: Validator<Extract<PageRequest, { type: K }>> } = {
-  inlineFocus: obj({ type: literal("inlineFocus"), kind: literal("login", "card", "identity"), nonce: str }),
+  inlineFocus: obj({ type: literal("inlineFocus"), kind: literal("login", "card", "identity"), nonce: secret }),
   loginSubmitted: obj({ type: literal("loginSubmitted"), username: field, password: field }),
   pageLoad: obj({ type: literal("pageLoad") }),
 };
@@ -560,12 +567,12 @@ export type FrameRequest =
   | { type: "barAction"; action: "save" | "never" | "close"; token: string };
 
 const frameValidators: { [K in FrameRequest["type"]]: Validator<Extract<FrameRequest, { type: K }>> } = {
-  inlineList: obj({ type: literal("inlineList"), nonce: str }),
-  inlineFill: obj({ type: literal("inlineFill"), id: str, nonce: str }),
-  inlinePasskey: obj({ type: literal("inlinePasskey"), nonce: str }),
-  inlineUnlock: obj({ type: literal("inlineUnlock"), nonce: str }),
-  barInfo: obj({ type: literal("barInfo"), token: str }),
-  barAction: obj({ type: literal("barAction"), action: literal("save", "never", "close"), token: str }),
+  inlineList: obj({ type: literal("inlineList"), nonce: secret }),
+  inlineFill: obj({ type: literal("inlineFill"), id: str, nonce: secret }),
+  inlinePasskey: obj({ type: literal("inlinePasskey"), nonce: secret }),
+  inlineUnlock: obj({ type: literal("inlineUnlock"), nonce: secret }),
+  barInfo: obj({ type: literal("barInfo"), token: secret }),
+  barAction: obj({ type: literal("barAction"), action: literal("save", "never", "close"), token: secret }),
 };
 
 const parseBy =

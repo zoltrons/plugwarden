@@ -107,11 +107,6 @@ pub fn set_org_keys(org_keys_json: &str) -> Result<usize, JsError> {
     api::set_org_keys(org_keys_json).map_err(js)
 }
 
-#[wasm_bindgen(js_name = isUnlocked)]
-pub fn is_unlocked() -> bool {
-    api::is_unlocked()
-}
-
 #[wasm_bindgen]
 pub fn lock() {
     api::lock()

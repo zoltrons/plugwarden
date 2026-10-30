@@ -50,14 +50,12 @@ function run(req: CoreRequest): unknown {
       core.lock();
       authHashes.clear();
       return true;
-    case "status":
-      return { unlocked: core.isUnlocked() };
+    case "vaultLoaded":
+      return vault.loaded();
     case "loadVault":
       return vault.loadVault(req.ciphers, req.folders, req.sends, req.orgKeys, req.collections, req.orgs);
     case "upsertCipher":
       return vault.upsertCipher(req.cipher);
-    case "removeCipher":
-      return vault.removeCipher(req.id);
     case "listVault":
       return vault.listVault();
     case "getCipher":

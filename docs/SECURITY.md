@@ -59,6 +59,14 @@ freed rather than zeroed in place.
    they are never replayed to another server; a pending 2FA login holds a master-key handle, so an
    abandoned attempt is freed as soon as it expires (`getState` → `cancelTwoFactor`).
 
+8b. **Every unlock path ends in the same place.** Master password, PIN and biometrics all go through
+    `afterUnlock` (`src/background/account.ts`), which sets `unlocked` and arms the auto-lock, so no path
+    can unlock without the lock timer. PIN and biometric material is stored only as a *wrapped* user key
+    (`storage.local`, removed on logout); the PIN is additionally limited to 5 attempts per session.
+    Biometric unlock uses WebAuthn's PRF extension with `userVerification: "required"`, an RP ID of the
+    extension origin and a random salt, and refuses authenticators without PRF instead of degrading to
+    "biometrics as a UI gate".
+
 9. **Origin keys are best effort, never fatal.** One undecryptable organization key must not make the
    personal vault unreadable (`crates/core-wasm/src/api.rs` `set_org_keys`, plus the `try/catch` in
    `loadVault`); affected items surface as undecryptable instead.
@@ -77,15 +85,25 @@ freed rather than zeroed in place.
 13. **Clipboard copies are cleared on a timer**, and the clear is armed only when the write actually
     happened — never after a failed copy that would otherwise erase the user's clipboard.
 
+14. **Locking tears down in-page UI.** Auto-lock, logout and login call `lockNow`, which closes the
+    inline menu and save bar in every tab: those frames show decrypted item names, so they must not
+    survive the lock. The popup/side panel follow the session in `chrome.storage.session` and drop their
+    decrypted state on the same event.
+
 ## Known gaps
 
-- **Master password re-prompt (`reprompt`) is not implemented.** Items marked for re-prompt in the web
-  vault are revealed and filled without asking again. Treat it as unsupported (see
-  `docs/PARITY_REPORT.md`); this is the largest remaining gap versus the official clients.
+- **Master password re-prompt (`reprompt`) is enforced, with one exception.** Items flagged in the web
+  vault are gated in the service worker for the item view (and therefore editing), copy, TOTP, filling
+  (popup, inline menu and "fill the first match") and attachment downloads — see
+  `src/background/reprompt.ts`. Page-load autofill skips flagged items entirely. **Not** covered: a
+  passkey assertion from a flagged item still goes through the approval window (the user has already
+  unlocked the vault and picked the item there), and an org policy that forces the flag is only honored
+  as far as Vaultwarden reports it on each cipher.
 - **The extension holds broad host permissions** (`https://*/*`, `http://*/*`) because autofill needs to
   inject into arbitrary sites. It is the largest standing privilege we have; do not add more without a
   written reason.
-- **A redirect answered by your own server** during an attachment download is followed (S3-backed
-  attachments need it), so the SSRF surface is limited to the server you configured.
+- **Attachment downloads never follow a redirect** and must stay on the configured server's origin
+  (`src/transport/vault.ts`). The SSRF surface is the configured server only; the price is that an
+  attachment store that redirects (e.g. S3) cannot be downloaded from.
 - **Cards and identities are listed on every site** (parity with the official clients) and fill on an
   explicit click.

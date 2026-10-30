@@ -8,7 +8,8 @@ import { touchAutoLock } from "./lock.ts";
 import { pageLoadFill } from "./autofill.ts";
 import { conditionalReady, openConditional } from "./passkey.ts";
 import { getLocal, getSession, getSettings, getTabState, setLocal, setTabState } from "./store.ts";
-import { copyToClipboard, list, markUsed, save } from "./vault.ts";
+import { REPROMPT_MESSAGE, repromptPending } from "./reprompt.ts";
+import { copyToClipboard, ensureLoaded, list, markUsed, save } from "./vault.ts";
 
 export interface InlineContext {
   frameId: number;
@@ -38,7 +39,7 @@ const unlocked = async () => (await getSession()).unlocked && (await coreAlive()
 async function items(kind: FieldKind, url: string): Promise<MenuItem[]> {
   const pick = ({ id, type, name, sub }: VaultItem) => ({ id, type, name, sub });
   if (kind === "login") {
-    await list(); // vault loaded into the worker
+    await ensureLoaded();
     const { defaultUriMatch } = await getSettings();
     return (await coreCall<VaultItem[]>({ op: "matchUri", url, defaultMatch: defaultUriMatch })).map(pick);
   }
@@ -51,8 +52,8 @@ async function items(kind: FieldKind, url: string): Promise<MenuItem[]> {
 
 
 /**
- * Page-originated work is cheap for a page to request and expensive to run (vault scan, PSL, storage
- * writes). One at a time per tab: a page submitting a form in a loop cannot queue unbounded work.
+ * Page-originated work is cheap for a page to request and expensive to run (vault scan, PSL). One focus
+ * at a time per tab. (Submitted logins are coalesced per tab before the queue, in index.ts.)
  */
 const inFlight = new Set<string>();
 
@@ -75,7 +76,7 @@ export async function handlePage(req: PageRequest, sender: chrome.runtime.Messag
   if (!url || tabId === undefined || sender.frameId === undefined) return { rows: 0 };
   if (req.type === "inlineFocus")
     return oncePerTab("focus", tabId, () => onFocus(req.kind, req.nonce, url, tabId!, sender.frameId!), { rows: 0 });
-  await oncePerTab("submit", tabId, () => loginSubmitted(tabId!, url, req.username, req.password), undefined);
+  await loginSubmitted(tabId, url, req.username, req.password);
   return null;
 }
 
@@ -93,7 +94,7 @@ async function loginSubmitted(tabId: number, url: string, username: string, pass
   const settings = await getSettings();
   const host = new URL(url).host;
   if (!settings.savePrompt || settings.neverSave.includes(host) || !(await unlocked())) return;
-  await list();
+  await ensureLoaded();
   const matches = await coreCall<VaultItem[]>({ op: "matchUri", url, defaultMatch: settings.defaultUriMatch });
   const same = matches.find((m) => m.sub === username && !m.readOnly);
   const expiresAt = Date.now() + SAVE_TTL_MS;
@@ -134,7 +135,7 @@ export async function showBar(tabId: number): Promise<void> {
 async function onSameSite(tabId: number, url: string): Promise<boolean> {
   try {
     const tab = await chrome.tabs.get(tabId);
-    return !!tab.url && new URL(tab.url).host === new URL(url).host;
+    return !!tab.url && new URL(tab.url).origin === new URL(url).origin;
   } catch {
     return false; // no such tab, or a page we cannot read (chrome://, the web store)
   }
@@ -182,13 +183,21 @@ export async function handleFrame(req: FrameRequest, tabId: number): Promise<unk
     return null;
   }
   if (!(await unlocked())) return { kind: ctx.kind, locked: true, items: [], passkey: false } satisfies MenuData;
-  await touchAutoLock();
   const available = await items(ctx.kind, ctx.url);
   const passkey = ctx.kind === "login" && (await conditionalReady(tabId, ctx.frameId));
   if (req.type === "inlineList") return { kind: ctx.kind, locked: false, items: available, passkey } satisfies MenuData;
 
   // inlineFill: only an item offered for this field and frame.
   if (!available.some((i) => i.id === req.id)) throw new Error("item not available here");
+  // Only a pick counts as activity: a page can open the menu (and list it) on its own, in a loop.
+  await touchAutoLock();
+  // A flagged item needs the master password, and there is no place to ask for it inside the page:
+  // send the user to the extension popup, where the unlock screen is one click away.
+  const cipher = await coreCall<Record<string, unknown>>({ op: "getCipher", id: req.id });
+  if (repromptPending(cipher)) {
+    await chrome.action.openPopup().catch(() => undefined);
+    throw new Error(REPROMPT_MESSAGE);
+  }
   const target = { tabId, frameIds: [ctx.frameId] };
   await chrome.tabs.sendMessage(tabId, { type: "inlineClose" }, { frameId: ctx.frameId }).catch(() => undefined);
   const origin = new URL(ctx.url).origin;

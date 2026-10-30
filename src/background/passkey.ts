@@ -15,7 +15,7 @@ import {
 import { UserError } from "./account.ts";
 import { coreAlive, coreCall } from "./core.ts";
 import { getLocal, getSession } from "./store.ts";
-import { list, requireUnlocked, save } from "./vault.ts";
+import { ensureLoaded, requireUnlocked, save } from "./vault.ts";
 
 const SCRIPT_IDS = ["pw-passkey-page", "pw-passkey-relay"];
 /**
@@ -74,29 +74,26 @@ export function onPasskeyPort(port: chrome.runtime.Port): void {
   }
   const tabId = sender.tab.id;
   const frameId = sender.frameId;
-  let id: string | undefined;
+  let called = false;
+  let mine: Pending | undefined;
   let closed = false;
+  // By identity, not by id: a newer conditional call may have taken over this request's id (and window).
+  const drop = () => {
+    if (mine && pending.get(mine.id) === mine) mine.done({ fallback: true });
+  };
 
   port.onDisconnect.addListener(() => {
     closed = true;
-    const p = id ? pending.get(id) : undefined;
-    if (p?.windowId !== undefined) void chrome.windows.remove(p.windowId).catch(() => undefined);
-    if (p) p.done({ fallback: true });
+    drop();
   });
 
   port.onMessage.addListener((msg: unknown) => {
     const m = msg as { ping?: unknown; abort?: unknown } | null;
     if (m?.ping) return; // keep-alive while the user decides
-    if (m?.abort) {
-      // The page aborted the call (AbortSignal) or the browser answered it first.
-      const p = id ? pending.get(id) : undefined;
-      if (p) {
-        if (p.windowId !== undefined) void chrome.windows.remove(p.windowId).catch(() => undefined);
-        p.done({ fallback: true });
-      }
-      return;
-    }
-    if (id) return; // one call per port
+    // The page aborted the call (AbortSignal) or the browser answered it first.
+    if (m?.abort) return drop();
+    if (called) return; // one call per port
+    called = true;
     let call: PasskeyCall;
     try {
       call = parsePasskeyCall(m);
@@ -109,14 +106,16 @@ export function onPasskeyPort(port: chrome.runtime.Port): void {
 
   async function handle(call: PasskeyCall, origin: string): Promise<void> {
     if (!(await getLocal("account"))) return port.postMessage({ fallback: true });
-    // One approval window per tab, so a page cannot pile up windows by calling in a loop.
-    if ([...pending.values()].some((p) => p.tabId === tabId && p.windowId !== undefined))
-      return port.postMessage(error("NotAllowedError", "Another passkey request is pending"));
     const conditional = call.kind === "get" && call.conditional;
-    const reqId = crypto.randomUUID();
+    // Only modal calls open a window on their own, so only they are limited: one per tab, like the
+    // browser, so a page cannot pile up windows by calling in a loop. Checked on the pending entry, not
+    // its window (whose id only exists once windows.create resolves). A conditional call opens nothing
+    // until the user picks it in the inline menu, and replaces its frame's previous one (below).
+    if (!conditional && [...pending.values()].some((p) => p.tabId === tabId && !p.conditional))
+      return port.postMessage(error("NotAllowedError", "Another passkey request is pending"));
     let timer: ReturnType<typeof setTimeout> | undefined;
     const p: Pending = {
-      id: reqId,
+      id: crypto.randomUUID(),
       call,
       origin,
       rpId: (call.options.rpId || new URL(origin).hostname).toLowerCase(),
@@ -125,7 +124,9 @@ export function onPasskeyPort(port: chrome.runtime.Port): void {
       conditional,
       done: (r) => {
         clearTimeout(timer);
-        pending.delete(reqId);
+        if (pending.get(p.id) === p) pending.delete(p.id);
+        // A finished request never leaves its approval window behind.
+        if (p.windowId !== undefined) void chrome.windows.remove(p.windowId).catch(() => undefined);
         if (conditional) void refreshMenu(tabId, frameId);
         if (closed) return;
         try {
@@ -138,10 +139,16 @@ export function onPasskeyPort(port: chrome.runtime.Port): void {
     if (conditional) {
       // A newer conditional call replaces the one still waiting (the page re-requested).
       const previous = conditionalFor(tabId, frameId);
-      if (previous) previous.done(error("AbortError", "This passkey request was replaced by a newer one"));
+      // The user may be choosing in the previous call's window right now: the new call takes it over
+      // (same id, so the window's answer reaches it), but only if the window shows what it asks for.
+      // Otherwise previous.done() closes the window.
+      if (previous?.windowId !== undefined && previous.origin === p.origin && previous.rpId === p.rpId) {
+        [p.id, p.windowId, previous.windowId] = [previous.id, previous.windowId, undefined];
+      }
+      previous?.done(error("AbortError", "This passkey request was replaced by a newer one"));
     }
-    pending.set(reqId, p);
-    id = reqId;
+    pending.set(p.id, p);
+    mine = p;
     if (conditional) timer = setTimeout(() => void p.done({ fallback: true }), CONDITIONAL_TTL_MS);
     if (call.kind === "get") {
       if (await unlocked()) {
@@ -154,7 +161,7 @@ export function onPasskeyPort(port: chrome.runtime.Port): void {
         return p.done({ fallback: true });
       }
     }
-    if (!pending.has(reqId)) return; // the page aborted while we were deciding
+    if (pending.get(p.id) !== p) return; // the page aborted (or replaced it) while we were deciding
     if (conditional) {
       void refreshMenu(tabId, frameId); // the inline menu offers the passkey from now on
       return;
@@ -188,7 +195,7 @@ function get(id: string): Pending {
 }
 
 async function candidates(p: Pending, ids: string[]): Promise<PasskeyCandidate[]> {
-  await list(); // vault loaded into the worker
+  await ensureLoaded();
   return coreCall<PasskeyCandidate[]>({ op: "passkeyCandidates", rpId: p.rpId, origin: p.origin, ids });
 }
 
