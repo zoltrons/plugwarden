@@ -308,7 +308,7 @@ pub fn make_registration_keys(handle: u32) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    
+
     use bitwarden_crypto::SymmetricKeyAlgorithm;
 
     use super::*;
