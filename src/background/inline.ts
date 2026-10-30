@@ -1,7 +1,7 @@
 // Inline menu and save/update bar. The content script reports focused fields and submitted logins;
 // menu.html / bar.html (extension pages framed into the site) ask for data and act. Matching always
 // uses the URL of the frame the field is in, as reported by the browser (sender.url).
-import { type FillResult, fillForm, fillLogin } from "../autofill/page.ts";
+import { type FillResult, fillInPage } from "../autofill/page.ts";
 import type { BarInfo, FieldKind, FrameRequest, MenuData, MenuItem, PageRequest, VaultItem } from "../shared/messages.ts";
 import { coreAlive, coreCall } from "./core.ts";
 import { touchAutoLock } from "./lock.ts";
@@ -205,14 +205,14 @@ export async function handleFrame(req: FrameRequest, tabId: number): Promise<unk
   let res: FillResult | undefined;
   if (ctx.kind === "login") {
     const { username, password, totp } = await coreCall<{ username: string; password: string; totp?: string }>({ op: "fillData", id: req.id });
-    res = (await chrome.scripting.executeScript({ target, func: fillLogin, args: [origin, username, password] }))[0]?.result;
+    res = (await chrome.scripting.executeScript({ target, func: fillInPage, args: [{ mode: "login", origin, username, password }] }))[0]?.result as FillResult | undefined;
     if (res?.filled) {
       await markUsed(req.id);
       if (totp && (await getSettings()).autoCopyTotp) await copyToClipboard(totp);
     }
   } else {
     const values = await coreCall<Record<string, string>>({ op: "formValues", id: req.id });
-    res = (await chrome.scripting.executeScript({ target, func: fillForm, args: [origin, values] }))[0]?.result;
+    res = (await chrome.scripting.executeScript({ target, func: fillInPage, args: [{ mode: "form", origin, values }] }))[0]?.result as FillResult | undefined;
   }
   await setTabState("inline", tabId, undefined);
   return res ?? { filled: false };

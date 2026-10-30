@@ -10,13 +10,21 @@ type Kind = "login" | "card" | "identity";
 const IDENTITY = /^(name|given-name|additional-name|family-name|email|tel|organization|street-address|address-line[123]|address-level[12]|postal-code|country|country-name)$/;
 const TEXTISH = ["text", "email", "tel", "", "search", "number"];
 
-/** What kind of menu a field gets, if any. The autocomplete attribute wins; names and ids are hints. */
+/** Everything that can name a field: its attributes, its label(s) and aria-labelledby text. */
+function hintsOf(el: HTMLInputElement): string {
+  const parts = [el.name, el.id, el.getAttribute("aria-label") ?? "", el.placeholder];
+  for (const id of (el.getAttribute("aria-labelledby") ?? "").split(/\s+/)) if (id) parts.push(document.getElementById(id)?.textContent ?? "");
+  for (const l of el.labels ?? []) parts.push(l.textContent ?? "");
+  return parts.join(" ").toLowerCase();
+}
+
+/** What kind of menu a field gets, if any. The autocomplete attribute wins; names and labels are hints. */
 function kindOf(el: Element): Kind | undefined {
   if (!(el instanceof HTMLInputElement) || el.disabled || el.readOnly) return undefined;
   if (el.type === "password") return "login";
   if (!TEXTISH.includes(el.type)) return undefined;
   const ac = el.autocomplete.toLowerCase().split(/\s+/).pop() ?? "";
-  const hint = `${el.name} ${el.id} ${el.getAttribute("aria-label") ?? ""} ${el.placeholder}`.toLowerCase();
+  const hint = hintsOf(el);
   if (ac.startsWith("cc-") || /card.?num|cc.?num|cvc|cvv|csc|card.?holder|expir/.test(hint)) return "card";
   if (ac === "username" || ac === "webauthn") return "login";
   if (IDENTITY.test(ac) && !(ac === "email" && hasPassword(el))) return "identity";
@@ -31,7 +39,19 @@ function active(): Element | null {
   return a;
 }
 
-const hasPassword = (el: HTMLInputElement) => !!(el.form ?? document).querySelector("input[type=password]");
+/** A password field near `el`: in its form, else in its own root (a shadow root is its own document). */
+const hasPassword = (el: HTMLInputElement) => !!(el.form ?? (el.getRootNode() as ParentNode)).querySelector?.("input[type=password]");
+
+/** True when this frame has a password field anywhere, open shadow roots included. */
+function hasPasswordField(): boolean {
+  const roots: (Document | ShadowRoot)[] = [document];
+  while (roots.length) {
+    const root = roots.pop()!;
+    if (root.querySelector('input[type="password"]')) return true;
+    for (const el of root.querySelectorAll("*")) if (el.shadowRoot) roots.push(el.shadowRoot);
+  }
+  return false;
+}
 
 // ---------- inline menu ----------
 
@@ -143,9 +163,9 @@ addEventListener("submit", () => report(), true);
 
 // ---------- autofill on page load ----------
 
-/** One cheap query; the service worker decides whether anything is filled (setting, lock, matches). */
+/** The service worker decides whether anything is filled (setting, lock, matches). */
 function offerPageLoad() {
-  if (!document.querySelector('input[type="password"]')) return;
+  if (!hasPasswordField()) return;
   void chrome.runtime.sendMessage({ type: "pageLoad" }).catch(() => undefined);
 }
 

@@ -15,6 +15,7 @@ comments and commits in English.
 | Build extension → `dist/ext` | `node tools/fetch-psl.mjs` (once) then `npm run build` |
 | Rust tests | `bash tools/fetch-test-vectors.sh && PW_TEST_VECTORS=target/test-vectors cargo test -p plugwarden-core-wasm` |
 | Biometric / passkey smoke (no server) | `npm run test:biometric` / `npm run test:passkeys` |
+| Autofill field-detection smoke (no server, real browser) | `npm run test:fill` |
 | e2e vs. real Vaultwarden | `docker compose -f dev/vaultwarden/docker-compose.yml up -d --wait`, `node tools/build.mjs --e2e`, `npm run test:e2e` |
 | UI preview with stubbed worker (no server) | `node dev/preview/build.mjs` → `dev/preview/shot.mjs` |
 

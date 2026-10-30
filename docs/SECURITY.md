@@ -32,10 +32,12 @@ freed rather than zeroed in place.
    shape *and* size. Unknown types are refused; anything a page or a server can make arbitrarily large
    (form values, challenges, credential-id lists, imports) is capped at the boundary.
 
-3. **Filling is triple-checked.** For a login the item must match the frame's own URL, the injected
-   function re-checks `location.origin` inside the frame (`src/autofill/page.ts`), and the script is
-   injected into exactly the frame that asked (`frameIds: [ctx.frameId]`). A same-tab navigation or a
-   tab switch between the click and the injection therefore cannot fill another site.
+3. **Filling is triple-checked.** For a login the item must match the site's URL, the injected function
+   re-checks `location.origin` inside the frame (`src/autofill/page.ts`), and the inline menu injects
+   into exactly the frame that asked (`frameIds: [ctx.frameId]`). A same-tab navigation or a tab switch
+   between the click and the injection therefore cannot fill another site. Popup and gesture fills try
+   the top frame first and, only when it has no form, every frame of the tab: the same origin check runs
+   in each one, so a cross-origin iframe returns before it reads a single field.
 
 4. **An iframe of ours is not an authority.** `menu.html`/`bar.html` are web-accessible, so any site can
    frame them. Both carry a per-document secret (menu: from `content.js` via the URL fragment, inside a

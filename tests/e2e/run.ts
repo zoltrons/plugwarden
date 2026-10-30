@@ -171,6 +171,9 @@ const pages: Record<string, string> = {
   "/shadow": `<div id="host"></div><script>document.getElementById("host").attachShadow({ mode: "open" }).innerHTML = ${JSON.stringify(LOGIN_FORM)};</script>`,
   "/change": `<form onsubmit="return false"><input id="u" autocomplete="username"><input id="cur" type="password" autocomplete="current-password"><input id="new" type="password" autocomplete="new-password"><input id="rep" type="password"><button>Change</button></form>`,
   "/framed": `<p>outer</p><iframe id="f" src="/login" style="width:500px;height:200px"></iframe>`,
+  // A zero-size password decoy in front of the real form, and a two-step login with no password at all.
+  "/decoy": `<input id="decoy" type="password" style="position:absolute;width:0;height:0;opacity:0;border:0">${LOGIN_FORM}`,
+  "/useronly": `<form onsubmit="return false"><input id="u" name="login" placeholder="Email or phone"><button type="submit">Next</button></form>`,
 };
 const site = createServer((req, res) => {
   res.setHeader("Content-Type", "text/html; charset=utf-8");
@@ -992,6 +995,19 @@ try {
     console.log(`    assigned shortcut: ${JSON.stringify(cmd.shortcut)}`);
   });
 
+  await step("autofill: a zero-size password decoy is skipped, a username-first step still fills", async () => {
+    await loginPage.goto(`${SITE}/decoy`);
+    await loginPage.bringToFront();
+    assert.deepEqual(await shortcut(), { filled: true });
+    const decoy = await loginPage.evaluate(() => ["decoy", "u", "p"].map((id) => (document.getElementById(id) as HTMLInputElement).value));
+    assert.deepEqual(decoy, ["", "local-user", "local-pass-2"]);
+    await loginPage.goto(`${SITE}/useronly`);
+    await loginPage.bringToFront();
+    assert.deepEqual(await shortcut(), { filled: true });
+    assert.equal(await loginPage.evaluate(() => (document.getElementById("u") as HTMLInputElement).value), "local-user");
+    await loginPage.goto(`${SITE}/login`);
+  });
+
   await step("badge counts the site's logins; context menu lists them and fills the picked one", async () => {
     await reopenPopup(); // also makes the login page the active tab
     const badge = () =>
@@ -1083,6 +1099,19 @@ try {
     const f = loginPage.frames().find((x) => x.url() === `${SITE}/login`)!;
     await f.waitForFunction(() => (document.getElementById("p") as HTMLInputElement).value !== "");
     assert.deepEqual(await values(f, ["u", "p"]), ["local-user", "local-pass-2"]);
+  });
+
+  await step("popup fill: reaches a login form inside a same-origin iframe", async () => {
+    await loginPage.goto(`${SITE}/framed`);
+    const inner = loginPage.frames().find((f) => f.url() === `${SITE}/login`)!;
+    await inner.waitForFunction(() => !!document.getElementById("u"));
+    await reopenPopup();
+    await page.getByRole("button", { name: "Fill Local app" }).click();
+    await inner.waitForFunction(() => (document.getElementById("p") as HTMLInputElement).value !== "");
+    assert.deepEqual(await values(inner, ["u", "p"]), ["local-user", "local-pass-2"]);
+    // The fill focuses the fields it writes; the inline menu must not open over the fill.
+    await loginPage.waitForTimeout(300);
+    assert.equal(await loginPage.locator("plugwarden-menu").count(), 0, "menu opened after the popup fill");
   });
 
   await step("inline menu: card fields list cards and fill name, number, expiry and code", async () => {

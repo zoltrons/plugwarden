@@ -34,17 +34,22 @@ Plugwarden is a Manifest V3 Chrome extension (Chromium 156+) that talks to a sel
 * **Popup** (`src/ui`): vanilla TS, no components framework. Asks the SW for data; never sees keys, never calls
   `fetch`. First paint must not wait for WASM.
 * **Autofill** (`src/autofill`): a static content script (`content.js`, all http(s) pages and frames,
-  `document_idle`) that only checks for a password field on load (one `querySelector`) and otherwise
-  reacts when the user focuses an input. "Autofill on page load" (off by default) asks the worker to
-  fill the frame's best login: the per-item tri-state decides who takes part, the login last used for
-  the site wins, and only empty fields are written. For
+  `document_idle`) that only looks for a password field on load (open shadow roots included) and
+  otherwise reacts when the user focuses an input. "Autofill on page load" (off by default) asks the
+  worker to fill the frame's best login: the per-item tri-state decides who takes part, the login last
+  used for the site wins, and only empty fields are written. For
   login, card and identity fields it frames the inline menu (`menu.html`) under the field; after a login
   form is submitted it asks the SW whether to show the save/update bar (`bar.html`, top frame only).
   Both are extension pages (web-accessible resources), so the site cannot read their contents; they ask
-  the SW for data and the SW fills. Fills (inline menu, popup "Fill", Ctrl+Shift+L, context menu) inject a
-  self-contained function from `page.ts` with `chrome.scripting` into the frame whose URL matched, and
-  the function re-checks the origin before filling. Matching always uses the URL the browser reports
-  (`sender.url` / `tab.url`), never one the page supplies.
+  the SW for data and the SW fills. Fills (inline menu, popup "Fill", Ctrl+Shift+L, context menu) inject
+  the self-contained `fillInPage` from `page.ts` with `chrome.scripting`. It scores the fields itself:
+  invisible/zero-size decoys are skipped, a login form beats a registration form, `current-password`
+  beats `new-password`, the username must be in the same form (or block, when there is no form), and
+  labels/`aria-labelledby`/placeholders count as names. Values are written through the prototype setter
+  with the events typing produces. The popup/gesture path tries the top frame first and then every
+  frame, because the form is often in a (same-origin) iframe; each frame re-checks `location.origin`
+  and refuses a foreign one. Matching always uses the URL the browser reports (`sender.url` /
+  `tab.url`), never one the page supplies.
 
 ## Modules and boundaries
 
@@ -56,7 +61,7 @@ Plugwarden is a Manifest V3 Chrome extension (Chromium 156+) that talks to a sel
 | `src/vault` | Encrypted cache, lock state machine, incremental sync, in-memory search index | `shared`, `transport` (SW side), core-wasm (offscreen side) |
 | `src/background` | SW entry, router, alarms, commands, context menu | `shared`, `transport`, `vault` |
 | `src/offscreen` | WASM host + decrypted state | `shared`, core-wasm |
-| `src/autofill` | Injected fill/read functions, URI matching (+ Public Suffix List) | nothing (page.ts must stay self-contained) |
+| `src/autofill` | Injected fill/read functions (`fillInPage`), URI matching (+ Public Suffix List) | nothing (injected functions must declare everything inside themselves) |
 | `src/ui` | Popup | `shared` |
 
 Rule: **UI and autofill never touch crypto or the network.** All cross-context calls go through the
