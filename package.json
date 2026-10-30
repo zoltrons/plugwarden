@@ -1,6 +1,6 @@
 {
   "name": "plugwarden",
-  "version": "0.2.6",
+  "version": "0.2.6.1",
   "private": true,
   "license": "GPL-3.0-only",
   "type": "module",
