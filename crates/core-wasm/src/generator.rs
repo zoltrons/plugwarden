@@ -153,7 +153,8 @@ mod tests {
     #[test]
     fn password_respects_letter_minimums() {
         for _ in 0..200 {
-            let p = generate(r#"{"length":12,"special":false,"minLowercase":5,"minUppercase":4}"#).unwrap();
+            let p = generate(r#"{"length":12,"special":false,"minLowercase":5,"minUppercase":4}"#)
+                .unwrap();
             assert_eq!(p.chars().count(), 12);
             assert!(p.chars().filter(char::is_ascii_lowercase).count() >= 5);
             assert!(p.chars().filter(char::is_ascii_uppercase).count() >= 4);

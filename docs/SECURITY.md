@@ -138,3 +138,6 @@ freed rather than zeroed in place.
   attachment store that redirects (e.g. S3) cannot be downloaded from.
 - **Cards and identities are listed on every site** (parity with the official clients) and fill on an
   explicit click.
+- **RUSTSEC-2023-0071 (Marvin timing attack on `rsa`) is ignored in `deny.toml`.** The crate arrives through
+  `bitwarden-crypto`, has no patched release, and its RSA operations run only locally in the offscreen worker,
+  where no remote party can observe their timing. Remove the ignore once `rsa` ships a fix.

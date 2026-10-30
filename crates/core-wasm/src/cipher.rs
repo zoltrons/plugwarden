@@ -110,8 +110,8 @@ fn apply(obj: &mut Map<String, Value>, f: &mut Leaf) -> Result<()> {
         let k = k.to_ascii_lowercase();
         if k == "name" || k == "notes" || CONTAINERS.contains(&k.as_str()) {
             walk(v, f)?;
-        } else if k == "attachments" {
-            if let Value::Array(items) = v {
+        } else if k == "attachments"
+            && let Value::Array(items) = v {
                 for a in items.iter_mut().filter_map(Value::as_object_mut) {
                     if let Some((_, name)) = a
                         .iter_mut()
@@ -121,7 +121,6 @@ fn apply(obj: &mut Map<String, Value>, f: &mut Leaf) -> Result<()> {
                     }
                 }
             }
-        }
     }
     Ok(())
 }

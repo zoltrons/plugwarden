@@ -99,7 +99,12 @@ pub fn unlock_with_prf(
     protected_user_key: &str,
     encrypted_private_key: Option<String>,
 ) -> Result<(), JsError> {
-    api::unlock_with_prf(prf_b64, protected_user_key, encrypted_private_key.as_deref()).map_err(js)
+    api::unlock_with_prf(
+        prf_b64,
+        protected_user_key,
+        encrypted_private_key.as_deref(),
+    )
+    .map_err(js)
 }
 
 #[wasm_bindgen(js_name = setOrgKeys)]

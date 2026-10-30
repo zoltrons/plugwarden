@@ -1,0 +1,6 @@
+# CI reads this (rustup); a new clippy/rustfmt must not turn an unrelated PR red. Renovate bumps it.
+[toolchain]
+channel = "1.99.1"
+profile = "minimal"
+components = ["rustfmt", "clippy"]
+targets = ["wasm32-unknown-unknown"]
