@@ -2,6 +2,15 @@
 // Talks to the service worker only; decrypted data lives here just while the popup is open.
 import type { FillResult, PageLogin } from "../autofill/page.ts";
 import { URI_MATCH, URI_MATCH_ADVANCED } from "../shared/constants.ts";
+import {
+  ALIAS_INFO,
+  ALIAS_VENDORS,
+  type AliasField,
+  type AliasSettings,
+  type AliasVendor,
+  defaultAliasSettings,
+  missingAliasFields,
+} from "../shared/alias.ts";
 import { cardBrand, groupCardNumber, luhnValid } from "../shared/card.ts";
 import { hasMarkup } from "../shared/markdown.ts";
 import { MAX_QR_BYTES } from "../shared/qr.ts";
@@ -53,7 +62,7 @@ interface EditDraft {
 const GEN_DEFAULTS: Json = {
   type: "password", length: 20, lowercase: true, uppercase: true, numbers: true, special: true, avoidAmbiguous: false, minLowercase: 1, minUppercase: 1, minNumber: 1, minSpecial: 1,
   numWords: 5, wordSeparator: "-", capitalize: true, includeNumber: true, pinLength: 4,
-  usernameType: "word", email: "", domain: "",
+  usernameType: "word", email: "", domain: "", aliasVendor: "simplelogin",
 };
 const GEN_KEY = "genOptions";
 const WORDLIST_KEY = "genWordlist";
@@ -165,6 +174,12 @@ const st = {
   draft: undefined as EditDraft | undefined,
   gen: savedGen(),
   generated: "",
+  /** Forwarded email alias settings for the service selected in the generator (session-backed). */
+  alias: undefined as AliasSettings | undefined,
+  /** Which service's settings are being read right now (a switch mid-flight must not land). */
+  aliasLoadingFor: undefined as AliasVendor | undefined,
+  /** An alias request is in flight: a double-click must not create two addresses. */
+  aliasBusy: false,
   /** Ready-made password variants shown under the generator. */
   suggestions: [] as string[],
   /** Generator history screen, while open. */
@@ -206,6 +221,7 @@ export function resetVault(): void {
     folder: "", item: undefined, reveal: new Set(), totp: undefined, confirmDelete: 0, draft: undefined,
     large: undefined, qr: undefined, pwned: undefined, memory: undefined, notesPreview: false,
     gen: savedGen(), generated: "", suggestions: [], history: undefined, toast: "", copied: "", sawList: false, uriOpen: new Set(),
+    alias: undefined, aliasLoadingFor: undefined, aliasBusy: false,
   });
 }
 
@@ -1916,6 +1932,15 @@ export function vaultScreen(ctx: Ctx): HTMLElement {
 // ---------- generator ----------
 
 async function regenerate(ctx: Ctx) {
+  if (st.gen.type === "alias") {
+    // Any option change or chip click lands here. It must not call the forwarding service: that
+    // creates a real alias in the user's account. Only the generate / refresh buttons do (generateAliasNow).
+    st.suggestions = [];
+    st.error = undefined;
+    st.generated = "";
+    ctx.rerender();
+    return;
+  }
   const r = await send<string>({ type: "generate", options: genOptions() });
   st.generated = r.ok ? r.data : "";
   st.error = r.ok ? undefined : r.error;
@@ -1927,6 +1952,38 @@ async function regenerate(ctx: Ctx) {
   const all = await Promise.all(variants.map((v) => send<string>({ type: "generate", options: { ...genOptions(), ...v } })));
   if (st.gen.type !== "password") return;
   st.suggestions = all.flatMap((x) => (x.ok ? [x.data] : []));
+  ctx.rerender();
+}
+
+/**
+ * One alias request at a time. The answer is dropped when the user has switched service meanwhile:
+ * an address from the previous service must not be shown (or saved into a login) as the new one.
+ */
+async function generateAliasNow(ctx: Ctx) {
+  const alias = st.alias;
+  if (!alias || st.aliasBusy || missingAliasFields(alias).length) return;
+  st.aliasBusy = true;
+  try {
+    const r = await send<string>({ type: "generateAlias", vendor: alias.vendor });
+    if (st.alias?.vendor !== alias.vendor) return;
+    st.generated = r.ok ? r.data : "";
+    st.error = r.ok ? undefined : r.error;
+  } finally {
+    st.aliasBusy = false;
+    ctx.rerender();
+  }
+}
+
+/** Loads the selected service's settings (session storage in the worker) once per generator visit. */
+async function loadAlias(ctx: Ctx, vendor: AliasVendor) {
+  st.aliasLoadingFor = vendor;
+  const r = await send<AliasSettings>({ type: "aliasSettings", vendor });
+  if (st.aliasLoadingFor !== vendor) return; // another service was selected meanwhile
+  st.aliasLoadingFor = undefined;
+  if (str(st.gen.aliasVendor) !== vendor) return;
+  // Even a failed read leaves a value, so the screen does not request it again on every render.
+  st.alias = r.ok ? r.data : defaultAliasSettings(vendor);
+  if (!r.ok) st.error = r.error;
   ctx.rerender();
 }
 
@@ -1987,7 +2044,7 @@ function historyScreen(ctx: Ctx, list: HistoryEntry[]): HTMLElement {
 
 export function generatorScreen(ctx: Ctx): HTMLElement {
   if (st.history) return historyScreen(ctx, st.history);
-  if (!st.generated && !st.error) void regenerate(ctx);
+  if (st.gen.type !== "alias" && !st.generated && !st.error) void regenerate(ctx);
   const g = st.gen;
   const set = (k: string, v: unknown) => {
     g[k] = v;
@@ -2038,6 +2095,16 @@ export function generatorScreen(ctx: Ctx): HTMLElement {
       h("input", { ...props, value: str(g[k]), "aria-label": label, spellcheck: false, onchange: (e: Event) => set(k, (e.target as HTMLInputElement).value) }),
     );
   const custom = g.type === "passphrase" && savedWordlist().length >= 100;
+  // The alias settings live in the worker's session storage (a token is a secret; no localStorage).
+  const aliasVendor: AliasVendor = (ALIAS_VENDORS as readonly string[]).includes(str(g.aliasVendor)) ? (g.aliasVendor as AliasVendor) : "simplelogin";
+  if (g.type === "alias" && st.alias === undefined && st.aliasLoadingFor !== aliasVendor) void loadAlias(ctx, aliasVendor);
+  const aliasReady = !!st.alias && st.alias.vendor === aliasVendor && missingAliasFields(st.alias).length === 0;
+  const switchAlias = (v: AliasVendor) => {
+    st.alias = undefined;
+    st.generated = "";
+    st.error = undefined;
+    set("aliasVendor", v);
+  };
   let options: HTMLElement;
   if (g.type === "password")
     options = h(
@@ -2080,7 +2147,73 @@ export function generatorScreen(ctx: Ctx): HTMLElement {
       ),
     );
   else if (g.type === "pin") options = h("div", { class: "group" }, slider("pinLength", t("length"), 3, 12));
-  else
+  else if (g.type === "alias") {
+    const info = ALIAS_INFO[aliasVendor];
+    const saved = st.alias;
+    const save = (patch: Partial<AliasSettings>) => {
+      if (!saved) return;
+      const next = { ...saved, ...patch, vendor: aliasVendor };
+      st.alias = next;
+      // The address on screen was made with the old settings, and making a new one is the user's
+      // click, not a side effect of typing a key.
+      st.generated = "";
+      st.error = undefined;
+      void (async () => {
+        const r = await send({ type: "setAliasSettings", settings: next });
+        if (!r.ok) st.error = r.error;
+        ctx.rerender();
+      })();
+    };
+    const input = (field: AliasField, label: string, hint: string, props: Record<string, unknown>) =>
+      h(
+        "label",
+        { class: "row" },
+        h("div", { class: "body" }, h("span", { class: "title" }, label), h("span", { class: "sub" }, hint)),
+        h("input", {
+          ...props,
+          value: saved ? str(saved[field]) : "",
+          disabled: !saved, // edits before the settings arrive would be dropped
+          "aria-label": label,
+          spellcheck: false,
+          autocomplete: "off",
+          onchange: (e: Event) => save({ [field]: (e.target as HTMLInputElement).value } as Partial<AliasSettings>),
+        }),
+      );
+    options = h(
+      "div",
+      {},
+      h(
+        "div",
+        { class: "group" },
+        h(
+          "div",
+          { class: "row" },
+          h("div", { class: "body" }, h("span", { class: "title" }, t("aliasService")), h("span", { class: "sub" }, t("aliasServiceHint"))),
+          withChevron(
+            h(
+              "select",
+              { "aria-label": t("aliasService"), onchange: (e: Event) => switchAlias((e.target as HTMLSelectElement).value as AliasVendor) },
+              ...ALIAS_VENDORS.map((v) => h("option", { value: v, selected: v === aliasVendor }, ALIAS_INFO[v].name)),
+            ),
+          ),
+        ),
+        input("token", t("aliasApiKey"), t("aliasApiKeyHint"), { type: "password" }),
+        info.fields.includes("domain") ? input("domain", t("aliasDomain"), t("aliasDomainHint"), { type: "text", placeholder: "example.com" }) : null,
+        info.selfHost ? input("baseUrl", t("aliasBaseUrl"), t("aliasBaseUrlHint"), { type: "text", placeholder: info.baseUrl }) : null,
+        info.fields.includes("prefix")
+          ? h(
+              "label",
+              { class: "row" },
+              h("div", { class: "body" }, h("span", { class: "title" }, t("aliasWebsitePrefix")), h("span", { class: "sub" }, t("aliasWebsitePrefixHint"))),
+              h("span", { class: "switch" }, h("input", { type: "checkbox", checked: saved?.prefix === true, disabled: !saved, "aria-label": t("aliasWebsitePrefix"), onchange: (e: Event) => save({ prefix: (e.target as HTMLInputElement).checked }) }), h("span")),
+            )
+          : null,
+      ),
+      info.help
+        ? h("button", { type: "button", class: "btn text small", onclick: () => void chrome.tabs.create({ url: info.help! }) }, t("aliasGetToken", info.name))
+        : null,
+    );
+  } else
     options = h(
       "div",
       {},
@@ -2106,6 +2239,7 @@ export function generatorScreen(ctx: Ctx): HTMLElement {
       chip("passphrase", t("typePassphrase")),
       chip("pin", t("typePin")),
       chip("username", t("username")),
+      chip("alias", t("forwardedEmail")),
     ),
     h(
       "div",
@@ -2116,21 +2250,27 @@ export function generatorScreen(ctx: Ctx): HTMLElement {
         h(
           "output",
           { class: "mono", "aria-live": "polite", "aria-label": t("generatedValue") },
-          ...(st.generated ? colorize(st.generated) : ["…"]),
+          ...(st.generated ? colorize(st.generated) : [g.type === "alias" && !aliasReady ? t("aliasNotConfigured") : "…"]),
         ),
         h(
           "div",
           { class: "trailing" },
-          iconButton("refresh", t("regenerate"), () => void regenerate(ctx)),
-          iconButton("copy", t("copyField", t("generatedValue")), () => {
-            void copy(ctx, st.generated);
-            void send({ type: "generatorHistoryAdd", value: st.generated });
-          }),
+          iconButton("refresh", t("regenerate"), () => void (g.type === "alias" ? generateAliasNow(ctx) : regenerate(ctx))),
+          iconButton(
+            "copy",
+            t("copyField", t("generatedValue")),
+            () => {
+              void copy(ctx, st.generated);
+              void send({ type: "generatorHistoryAdd", value: st.generated });
+            },
+            { disabled: !st.generated },
+          ),
         ),
       ),
-      h("div", { class: "generated-foot" }, st.generated ? strengthBar(st.generated) : null, st.generated ? h("span", { class: "meter-label" }, strength(st.generated).label) : null),
+      h("div", { class: "generated-foot" }, st.generated && g.type !== "alias" ? strengthBar(st.generated) : null, st.generated && g.type !== "alias" ? h("span", { class: "meter-label" }, strength(st.generated).label) : null),
     ),
     options,
+    g.type === "alias" && aliasReady && !st.generated ? actionRow("refresh", t("generateEmail"), () => void generateAliasNow(ctx)) : null,
     st.suggestions.length
       ? h(
           "div",
@@ -2140,9 +2280,9 @@ export function generatorScreen(ctx: Ctx): HTMLElement {
         )
       : null,
     st.generated
-      ? actionRow("plus", t(g.type === "username" ? "createLoginWithUsername" : "createLoginWithPassword"), () => {
+      ? actionRow("plus", t(g.type === "alias" ? "createLoginWithEmail" : g.type === "username" ? "createLoginWithUsername" : "createLoginWithPassword"), () => {
           ctx.goto("vault");
-          startEdit(ctx, undefined, { data: { [g.type === "username" ? "username" : "password"]: st.generated } });
+          startEdit(ctx, undefined, { data: { [g.type === "username" || g.type === "alias" ? "username" : "password"]: st.generated } });
         })
       : null,
     errorBox(),

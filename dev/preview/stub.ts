@@ -147,6 +147,14 @@ function respond(req: Request): Response<unknown> {
       return { ok: true, data: { code: "123456", period: 30, remaining: 21 } };
     case "generate":
       return { ok: true, data: "k7#Vm2qT!pR9zLd4Xw8b" };
+    case "aliasSettings":
+      return {
+        ok: true,
+        data: { vendor: req.vendor, token: "demo-token", baseUrl: "", domain: req.vendor === "addyio" || req.vendor === "forwardemail" ? "example.com" : "", prefix: false },
+      };
+    case "setAliasSettings":
+    case "generateAlias":
+      return { ok: true, data: req.type === "generateAlias" ? "ada.shop@example.com" : null };
     case "generatorHistory":
       return { ok: true, data: [{ date: Date.now() - 60_000, value: "k7#Vm2qT!pR9zLd4Xw8b" }] };
     case "sendList":

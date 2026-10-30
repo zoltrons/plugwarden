@@ -73,6 +73,11 @@ const scenes = {
     await page.getByRole("searchbox").waitFor();
     await page.getByRole("navigation").getByRole("button", { name: "Generator" }).click();
   },
+  alias: async (page) => {
+    await page.getByRole("searchbox").waitFor();
+    await page.getByRole("navigation").getByRole("button", { name: "Generator" }).click();
+    await page.getByRole("button", { name: "Forwarded email alias" }).click();
+  },
   send: async (page) => {
     await page.getByRole("searchbox").waitFor();
     await page.getByRole("navigation").getByRole("button", { name: "Send" }).click();

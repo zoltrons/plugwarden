@@ -52,3 +52,13 @@ test("passkey calls: page-supplied options are bounded", () => {
     /too long/,
   );
 });
+
+test("popup requests: alias generation names a known service and caps its settings", () => {
+  assert.deepEqual(parseRequest({ type: "generateAlias", vendor: "fastmail" }), { type: "generateAlias", vendor: "fastmail" });
+  throws(() => parseRequest({ type: "generateAlias", vendor: "sendgrid" }), /vendor/);
+  const ok = { type: "setAliasSettings", settings: { vendor: "addyio", token: "t", baseUrl: "https://a.example", domain: "example.com", prefix: false } };
+  assert.deepEqual(parseRequest(ok), ok);
+  throws(() => parseRequest({ ...ok, settings: { ...ok.settings, token: "x".repeat(2000) } }), /too long/);
+  throws(() => parseRequest({ ...ok, settings: { ...ok.settings, baseUrl: "x".repeat(600) } }), /too long/);
+  throws(() => parseRequest({ type: "aliasSettings", vendor: "nope" }), /vendor/);
+});

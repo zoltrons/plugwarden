@@ -27,6 +27,10 @@
   local: tools/build-wasm.sh
   sync: wasm-bindgen version, target features (SIMD), wasm-opt flags.
 - repo: clients
+  path: libs/tools/generator/core/src/integration
+  local: src/shared/alias.ts, src/background/alias.ts
+  sync: Forwarder create-alias request (URL, auth header, body, response field) and the settings each service reads; a new vendor touches ALIAS_INFO, the message validators and the generator UI.
+- repo: clients
   path: apps/browser/src/manifest.v3.json
   local: src/manifest.json
   sync: Permissions, CSP, minimum_chrome_version, commands.

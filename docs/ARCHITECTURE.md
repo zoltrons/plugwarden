@@ -100,6 +100,17 @@ scripts may only send a whitelisted subset of message types).
 * Capability detection: `/api/config` → `version` (Bitwarden-compat level, `2026.6.0` on Vaultwarden
   1.37.4) and `server.name`; features are gated on that rather than hardcoded.
 
+## Forwarded email aliases
+
+The generator's "Forwarded email alias" type does not use the crypto worker: it asks a third-party
+forwarding service for an address. The request shapes (URL, auth header, JSON body, which response
+field carries the address) are ported from the official clients into `src/shared/alias.ts` — pure,
+unit tested, no fetch — and `src/background/alias.ts` performs the call from the service worker, only
+after a click, never from the popup. Supported: SimpleLogin, Addy.io, DuckDuckGo, Fastmail, Firefox
+Relay and Forward Email; SimpleLogin and Addy.io also take a self-hosted base URL. API tokens are kept
+per service in `chrome.storage.session` (dropped on logout and on browser restart), so a token can only
+ever be sent to the service it belongs to.
+
 ## Permissions
 
 `storage`, `alarms`, `idle`, `offscreen`, `clipboardWrite` (clearing copied secrets), `scripting`,

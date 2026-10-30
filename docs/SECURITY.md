@@ -110,6 +110,13 @@ freed rather than zeroed in place.
   padded responses, no cookies, no referrer; `src/ui/pwned.ts`). It needs no new permission (the broad
   host permission already covers it) and nothing runs automatically. Maps links go to OpenStreetMap
   only when the user opens them.
+- **Forwarded email aliases call a third-party service, on an explicit click only.** The generator sends
+  the service's API token plus the current page's origin and path (no query or fragment) to the selected forwarding service
+  (`src/background/alias.ts`); nothing runs automatically and no vault data is included. Tokens are kept
+  per service in `storage.session` (never on disk), so switching the selected service cannot send one
+  service's token to another, and they are dropped on logout. A self-hosted base URL must be https, or
+  plain http on loopback; unlike the official client there is no "trust this unsafe URL" override, so a
+  LAN forwarding service over http is refused.
 - **The list carries two derived flags, not secrets.** `reused` (how many items share a password) and
   `weak` are computed in the worker (`listVault`) and shipped on list entries so the popup can filter
   by them without ever receiving a password. They are not part of what the inline menu / save bar get.

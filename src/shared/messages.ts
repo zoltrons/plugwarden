@@ -1,5 +1,6 @@
 // Typed message bus. Every message crossing a context boundary is validated on receipt.
 //   popup  --Request-->  service worker  --OffscreenRequest-->  offscreen doc  --postMessage-->  worker
+import { ALIAS_VENDORS, type AliasSettings, type AliasVendor } from "./alias.ts";
 import { AUTO_LOCK_CHOICES, CLEAR_CLIPBOARD_CHOICES, type ClearClipboardDelay, URI_MATCH_CHOICES } from "./constants.ts";
 import { arr, bool, literal, num, obj, opt, record, str, unknownValue, type Validator, ValidationError } from "./validate.ts";
 
@@ -89,6 +90,11 @@ export type Request =
   | { type: "deleteFolder"; id: string }
   | { type: "totp"; id: string }
   | { type: "generate"; options: Record<string, unknown> }
+  /** Forwarded email alias: the saved settings for one service (never leaves the extension). */
+  | { type: "aliasSettings"; vendor: AliasVendor }
+  | { type: "setAliasSettings"; settings: AliasSettings }
+  /** Asks that service for a new alias for the active tab's website. */
+  | { type: "generateAlias"; vendor: AliasVendor }
   | { type: "generatorHistory" }
   | { type: "generatorHistoryAdd"; value: string }
   | { type: "generatorHistoryClear" }
@@ -180,6 +186,13 @@ const requestValidators: { [K in Request["type"]]: Validator<Extract<Request, { 
   deleteFolder: obj({ type: literal("deleteFolder"), id: str }),
   totp: obj({ type: literal("totp"), id: str }),
   generate: obj({ type: literal("generate"), options: record }),
+  aliasSettings: obj({ type: literal("aliasSettings"), vendor: literal(...ALIAS_VENDORS) }),
+  setAliasSettings: obj({
+    type: literal("setAliasSettings"),
+    // A vendor token is a short opaque key; the base URL and domain are user-typed, so both are capped.
+    settings: obj({ vendor: literal(...ALIAS_VENDORS), token: capped(1024), baseUrl: capped(512), domain: capped(253), prefix: bool }),
+  }),
+  generateAlias: obj({ type: literal("generateAlias"), vendor: literal(...ALIAS_VENDORS) }),
   generatorHistory: obj({ type: literal("generatorHistory") }),
   generatorHistoryAdd: obj({ type: literal("generatorHistoryAdd"), value: str }),
   generatorHistoryClear: obj({ type: literal("generatorHistoryClear") }),
@@ -360,6 +373,7 @@ export type Response<T = State> = { ok: true; data: T } | { ok: false; error: st
 export type ErrorCode =
   | "invalid"
   | "network"
+  | "alias"
   | "permission"
   | "badServer"
   | "badCredentials"

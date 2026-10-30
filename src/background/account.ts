@@ -339,7 +339,7 @@ export async function unlockWithPin(pin: string): Promise<void> {
 export async function logout(): Promise<void> {
   await lockNow();
   await removeLocal("account", "vault", "genHistory", "biometric");
-  await updateSession({ accessToken: undefined, accessExpiresAt: undefined, pin: undefined });
+  await updateSession({ accessToken: undefined, accessExpiresAt: undefined, pin: undefined, alias: undefined });
 }
 
 /** Returns a valid access token, refreshing it when it expires within a minute. */

@@ -38,6 +38,7 @@ import {
 import { handleFrame, handlePage, showBar } from "./inline.ts";
 import { ensurePasskeyScripts, onPasskeyPort, onWindowRemoved, passkeyDecision, passkeyPrompt } from "./passkey.ts";
 import { AUTOFILL_COMMAND, autofillFromGesture, fillActiveTab, onContextMenu, pageMatches, readPageLogin, updateTabUi } from "./autofill.ts";
+import { generateAlias, getAliasSettings, saveAliasSettings } from "./alias.ts";
 import { addAttachment, addGeneratorHistory, CLIPBOARD_ALARM, downloadAttachment, exportVault, importVault, clearClipboard, clearGeneratorHistory, deleteFolder, generatorHistory, deleteSend, getSend, purge, removeSendPassword, restore, saveFolder, scheduleClipboardClear, list as vaultList, requireUnlocked, save, saveSend, sendList, sync, trash } from "./vault.ts";
 
 async function getState(): Promise<State> {
@@ -105,6 +106,9 @@ async function handle(req: Request): Promise<unknown> {
     case "deleteFolder":
     case "totp":
     case "generate":
+    case "aliasSettings":
+    case "setAliasSettings":
+    case "generateAlias":
     case "generatorHistory":
     case "generatorHistoryAdd":
     case "generatorHistoryClear":
@@ -138,6 +142,9 @@ async function handle(req: Request): Promise<unknown> {
         if (repromptPending(item)) throw new UserError("reprompt", REPROMPT_MESSAGE);
         return coreCall({ op: "totp", id: req.id });
       }
+      if (req.type === "aliasSettings") return getAliasSettings(req.vendor);
+      if (req.type === "setAliasSettings") return saveAliasSettings(req.settings);
+      if (req.type === "generateAlias") return generateAlias(req.vendor);
       if (req.type === "generatorHistory") return generatorHistory();
       if (req.type === "generatorHistoryAdd") return addGeneratorHistory(req.value);
       if (req.type === "generatorHistoryClear") return clearGeneratorHistory();
@@ -347,7 +354,7 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, reply: (r: Response<
   const run = () => handle(req).then((data) => reply({ ok: true, data } as Response<unknown>), (e: unknown) => reply(toError(e)));
   // Reads run immediately; anything that changes state or talks to the server is queued, and may
   // change what the badge and the context menu show (unlock, lock, sync, edits).
-  if (["getState", "vaultList", "getItem", "totp", "generate", "generatorHistory", "downloadAttachment", "pageMatches", "readPageLogin", "sendList", "getSend", "passkeyPrompt"].includes(req.type)) void run();
+  if (["getState", "vaultList", "getItem", "totp", "generate", "aliasSettings", "generatorHistory", "downloadAttachment", "pageMatches", "readPageLogin", "sendList", "getSend", "passkeyPrompt"].includes(req.type)) void run();
   else queue = queue.then(run, run).then(updateTabUi);
   return true;
 });
