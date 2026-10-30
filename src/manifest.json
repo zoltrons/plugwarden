@@ -3,7 +3,7 @@
   "name": "Plugwarden",
   "short_name": "Plugwarden",
   "description": "A small, fast password manager client for self-hosted Vaultwarden servers.",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "default_locale": "en",
   "minimum_chrome_version": "156",
   "background": { "service_worker": "background.js", "type": "module" },
