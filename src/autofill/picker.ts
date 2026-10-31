@@ -1,10 +1,15 @@
 // "Pick from page": the user points at a field instead of finding out what it is called in the page's HTML.
 // Also what the context menu's "Copy custom field name" reads.
+import type { CollectedPageDetails } from "../shared/messages.ts";
 import type { PageApi } from "./page.ts";
 
 export interface PickedField {
   name: string;
   fieldType: string;
+  /** What the page calls it, for the editor to say so. */
+  label?: string;
+  /** For the engine, to tell what the field holds. */
+  details: CollectedPageDetails;
 }
 
 const NOT_PICKABLE = ["hidden", "button", "submit", "reset", "image", "file"];
@@ -91,7 +96,9 @@ export function startPicker(pw: PageApi, done: (field: PickedField | undefined) 
     // Nothing to call it by: stay in the picker, the user can point at another one.
     if (!name) return;
     stop();
-    done({ name, fieldType: el.type });
+    const details = pw.collectActive(el);
+    const f = details.fields.find((d) => d.isActive);
+    done({ name, fieldType: el.type, label: (f?.label || f?.labelAria || f?.labelBefore || f?.labelAfter || f?.placeholder)?.trim(), details });
   };
   const swallow = (e: Event) => {
     if (!e.isTrusted) return;

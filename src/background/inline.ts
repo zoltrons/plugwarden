@@ -77,7 +77,7 @@ export async function handlePage(req: PageRequest, sender: chrome.runtime.Messag
   const url = httpUrl(sender.url);
   const tabId = sender.tab?.id;
   if (!url || tabId === undefined || sender.frameId === undefined) return { rows: 0 };
-  if (req.type === "fieldPicked") return finishFieldPicker(tabId, req.name ? { name: req.name, fieldType: req.fieldType } : null).then(() => null);
+  if (req.type === "fieldPicked") return finishFieldPicker(tabId, req).then(() => null);
   if (req.type === "inlineFocus")
     return oncePerTab(
       "focus",

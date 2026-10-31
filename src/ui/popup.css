@@ -766,6 +766,11 @@ a.row { text-decoration: none; color: var(--text); }
   background: transparent; padding: 4px 8px; font-size: 13px;
 }
 .field-card input.name { font-weight: 500; }
+.field-card-col { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.field-card-col.grow { flex: 1; }
+.field-card-col > label { padding: 2px 8px 0; font-size: 11px; color: var(--muted); }
+.field-card-col input { flex: none; width: 100%; border-color: var(--outline); }
+.field-card-hint { margin: 0; padding: 4px 8px 2px; font-size: 12px; line-height: 1.35; color: var(--muted); }
 .field-card input::placeholder { color: var(--faint); }
 .field-card input:hover { background-image: linear-gradient(var(--tint), var(--tint)); }
 .field-card input:focus { outline: 0; border-color: var(--focus-ring); box-shadow: 0 0 0 2px var(--focus-ring); }

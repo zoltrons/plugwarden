@@ -196,7 +196,7 @@ chrome.runtime.onMessage.addListener((msg: { type?: string }, _sender, reply: (n
   }
   if (msg.type === "pickerStart") {
     close();
-    startPicker(pw, (field) => void chrome.runtime.sendMessage({ type: "fieldPicked", name: field?.name ?? "", fieldType: field?.fieldType ?? "" }).catch(() => undefined));
+    startPicker(pw, (field) => void chrome.runtime.sendMessage({ type: "fieldPicked", name: "", fieldType: "", ...field }).catch(() => undefined));
     return void reply("");
   }
   if (msg.type === "pickerStop") stopPicker();

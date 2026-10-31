@@ -669,14 +669,14 @@ export type PageRequest =
   /** Sent once per document, when the frame has a password field; the worker decides whether to fill. */
   | { type: "pageLoad" }
   /** The user's pick for a picker the worker started in this tab; an empty name is a cancel. */
-  | { type: "fieldPicked"; name: string; fieldType: string };
+  | { type: "fieldPicked"; name: string; fieldType: string; label?: string; details?: CollectedPageDetails };
 
 /** A page-controlled form value: big enough for any real credential, small enough to bound storage. */
 const pageValidators: { [K in PageRequest["type"]]: Validator<Extract<PageRequest, { type: K }>> } = {
   inlineFocus: obj({ type: literal("inlineFocus"), nonce: secret, details: collectedPageDetails }),
   loginSubmitted: obj({ type: literal("loginSubmitted"), username: field, password: field }),
   pageLoad: obj({ type: literal("pageLoad") }),
-  fieldPicked: obj({ type: literal("fieldPicked"), name: capped(MAX_PAGE_STRING), fieldType: capped(32) }),
+  fieldPicked: obj({ type: literal("fieldPicked"), name: capped(MAX_PAGE_STRING), fieldType: capped(32), label: pageString, details: opt(collectedPageDetails) }),
 };
 
 /**

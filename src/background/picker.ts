@@ -3,11 +3,21 @@
 import { activeTab, httpUrl } from "./autofill.ts";
 import { UserError } from "./account.ts";
 import { coreCall } from "./core.ts";
+import { analyzeFocus } from "./engine.ts";
+import type { CollectedPageDetails } from "../shared/messages.ts";
 import { getSession, updateSession } from "./store.ts";
+
+export interface PickedField {
+  name: string;
+  fieldType: string;
+  label?: string;
+  /** What the engine thinks it holds. Page-controlled, like the rest: it only sets a default the user sees. */
+  autofillType?: string;
+}
 
 export interface FieldPick {
   draft: string;
-  field?: { name: string; fieldType: string };
+  field?: PickedField;
 }
 
 const inFrames = (tabId: number, type: "pickerStart" | "pickerStop") => chrome.tabs.sendMessage(tabId, { type });
@@ -30,11 +40,14 @@ export async function startFieldPicker(draft: string, panel: boolean): Promise<n
   return null;
 }
 
-/** From the frame the user picked in, or null when they pressed Escape. The other frames stop too. */
-export async function finishFieldPicker(tabId: number, field: { name: string; fieldType: string } | null): Promise<void> {
+/** From the frame the user picked in; an empty name is Escape. The other frames stop too. */
+export async function finishFieldPicker(tabId: number, pick: { name: string; fieldType: string; label?: string; details?: CollectedPageDetails }): Promise<void> {
   const { picker } = await getSession();
   if (picker?.tabId !== tabId) return;
-  await updateSession({ picker: { ...picker, done: true, field: field ?? undefined } });
+  // A field the engine cannot read is still the user's pick: it just gets no suggestion.
+  const autofillType = pick.details ? await analyzeFocus(pick.details).then((a) => a.autofillType, () => undefined) : undefined;
+  const field: PickedField | undefined = pick.name ? { name: pick.name, fieldType: pick.fieldType, label: pick.label, autofillType } : undefined;
+  await updateSession({ picker: { ...picker, done: true, field } });
   await inFrames(tabId, "pickerStop").catch(() => undefined);
   if (picker.panel) await chrome.runtime.sendMessage({ type: "pickerDone" }).catch(() => undefined);
   else await chrome.action.openPopup().catch(() => undefined); // if refused, the draft waits for the next open

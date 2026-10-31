@@ -46,3 +46,35 @@ export function linkedValue(type: number, id: unknown, data: Record<string, unkn
   if (key === "fullName") return ["title", "firstName", "middleName", "lastName"].map(read).filter(Boolean).join(" ");
   return key ? read(key) : "";
 }
+
+/** The property a page field of this type holds, per cipher type. The types are the autofill engine's. */
+const BY_AUTOFILL_TYPE: Record<number, Record<string, string>> = {
+  1: { Username: "username", Email: "username", CurrentPassword: "password", NewPassword: "password" },
+  3: { CcName: "cardholderName", CcNumber: "number", CcExpMonth: "expMonth", CcExpYear: "expYear", CcCsc: "code", CcType: "brand" },
+  4: {
+    Name: "fullName",
+    HonorificPrefix: "title",
+    GivenName: "firstName",
+    AdditionalName: "middleName",
+    FamilyName: "lastName",
+    Organization: "company",
+    Username: "username",
+    Email: "email",
+    Tel: "phone",
+    StreetAddress: "address1",
+    AddressLine1: "address1",
+    AddressLine2: "address2",
+    AddressLine3: "address3",
+    AddressLevel2: "city",
+    AddressLevel1: "state",
+    PostalCode: "postalCode",
+    Country: "country",
+    CountryName: "country",
+  },
+};
+
+/** The linked id a page field of `autofillType` should use in this item, if it holds something the item has. */
+export function linkedIdFor(type: number, autofillType: string | undefined): number | undefined {
+  const key = autofillType ? BY_AUTOFILL_TYPE[type]?.[autofillType] : undefined;
+  return LINKED[type]?.find((l) => l.key === key)?.id;
+}

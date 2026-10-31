@@ -3,7 +3,7 @@
 import type { FillResult, PageLogin } from "../autofill/types.ts";
 import { URI_MATCH, URI_MATCH_ADVANCED } from "../shared/constants.ts";
 import { cardBrand, groupCardNumber, luhnValid } from "../shared/card.ts";
-import { LINKED, linkedKey } from "../shared/linked-fields.ts";
+import { LINKED, linkedIdFor, linkedKey } from "../shared/linked-fields.ts";
 import { hasMarkup } from "../shared/markdown.ts";
 import { MAX_QR_BYTES } from "../shared/qr.ts";
 import { type Clause, matchesQuery, parseQuery, type Searchable } from "../shared/search.ts";
@@ -49,7 +49,8 @@ interface EditDraft {
   uris: { uri: string; match: number | null }[];
   /** Tri-state "Autofill on page load" (null = the account default). */
   autofillOnPageLoad: boolean | null;
-  fields: { name: string; value: string; type: number; linkedId?: unknown }[];
+  /** `pageLabel`: what the page calls a picked field. Only for this editor, it is not saved. */
+  fields: { name: string; value: string; type: number; linkedId?: unknown; pageLabel?: string }[];
 }
 
 const SORT_KEY = "vaultSort";
@@ -1460,13 +1461,15 @@ async function newItem(ctx: Ctx) {
 
 /** Back to the editor after "Pick from page", with the picked field added. */
 async function returnFromPicker(ctx: Ctx) {
-  const r = await send<{ draft: string; field?: { name: string; fieldType: string } } | null>({ type: "takeFieldPick" });
+  const r = await send<{ draft: string; field?: { name: string; fieldType: string; label?: string; autofillType?: string } } | null>({ type: "takeFieldPick" });
   if (!r.ok || !r.data) return;
   const { draft, isNew } = JSON.parse(r.data.draft) as { draft: EditDraft; isNew: boolean };
   const f = r.data.field;
   if (f) {
     const toggle = f.fieldType === "checkbox" || f.fieldType === "radio";
-    draft.fields.push({ name: f.name, value: toggle ? "true" : "", type: toggle ? 2 : f.fieldType === "password" ? 1 : 0 });
+    const linkedId = toggle ? undefined : linkedIdFor(draft.type, f.autofillType);
+    const type = toggle ? 2 : linkedId !== undefined ? 3 : f.fieldType === "password" ? 1 : 0;
+    draft.fields.push({ name: f.name, value: toggle ? "true" : "", type, linkedId, pageLabel: f.label });
   }
   st.draft = draft;
   open(ctx, { kind: "edit", isNew });
@@ -1789,60 +1792,104 @@ function editView(ctx: Ctx, isNew: boolean): HTMLElement {
   const fav = h("input", { type: "checkbox", checked: d.favorite, "aria-label": t("favorite"), onchange: (e: Event) => (d.favorite = (e.target as HTMLInputElement).checked) });
   const customRow = (f: EditDraft["fields"][number], i: number) => {
     const linkable = LINKED[d.type] ?? [];
+    const hint = h("p", { class: "field-card-hint" });
+    const syncHint = () => {
+      const on = (f.pageLabel || f.name).trim();
+      const linked = linkedKey(d.type, f.linkedId);
+      hint.textContent = !on
+        ? t("fieldHintEmpty")
+        : f.type === 3 && linked
+          ? t("fieldHintLinked", on, label(linked))
+          : f.type === 2
+            ? t(f.value === "true" ? "fieldHintChecked" : "fieldHintUnchecked", on)
+            : t(f.type === 1 ? "fieldHintHidden" : "fieldHintText", on);
+    };
+    syncHint();
+    const col = (id: string, caption: string, control: Child, grow = true) => h("div", { class: `field-card-col${grow ? " grow" : ""}` }, h("label", { for: id }, caption), control);
+    const valueId = `field-value-${i}`;
+    const typeId = `field-type-${i}`;
     return h(
-          "div",
-          { class: "field-card" },
-          h(
-            "div",
-            { class: "field-card-top" },
-            h("input", {
-              id: `field-name-${i}`, // a re-render gives focus back by id; without one it jumps to the Name box
-              class: "name",
-              placeholder: t("fieldName"),
-              "aria-label": t("fieldName"),
-              value: f.name,
-              oninput: (e: Event) => (f.name = (e.target as HTMLInputElement).value),
-            }),
-            ...moveButtons(ctx, d.fields, i),
-            iconButton("trash", t("removeField"), () => (d.fields.splice(i, 1), ctx.rerender()), { class: "icon-btn sm" }),
+      "div",
+      { class: "field-card" },
+      h(
+        "div",
+        { class: "field-card-top" },
+        col(
+          `field-name-${i}`,
+          t("fieldName"),
+          h("input", {
+            id: `field-name-${i}`, // a re-render gives focus back by id; without one it jumps to the Name box
+            class: "name",
+            value: f.name,
+            oninput: (e: Event) => {
+              f.name = (e.target as HTMLInputElement).value;
+              f.pageLabel = undefined; // the user renamed it: the page's label no longer says which field this is
+              syncHint();
+            },
+          }),
+        ),
+        ...moveButtons(ctx, d.fields, i),
+        iconButton("trash", t("removeField"), () => (d.fields.splice(i, 1), ctx.rerender()), { class: "icon-btn sm" }),
+      ),
+      h(
+        "div",
+        { class: "field-card-bottom" },
+        f.type === 3
+          ? col(
+              valueId,
+              t("fieldLinkedTo"),
+              select(
+                () => String(f.linkedId ?? ""),
+                (v) => {
+                  f.linkedId = Number(v);
+                  syncHint();
+                },
+                linkable.map((l): [string, string] => [String(l.id), label(l.key)]),
+                valueId,
+              ),
+            )
+          : f.type === 2
+            ? col(
+                valueId,
+                t("fieldChecked"),
+                select(
+                  () => (f.value === "true" ? "true" : "false"),
+                  (v) => {
+                    f.value = v;
+                    syncHint();
+                  },
+                  [["false", t("no")], ["true", t("yes")]],
+                  valueId,
+                ),
+              )
+            : col(
+                valueId,
+                t("fieldValue"),
+                h("input", {
+                  id: valueId,
+                  value: f.value,
+                  type: f.type === 1 ? "password" : "text",
+                  oninput: (e: Event) => (f.value = (e.target as HTMLInputElement).value),
+                }),
+              ),
+        col(
+          typeId,
+          t("fieldKind"),
+          select(
+            () => String(f.type),
+            (v) => {
+              f.type = Number(v);
+              if (f.type === 3) f.linkedId = linkable[0]?.id;
+              ctx.rerender();
+            },
+            [["0", t("fieldText")], ["1", t("fieldHidden")], ["2", t("fieldBoolean")], ...(linkable.length ? [["3", t("fieldLinked")] as [string, string]] : [])],
+            typeId,
           ),
-          h(
-            "div",
-            { class: "field-card-bottom" },
-            f.type === 3
-              ? select(
-                  () => String(f.linkedId ?? ""),
-                  (v) => (f.linkedId = Number(v)),
-                  linkable.map((l): [string, string] => [String(l.id), label(l.key)]),
-                  `field-value-${i}`,
-                )
-              : f.type === 2
-                ? select(
-                    () => (f.value === "true" ? "true" : "false"),
-                    (v) => (f.value = v),
-                    [["false", t("no")], ["true", t("yes")]],
-                    `field-value-${i}`,
-                  )
-                : h("input", {
-                    id: `field-value-${i}`,
-                    placeholder: t("fieldValue"),
-                    "aria-label": t("fieldValue"),
-                    value: f.value,
-                    type: f.type === 1 ? "password" : "text",
-                    oninput: (e: Event) => (f.value = (e.target as HTMLInputElement).value),
-                  }),
-            select(
-              () => String(f.type),
-              (v) => {
-                f.type = Number(v);
-                if (f.type === 3) f.linkedId = linkable[0]?.id;
-                ctx.rerender();
-              },
-              [["0", t("fieldText")], ["1", t("fieldHidden")], ["2", t("fieldBoolean")], ...(linkable.length ? [["3", t("fieldLinked")] as [string, string]] : [])],
-              `field-type-${i}`,
-            ),
-          ),
-        );
+          false,
+        ),
+      ),
+      hint,
+    );
   };
 
   return h(

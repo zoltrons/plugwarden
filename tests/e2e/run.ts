@@ -823,8 +823,8 @@ try {
     await page.getByLabel("Expiration month").selectOption("7");
     await fill("Expiration year", "2031");
     await page.getByRole("button", { name: "Add field" }).click();
-    await page.getByLabel("Field name").fill("PIN");
-    await page.getByLabel("Value").fill("9876");
+    await page.getByLabel("Field on the page").fill("PIN");
+    await page.getByLabel("Value to fill").fill("9876");
     await page.getByRole("combobox").filter({ hasText: "Text" }).selectOption("1");
     await page.getByRole("button", { name: "Save" }).click();
     await rows().filter({ hasText: "Work Amex" }).click();
@@ -1405,7 +1405,7 @@ try {
     await reopenPopup();
     await page.getByRole("heading", { name: "New item" }).waitFor();
     assert.equal(await page.getByLabel("Name", { exact: true }).inputValue(), "Picked item");
-    assert.equal(await page.getByLabel("Field name").inputValue(), "terms");
+    assert.equal(await page.getByLabel("Field on the page").inputValue(), "terms");
     // Focus is on the new row, not on the item's Name box, and it stays there once the vault has synced.
     await page.waitForTimeout(500);
     assert.ok(await page.locator(".field-card").last().evaluate((el) => el.contains(document.activeElement)), `focus is on ${await page.evaluate(() => document.activeElement?.outerHTML.slice(0, 120))}`);
@@ -1413,12 +1413,29 @@ try {
     assert.ok(await page.locator(".field-card").last().evaluate((el) => { const r = el.getBoundingClientRect(); return r.top >= 0 && r.bottom <= innerHeight; }), "the new row is off screen");
     assert.equal(await page.getByRole("button", { name: "Pick from page" }).count(), 1);
 
+    await page.getByText("Ticks").waitFor();
+
+    // A field that holds what the item has links to it; one the engine cannot name stays the user's own text.
+    await start("Linked item");
+    await loginPage.click("#p");
+    await loginPage.locator("plugwarden-picker").waitFor({ state: "detached" });
+    await reopenPopup();
+    assert.equal(await page.getByLabel("Comes from this item's").inputValue(), "101");
+    assert.equal(await page.getByLabel("Type", { exact: true }).inputValue(), "3");
+    await page.getByText("with this item's Password").waitFor();
+    await start("Own text item");
+    await loginPage.click("#member");
+    await loginPage.locator("plugwarden-picker").waitFor({ state: "detached" });
+    await reopenPopup();
+    assert.equal(await page.getByLabel("Type", { exact: true }).inputValue(), "0");
+    assert.equal(await page.getByLabel("Value to fill").count(), 1);
+
     await start("Cancelled item");
     await loginPage.keyboard.press("Escape");
     await loginPage.locator("plugwarden-picker").waitFor({ state: "detached" });
     await reopenPopup();
     assert.equal(await page.getByLabel("Name", { exact: true }).inputValue(), "Cancelled item");
-    assert.equal(await page.getByLabel("Field name").count(), 0);
+    assert.equal(await page.getByLabel("Field on the page").count(), 0);
 
     await start("Abandoned item");
     await reopenPopup();

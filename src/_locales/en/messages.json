@@ -705,10 +705,10 @@
     "message": "Deleted"
   },
   "fieldName": {
-    "message": "Field name"
+    "message": "Field on the page"
   },
   "fieldValue": {
-    "message": "Value"
+    "message": "Value to fill"
   },
   "fieldText": {
     "message": "Text"
@@ -727,6 +727,61 @@
   },
   "removeField": {
     "message": "Remove field"
+  },
+  "fieldLinkedTo": {
+    "message": "Comes from this item's"
+  },
+  "fieldChecked": {
+    "message": "Tick the box"
+  },
+  "fieldKind": {
+    "message": "Type"
+  },
+  "fieldHintEmpty": {
+    "message": "Say which field on the page this fills: type its name, or use Pick from page."
+  },
+  "fieldHintText": {
+    "message": "Fills “$P1$” with this text.",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "fieldHintHidden": {
+    "message": "Fills “$P1$” with this text, kept hidden on screen.",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "fieldHintChecked": {
+    "message": "Ticks “$P1$” on the page.",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "fieldHintUnchecked": {
+    "message": "Clears “$P1$” on the page.",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "fieldHintLinked": {
+    "message": "Fills “$P1$” with this item's $P2$, and follows it when that changes.",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      },
+      "p2": {
+        "content": "$2"
+      }
+    }
   },
   "pickField": {
     "message": "Pick from page"

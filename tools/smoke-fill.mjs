@@ -527,7 +527,10 @@ await scenario("page load keeps what is there, a ticked box too", "custom", asyn
 });
 
 await scenario("a numeric id is the username, gets the menu, and is read back", "numericId", async (page) => {
-  assert.equal((await analyzed(page, "u")).menu, "login");
+  const id = await analyzed(page, "u");
+  assert.deepEqual([id.menu, id.designation.autofillType], ["login", "Username"]);
+  assert.equal((await analyzed(page, "p")).designation.autofillType, "CurrentPassword");
+  assert.equal((await analyzed(page, "cap")).designation.autofillType, "None");
   await fill(page, { username: "12345678901" });
   const v = await values(page);
   assert.deepEqual([v.u, v.p, v.cap], ["12345678901", "pa55word", ""]);

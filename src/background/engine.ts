@@ -14,16 +14,17 @@ interface AnalyzedField {
   fieldId: number;
   menu?: FieldKind;
   signup?: boolean;
+  designation: { autofillType: string };
 }
 
 /** What the focused field of `details` is. Anything the engine cannot make sense of gets no menu. */
-export async function analyzeFocus(details: CollectedPageDetails): Promise<{ kind?: FieldKind; signup: boolean }> {
+export async function analyzeFocus(details: CollectedPageDetails): Promise<{ kind?: FieldKind; signup: boolean; autofillType?: string }> {
   const activeId = details.fields.find((f) => f.isActive)?.fieldId;
   if (activeId === undefined) return { signup: false };
   await engine();
   const result = JSON.parse(analyze_page(JSON.stringify(details))) as { fields: AnalyzedField[] };
   const field = result.fields.find((f) => f.fieldId === activeId);
-  return { kind: field?.menu, signup: !!field?.signup };
+  return { kind: field?.menu, signup: !!field?.signup, autofillType: field?.designation.autofillType };
 }
 
 export type FillRequest = (
