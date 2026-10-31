@@ -8,9 +8,10 @@ export interface PickedField {
 }
 
 const NOT_PICKABLE = ["hidden", "button", "submit", "reset", "image", "file"];
-const HIGHLIGHT = "all:initial!important;position:fixed!important;z-index:2147483647!important;pointer-events:none!important;display:none;box-sizing:border-box;border:2px solid #175ddc;background:rgba(23,93,220,.15);border-radius:4px";
-const BANNER =
-  "all:initial!important;position:fixed!important;top:12px!important;left:50%!important;transform:translateX(-50%)!important;z-index:2147483647!important;pointer-events:none!important;display:block;font:14px system-ui,sans-serif;color:#fff;background:#175ddc;padding:8px 14px;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.3)";
+// Inside the host's closed shadow root, so the page's rules cannot reach these and they need no !important.
+const SEA = "position:fixed;inset:0;width:100%;height:100%;z-index:2147483647;pointer-events:none";
+const BANNER = "position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:2147483647;pointer-events:none;font:14px system-ui,sans-serif;color:#fff;background:#175ddc;padding:8px 14px;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.3)";
+const SVG = "http://www.w3.org/2000/svg";
 
 type Pickable = HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
 
@@ -52,9 +53,20 @@ export function startPicker(pw: PageApi, done: (field: PickedField | undefined) 
   const host = document.createElement("plugwarden-picker");
   host.style.cssText = "all:initial!important;display:block!important";
   const shadow = host.attachShadow({ mode: "closed" });
-  const box = document.createElement("div");
-  box.style.cssText = HIGHLIGHT;
-  shadow.append(box);
+  // Like uBlock Origin's picker: the page goes dark, with a lit hole where the pick would land.
+  const sea = document.createElementNS(SVG, "svg");
+  sea.style.cssText = SEA;
+  const ocean = document.createElementNS(SVG, "path");
+  ocean.setAttribute("fill", "rgba(0,0,0,.5)");
+  ocean.setAttribute("fill-rule", "evenodd");
+  const island = document.createElementNS(SVG, "path");
+  island.setAttribute("fill", "rgba(23,93,220,.2)");
+  island.setAttribute("stroke", "#175ddc");
+  island.setAttribute("stroke-width", "2");
+  // Only the top frame darkens, or a field in an iframe would sit under two layers of it.
+  if (window === top) sea.append(ocean);
+  sea.append(island);
+  shadow.append(sea);
   if (window === top) {
     const banner = document.createElement("div");
     banner.setAttribute("role", "status");
@@ -64,12 +76,15 @@ export function startPicker(pw: PageApi, done: (field: PickedField | undefined) 
   }
   document.documentElement.append(host);
 
+  let shown: Pickable | undefined;
   const show = (el: Pickable | undefined) => {
-    box.style.display = el ? "block" : "none";
-    if (!el) return;
-    const r = el.getBoundingClientRect();
-    Object.assign(box.style, { top: `${r.top}px`, left: `${r.left}px`, width: `${r.width}px`, height: `${r.height}px` });
+    shown = el;
+    const r = el?.getBoundingClientRect();
+    const hole = r ? `M${r.left} ${r.top}h${r.width}v${r.height}h${-r.width}z` : "";
+    ocean.setAttribute("d", `M0 0h${innerWidth}v${innerHeight}h${-innerWidth}z${hole}`);
+    island.setAttribute("d", hole);
   };
+  const redraw = () => show(shown);
   const target = (e: Event) => fieldOf(e.composedPath()[0] as Element);
   const pick = (el: Pickable) => {
     const name = fieldName(el, pw);
@@ -110,6 +125,8 @@ export function startPicker(pw: PageApi, done: (field: PickedField | undefined) 
     removeEventListener("mousemove", onMove, true);
     removeEventListener("focusin", onMove, true);
     removeEventListener("keydown", onKey, true);
+    removeEventListener("scroll", redraw, true);
+    removeEventListener("resize", redraw);
     clearTimeout(timer);
   };
   // A forgotten picker must not keep eating the page's clicks.
@@ -122,5 +139,8 @@ export function startPicker(pw: PageApi, done: (field: PickedField | undefined) 
   addEventListener("mousemove", onMove, true);
   addEventListener("focusin", onMove, true); // Tab and Enter pick too
   addEventListener("keydown", onKey, true);
+  addEventListener("scroll", redraw, true);
+  addEventListener("resize", redraw);
+  show(undefined);
   stopCurrent = stop;
 }

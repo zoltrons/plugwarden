@@ -11,7 +11,7 @@ pub fn run(state: &mut State) {
         |f: &FieldDetails| active.is_some_and(|a| a.form_id.is_some() && a.form_id == f.form_id);
     let visible: Vec<&FieldDetails> = page.fields.iter().filter(|f| !f.is_hidden).collect();
     for field in &page.fields {
-        let (kind, mut weight, ty) = classify(field);
+        let (mut kind, mut weight, ty) = classify(field);
         if weight > 0 && in_active_form(field) {
             weight += weights::ACTIVE_FORM_BONUS;
         }
@@ -21,6 +21,10 @@ pub fn run(state: &mut State) {
             .position(|f| f.field_id == field.field_id)
             .and_then(|i| next_textlike_field_type(&visible, i))
             == Some("password");
+        // Unnamed numbers are amounts and quantities, unless the password follows: a numeric account id.
+        if kind == LoginKind::Text && field.field_type == "number" && !neighbour {
+            kind = LoginKind::None;
+        }
         let neighbour_bonus = if neighbour && matches!(kind, LoginKind::User | LoginKind::Text) {
             weights::NEIGHBOUR_BONUS
         } else {

@@ -93,6 +93,9 @@ const fixtures = {
     <label for="pin">Customer PIN</label><input id="pin"><input id="siteSearch" name="pin"><select id="plan"><option></option><option>gold</option></select>
     <input type="checkbox" id="remember" name="remember"><input type="checkbox" id="news" name="news" checked>
     <input type="radio" id="r" name="choice"><input type="file" id="doc" name="doc"><input id="trap" name="trap" style="display:none"></form>`,
+  // e-Devlet: a numeric id before the password, autocomplete=off, a captcha after it, no <label for>.
+  numericId: `<form onsubmit="return false"><div>T.C. Kimlik No</div><input id="u" type="number" name="tridField" autocomplete="off">
+    <div>Şifre</div><input id="p" type="password" name="egpField" autocomplete="off"><div>Güvenlik Kodu</div><input id="cap" name="captchaField"></form>`,
   // Boxes that must never take a username, right before the password; autocomplete=off changes nothing.
   avoid: `<form onsubmit="return false"><input id="q" name="q"><input id="coupon" name="discount_code"><input id="trap" aria-hidden="true" name="username">
     <input id="p" type="password" autocomplete="off"></form>`,
@@ -521,6 +524,14 @@ await scenario("page load keeps what is there, a ticked box too", "custom", asyn
   const v = await values(page);
   assert.equal(v.pin, "typed");
   assert.deepEqual(await page.evaluate(() => ["news", "remember"].map((id) => document.getElementById(id).checked)), [true, true]);
+});
+
+await scenario("a numeric id is the username, gets the menu, and is read back", "numericId", async (page) => {
+  assert.equal((await analyzed(page, "u")).menu, "login");
+  await fill(page, { username: "12345678901" });
+  const v = await values(page);
+  assert.deepEqual([v.u, v.p, v.cap], ["12345678901", "pa55word", ""]);
+  assert.equal((await read(page)).username, "12345678901");
 });
 
 await scenario("a page's field values are not part of what it reports", "signup", async (page) => {

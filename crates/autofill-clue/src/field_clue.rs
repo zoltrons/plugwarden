@@ -68,7 +68,7 @@ rule!(
 );
 rule!(
     USER,
-    r"user|logon|login|sign.?in|e-?mail|mail|account|acct|identifier|customer|member|client|usr|uname|handle|nick|correo|benutzer|usuario|utilisateur|utente|gebruiker|kullan[iı]c[iı]|e-?posta"
+    r"user|logon|login|sign.?in|e-?mail|mail|account|acct|identifier|customer|member|client|usr|uname|handle|nick|correo|benutzer|usuario|utilisateur|utente|gebruiker|kullan[iı]c[iı]|e-?posta|kimlik|tckn|tc.?no"
 );
 rule!(PASS, r"pass|pwd|pin|parola|[sş]ifre");
 rule!(
@@ -96,7 +96,7 @@ rule!(
 );
 rule!(
     MENU_LOGIN,
-    r"user|login|e-?mail|account|kullan[iı]c[iı]|e-?posta"
+    r"user|login|e-?mail|account|kullan[iı]c[iı]|e-?posta|kimlik|tckn|tc.?no"
 );
 
 /// The HTML token a field's text points at. First match wins, so the order matters.
@@ -156,7 +156,10 @@ pub fn is_avoided(field: &FieldDetails) -> bool {
 }
 
 pub fn is_textish(field: &FieldDetails) -> bool {
-    matches!(field.field_type.as_str(), "text" | "email" | "tel" | "")
+    matches!(
+        field.field_type.as_str(),
+        "text" | "email" | "tel" | "number" | ""
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -295,6 +298,14 @@ mod tests {
         assert_eq!(classify(&f).0, LoginKind::User);
         f.html_class = Some("user-select-none".into());
         assert_eq!(classify(&f).0, LoginKind::Text);
+    }
+
+    #[test]
+    fn a_national_id_is_an_account_field() {
+        let mut f = field("number", "tridField");
+        assert_eq!(classify(&f).0, LoginKind::Text);
+        f.label = Some("T.C. Kimlik No".into());
+        assert_eq!(classify(&f).0, LoginKind::User);
     }
 
     #[test]

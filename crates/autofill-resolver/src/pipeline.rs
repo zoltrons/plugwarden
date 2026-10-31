@@ -401,6 +401,27 @@ mod tests {
     }
 
     #[test]
+    fn a_number_is_an_account_field_only_right_before_the_password() {
+        let mut id = input(1, Some(1), "number", "tridField");
+        id.autocomplete_type = Some("off".into());
+        let p = page(&[1], vec![id, input(2, Some(1), "password", "egpField")]);
+        let state = resolve(&p, Intent::default());
+        assert_eq!(id_of(&state, state.choice.username), Some(1));
+        assert_eq!(analyze(&p).fields[0].menu, Some(MenuKind::Login));
+        let p = page(
+            &[1],
+            vec![
+                input(1, Some(1), "password", "password"),
+                input(2, Some(1), "number", "amount"),
+            ],
+        );
+        let state = resolve(&p, Intent::default());
+        assert_eq!(state.choice.username, None);
+        let p = page(&[1], vec![input(1, Some(1), "number", "amount")]);
+        assert_eq!(resolve(&p, Intent::default()).choice.username, None);
+    }
+
+    #[test]
     fn one_username_per_form() {
         let p = page(
             &[1],

@@ -1264,6 +1264,18 @@ try {
     await (await frameOf(loginPage, "menu.html")).getByRole("button", { name: "Create account" }).waitFor();
   });
 
+  await step("inline menu: it opens right under its field, also on a page taller than the window", async () => {
+    await loginPage.bringToFront();
+    await loginPage.goto(`${SITE}/login`);
+    await loginPage.evaluate(() => { document.body.style.minHeight = "3000px"; });
+    await loginPage.click("#u");
+    await (await frameOf(loginPage, "menu.html")).getByRole("button", { name: "Fill Local app" }).waitFor();
+    const [field, menu] = await loginPage.evaluate(() => ["#u", "plugwarden-menu"].map((s) => { const r = document.querySelector(s)!.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, left: r.left }; }));
+    assert.ok(Math.abs(menu!.top - field!.bottom - 4) < 1, JSON.stringify({ field, menu }));
+    assert.ok(Math.abs(menu!.left - field!.left) < 1, JSON.stringify({ field, menu }));
+    await loginPage.keyboard.press("Escape");
+  });
+
   await step("inline menu: a login with each input in its own shadow root gets the menu and fills", async () => {
     await loginPage.bringToFront();
     await loginPage.goto(`${SITE}/split-shadow`);
@@ -1394,6 +1406,11 @@ try {
     await page.getByRole("heading", { name: "New item" }).waitFor();
     assert.equal(await page.getByLabel("Name", { exact: true }).inputValue(), "Picked item");
     assert.equal(await page.getByLabel("Field name").inputValue(), "terms");
+    // Focus is on the new row, not on the item's Name box, and it stays there once the vault has synced.
+    await page.waitForTimeout(500);
+    assert.ok(await page.locator(".field-card").last().evaluate((el) => el.contains(document.activeElement)), `focus is on ${await page.evaluate(() => document.activeElement?.outerHTML.slice(0, 120))}`);
+    assert.equal(await page.getByLabel("Name", { exact: true }).evaluate((el) => el === document.activeElement), false);
+    assert.ok(await page.locator(".field-card").last().evaluate((el) => { const r = el.getBoundingClientRect(); return r.top >= 0 && r.bottom <= innerHeight; }), "the new row is off screen");
     assert.equal(await page.getByRole("button", { name: "Pick from page" }).count(), 1);
 
     await start("Cancelled item");

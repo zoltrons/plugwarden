@@ -44,7 +44,11 @@ function place() {
   if (!host || !anchor) return;
   const r = anchor.getBoundingClientRect();
   if (!r.width || r.bottom < 0 || r.top > innerHeight) return close();
-  Object.assign(host.style, { top: `${r.bottom + 4}px`, left: `${Math.max(4, Math.min(r.left, innerWidth - 324))}px`, width: `${Math.max(r.width, 300)}px` });
+  // The host's `all:initial!important` outranks anything set here without !important.
+  const set = (name: string, value: string) => host!.style.setProperty(name, value, "important");
+  set("top", `${r.bottom + 4}px`);
+  set("left", `${Math.max(4, Math.min(r.left, innerWidth - 324))}px`);
+  set("width", `${Math.max(r.width, 300)}px`);
 }
 
 function close() {

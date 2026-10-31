@@ -1470,6 +1470,11 @@ async function returnFromPicker(ctx: Ctx) {
   }
   st.draft = draft;
   open(ctx, { kind: "edit", isNew });
+  if (!f) return;
+  // The editor opens on its Name box, at the top: take the user to the row they just added, ready for its value.
+  const row = [...document.querySelectorAll(".field-card")].at(-1);
+  row?.querySelector<HTMLElement>(".field-card-bottom input, .field-card-bottom select")?.focus({ preventScroll: true });
+  row?.scrollIntoView({ block: "center" });
 }
 
 async function pickFromPage(ctx: Ctx, isNew: boolean) {
@@ -1685,8 +1690,8 @@ function editView(ctx: Ctx, isNew: boolean): HTMLElement {
     const { area, ...rest } = props;
     return h(area ? "textarea" : "input", { ...rest, value: get(), oninput: (e: Event) => set((e.target as HTMLInputElement).value) });
   };
-  const select = (get: () => string, set: (v: string) => void, options: [string, string][]) =>
-    withChevron(h("select", { onchange: (e: Event) => set((e.target as HTMLSelectElement).value) }, ...options.map(([v, l]) => h("option", { value: v, selected: v === get() }, l))));
+  const select = (get: () => string, set: (v: string) => void, options: [string, string][], id?: string) =>
+    withChevron(h("select", { id, onchange: (e: Event) => set((e.target as HTMLSelectElement).value) }, ...options.map(([v, l]) => h("option", { value: v, selected: v === get() }, l))));
 
   const specField = (f: Spec) => {
     const get = () => d.data[f.key] ?? "";
@@ -1791,6 +1796,7 @@ function editView(ctx: Ctx, isNew: boolean): HTMLElement {
             "div",
             { class: "field-card-top" },
             h("input", {
+              id: `field-name-${i}`, // a re-render gives focus back by id; without one it jumps to the Name box
               class: "name",
               placeholder: t("fieldName"),
               "aria-label": t("fieldName"),
@@ -1808,14 +1814,17 @@ function editView(ctx: Ctx, isNew: boolean): HTMLElement {
                   () => String(f.linkedId ?? ""),
                   (v) => (f.linkedId = Number(v)),
                   linkable.map((l): [string, string] => [String(l.id), label(l.key)]),
+                  `field-value-${i}`,
                 )
               : f.type === 2
                 ? select(
                     () => (f.value === "true" ? "true" : "false"),
                     (v) => (f.value = v),
                     [["false", t("no")], ["true", t("yes")]],
+                    `field-value-${i}`,
                   )
                 : h("input", {
+                    id: `field-value-${i}`,
                     placeholder: t("fieldValue"),
                     "aria-label": t("fieldValue"),
                     value: f.value,
@@ -1830,6 +1839,7 @@ function editView(ctx: Ctx, isNew: boolean): HTMLElement {
                 ctx.rerender();
               },
               [["0", t("fieldText")], ["1", t("fieldHidden")], ["2", t("fieldBoolean")], ...(linkable.length ? [["3", t("fieldLinked")] as [string, string]] : [])],
+              `field-type-${i}`,
             ),
           ),
         );

@@ -8,7 +8,7 @@ import { extractAriaLabel, extractExplicitLabels } from "./collector/tree-walker
 import { executeFill } from "./executor/fill.ts";
 import type { FillResult, PageLogin } from "./types.ts";
 
-const TEXTISH = ["text", "email", "tel", ""];
+const TEXTISH = ["text", "email", "tel", "number", ""];
 const OTP_HINT = /one.?time|otp|totp|2fa|mfa|verification|confirmation.?code|security.?code|captcha/;
 
 /** The field the user last focused for a login (content.ts); its form is the one they mean. */
