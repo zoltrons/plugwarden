@@ -41,7 +41,7 @@ function webkitPath() {
 const browser = await webkit.launch({ executablePath: webkitPath() });
 const errors = [];
 
-async function open(path, { width = 380, height = 540 } = {}) {
+async function open(path, { width = 380, height = 600 } = {}) {
   const page = await browser.newPage({ viewport: { width, height }, deviceScaleFactor: 2 });
   page.on("console", (m) => {
     // Favicon requests to the fake server host fail in the preview; they are expected.

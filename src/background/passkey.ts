@@ -180,8 +180,20 @@ async function openWindow(p: Pending): Promise<void> {
     await chrome.windows.update(p.windowId, { focused: true }).catch(() => undefined);
     return;
   }
-  const w = await chrome.windows.create({ url: `popup.html?passkey=${p.id}`, type: "popup", width: 400, height: 600, focused: true });
+  const size = { url: `popup.html?passkey=${p.id}`, type: "popup", width: PASSKEY_WIDTH, height: 640, focused: true } as const;
+  // A placement the screen refuses must not cost the user the approval: the browser then picks the spot.
+  const w = await chrome.windows.create({ ...size, ...(await underToolbar(p.tabId)) }).catch(() => chrome.windows.create(size));
   p.windowId = w?.id;
+}
+
+const PASSKEY_WIDTH = 400;
+
+/** Where the extension's own popup opens: the top right of the window asking, below its toolbar. */
+async function underToolbar(tabId: number): Promise<{ left?: number; top?: number }> {
+  const tab = await chrome.tabs.get(tabId).catch(() => undefined);
+  const win = tab && (await chrome.windows.get(tab.windowId).catch(() => undefined));
+  if (win?.left === undefined || win.top === undefined || win.width === undefined || win.state === "minimized") return {};
+  return { left: Math.max(win.left, win.left + win.width - PASSKEY_WIDTH - 16), top: win.top + 88 };
 }
 
 /** The approval window was closed without a decision: let the browser handle the call. */

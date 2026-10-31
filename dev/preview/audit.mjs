@@ -36,7 +36,7 @@ function webkitPath() {
 }
 
 const browser = await webkit.launch({ executablePath: webkitPath() });
-const page = await browser.newPage({ viewport: { width: 380, height: 540 } });
+const page = await browser.newPage({ viewport: { width: 380, height: 600 } });
 
 /** Runs in the page: returns the geometry of one screen. */
 function measure() {

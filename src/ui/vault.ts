@@ -719,7 +719,7 @@ async function saveFromPage(ctx: Ctx) {
 }
 
 /** A row of the site section: the body opens the item, the button fills it (cards and identities too). */
-function suggestionRow(ctx: Ctx, i: VaultItem, best: boolean): HTMLElement {
+function suggestionRow(ctx: Ctx, i: VaultItem): HTMLElement {
   const name = i.name || t("untitled");
   return h(
     "div",
@@ -730,7 +730,7 @@ function suggestionRow(ctx: Ctx, i: VaultItem, best: boolean): HTMLElement {
       tile(i.name, i.type, i.uris),
       h("div", { class: "body" }, h("span", { class: "title" }, name), i.sub ? h("span", { class: "sub" }, i.sub) : null),
     ),
-    h("button", { type: "button", class: `btn small ${best ? "tonal" : "neutral"}`, "aria-label": `${t("fill")} ${i.name}`, onclick: () => void fill(ctx, i.id) }, t("fill")),
+    h("button", { type: "button", class: "btn small neutral", "aria-label": `${t("fill")} ${i.name}`, onclick: () => void fill(ctx, i.id) }, t("fill")),
   );
 }
 
@@ -741,7 +741,7 @@ function suggestions(ctx: Ctx): Child {
   // never appears under the site heading: it gets a heading of its own, like the official client.
   const group = (title: string, type: number): Child[] => {
     const items = page.items.filter((i) => i.type === type);
-    return items.length ? [sectionTitle(title), h("div", { class: "group" }, ...items.map((i, n) => suggestionRow(ctx, i, type === 1 && n === 0)))] : [];
+    return items.length ? [sectionTitle(title), h("div", { class: "group" }, ...items.map((i) => suggestionRow(ctx, i)))] : [];
   };
   return h(
     "section",

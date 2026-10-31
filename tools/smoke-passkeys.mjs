@@ -120,6 +120,12 @@ try {
   });
   await new Promise((r) => setTimeout(r, 2000));
   assert.equal(windows.length, 1, "one approval window per tab");
+  // Headless reports every popup at 0,0, so the placement can only be checked with a real window.
+  if (process.env.HEADED) {
+    const asking = await page.evaluate(() => ({ x: screenX, y: screenY, width: outerWidth }));
+    const approval = await windows[0].evaluate(() => ({ x: screenX, y: screenY }));
+    assert.deepEqual(approval, { x: Math.max(asking.x, asking.x + asking.width - 416), y: asking.y + 88 }, "approval window sits under the toolbar of the window asking");
+  }
   await windows[0].close();
   const states = await settled;
   ctx.off("page", onPage);
