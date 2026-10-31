@@ -45,6 +45,21 @@ const fixtures = {
   signupButton: `<form onsubmit="return false"><input id="u" name="email"><input id="p" type="password"><button>Kayıt ol</button></form>`,
   loginLink: `<form onsubmit="return false"><input id="u" name="email"><input id="p" type="password"><a href="/x">Sign up</a><button>Sign in</button></form>`,
   newsletter: `<form onsubmit="return false"><input id="u" type="email"><button>Sign up</button></form>`,
+  // A component library: every input in a shadow root of its own, no form.
+  splitShadow: `<div id="login"><x-a></x-a><x-b></x-b></div><script>
+    document.querySelector("x-a").attachShadow({ mode: "open" }).innerHTML = '<input id="u" type="email">';
+    document.querySelector("x-b").attachShadow({ mode: "open" }).innerHTML = '<input id="p" type="password">';
+  </script>`,
+  // Two login forms: the one the user is in wins.
+  twoForms: `<form id="a" onsubmit="return false"><input id="u1" name="username"><input id="p1" type="password"></form>
+    <form id="b" onsubmit="return false"><input id="u2" name="username"><input id="p2" type="password"></form>`,
+  // Only a <div> says what the field is.
+  bareLabels: `<form onsubmit="return false"><div>Card number</div><div><input id="c"></div><div>CVC</div><div><input id="v"></div></form>
+    <form onsubmit="return false"><p>E-posta adresiniz</p><input id="tu"><p>Parola</p><input id="tp" type="password"></form>`,
+  // Boxes that must never take a username, right before the password; autocomplete=off changes nothing.
+  avoid: `<form onsubmit="return false"><input id="q" name="q"><input id="coupon" name="discount_code"><input id="trap" aria-hidden="true" name="username">
+    <input id="p" type="password" autocomplete="off"></form>`,
+  acOff: `<form onsubmit="return false"><input id="u" name="username" autocomplete="off"><input id="p" type="password" autocomplete="off"></form>`,
   // Two-step login: one account field, no password anywhere.
   useronly: `<form onsubmit="return false"><input id="u" name="login" placeholder="Email or phone"><button>Next</button></form>`,
   // Nothing but labels and placeholders to go on.
@@ -225,6 +240,49 @@ await scenario("a frame on another origin is refused", "decoy", async (page) => 
   const v = await values(page);
   assert.deepEqual([v.u, v.p], ["", ""]);
 });
+await scenario("a login split over two shadow roots is paired", "splitShadow", async (page) => {
+  assert.deepEqual(await fill(page), { filled: true });
+  const v = await page.evaluate(() => ["x-a", "x-b"].map((t) => document.querySelector(t).shadowRoot.querySelector("input").value));
+  assert.deepEqual(v, ["user@example.com", "pa55word"]);
+});
+
+await scenario("the form with the focused field wins", "twoForms", async (page) => {
+  await page.evaluate(() => (window.plugwardenFocused = document.getElementById("u2")));
+  await fill(page);
+  const v = await values(page);
+  assert.deepEqual([v.u1, v.p1, v.u2, v.p2], ["", "", "user@example.com", "pa55word"]);
+  await page.evaluate(() => (window.plugwardenFocused = undefined));
+});
+
+await scenario("a page-load fill ignores the focused field", "twoForms", async (page) => {
+  await page.evaluate(() => (window.plugwardenFocused = document.getElementById("u2")));
+  await fill(page, { onlyEmpty: true });
+  const v = await values(page);
+  assert.deepEqual([v.u2, v.p2], ["", ""]);
+});
+
+await scenario("the text before an unlabelled field names it", "bareLabels", async (page) => {
+  const r = await page.evaluate(() => PW.fill({ mode: "form", origin: location.origin, values: { "cc-number": "4111111111111111", "cc-csc": "123" } }));
+  assert.deepEqual(r, { filled: true });
+  const v = await values(page);
+  assert.deepEqual([v.c, v.v, v.tu], ["4111111111111111", "123", ""]);
+  const probe = await page.evaluate(() => PW.probeField(document.getElementById("tu")));
+  assert.match(probe.hints, /e-posta/);
+});
+
+await scenario("search, coupon and aria-hidden boxes never take the username", "avoid", async (page) => {
+  await fill(page);
+  const v = await values(page);
+  assert.deepEqual([v.q, v.coupon, v.trap, v.p], ["", "", "", "pa55word"]);
+  assert.equal((await page.evaluate(() => PW.probeField(document.getElementById("q")))).avoid, true);
+});
+
+await scenario("autocomplete=off does not stop a fill", "acOff", async (page) => {
+  await fill(page);
+  const v = await values(page);
+  assert.deepEqual([v.u, v.p], ["user@example.com", "pa55word"]);
+});
+
 const isSignup = (page, id = "u") => page.evaluate((id) => PW.isSignupField(document.getElementById(id)), id);
 
 await scenario("a registration form is recognised and its confirm field filled", "register", async (page) => {

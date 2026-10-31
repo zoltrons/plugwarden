@@ -173,6 +173,11 @@ const pages: Record<string, string> = {
   "/forge": `${LOGIN_FORM}<script>onload = () => { document.getElementById("u").value = "forged-user"; document.getElementById("p").value = "forged-guess"; document.querySelector("form").dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); };</script>`,
   "/change": `<form onsubmit="return false"><input id="u" autocomplete="username"><input id="cur" type="password" autocomplete="current-password"><input id="new" type="password" autocomplete="new-password"><input id="rep" type="password"><button>Change</button></form>`,
   "/register": `<form onsubmit="return false"><input id="u" type="email"><input id="p" type="password" autocomplete="new-password"><button>Go</button></form>`,
+  "/split-shadow": `<div><x-a></x-a><x-b></x-b></div><script>
+    document.querySelector("x-a").attachShadow({ mode: "open" }).innerHTML = '<input id="u" type="email">';
+    document.querySelector("x-b").attachShadow({ mode: "open" }).innerHTML = '<input id="p" type="password">';
+  </script>`,
+  "/spa-login": `<div><input id="u" name="username"><input id="p" type="password"><button id="go" type="button"><span>Sign in</span></button></div>`,
   "/framed": `<p>outer</p><iframe id="f" src="/login" style="width:500px;height:200px"></iframe>`,
   // A zero-size password decoy in front of the real form, and a two-step login with no password at all.
   "/decoy": `<input id="decoy" type="password" style="position:absolute;width:0;height:0;opacity:0;border:0">${LOGIN_FORM}`,
@@ -1252,6 +1257,26 @@ try {
     await loginPage.goto(`${SITE}/register`);
     await loginPage.click("#u");
     await (await frameOf(loginPage, "menu.html")).getByRole("button", { name: "Create account" }).waitFor();
+  });
+
+  await step("inline menu: a login with each input in its own shadow root gets the menu and fills", async () => {
+    await loginPage.bringToFront();
+    await loginPage.goto(`${SITE}/split-shadow`);
+    await loginPage.click("#u");
+    await (await frameOf(loginPage, "menu.html")).getByRole("button", { name: "Fill Local app" }).click();
+    await loginPage.waitForFunction(() => document.querySelector("x-b")!.shadowRoot!.querySelector("input")!.value !== "");
+    assert.equal(await loginPage.evaluate(() => document.querySelector("x-a")!.shadowRoot!.querySelector("input")!.value), "local-user");
+  });
+
+  await step("save bar: a single-page app's plain Sign in button offers the save", async () => {
+    await loginPage.goto(`${SITE}/spa-login`);
+    await loginPage.fill("#u", "spa-user");
+    await loginPage.fill("#p", "spa-pass");
+    await loginPage.keyboard.press("Escape");
+    await loginPage.locator("#go span").click();
+    const bar = await frameOf(loginPage, "bar.html");
+    await bar.getByText("Save this login in Plugwarden?").waitFor();
+    await bar.getByRole("button", { name: "Close" }).click();
   });
 
   await step("save bar: a page's own submit events without a gesture offer nothing", async () => {

@@ -36,15 +36,27 @@ export interface ReadFill {
   mode: "read";
 }
 
-export type FillRequest = LoginFill | FormFill | ReadFill;
+/** How the content script's copy asks what names a field, so both sides read fields the same way. */
+export interface ProbeField {
+  mode: "probe";
+  el: HTMLInputElement;
+}
+
+export interface FieldProbe {
+  hints: string;
+  /** A search, coupon, one-time-code or similar box: never an account field. */
+  avoid: boolean;
+}
+
+export type FillRequest = LoginFill | FormFill | ReadFill | ProbeField;
 
 /** Login / card fill, or a login read, for one page frame. Injected: everything it uses lives below. */
-export function fillInPage(req: FillRequest): FillResult | PageLogin | null {
+export function fillInPage(req: FillRequest): FillResult | PageLogin | FieldProbe | null {
   const OTP_HINT = /one.?time|otp|totp|2fa|mfa|verification|confirmation.?code|security.?code|captcha/;
-  const SKIP_HINT = /search|newsletter|subscribe|promo|coupon|gift.?card|quantity/;
-  const USER_HINT = /user|logon|login|sign.?in|e-?mail|mail|account|acct|identifier|customer|member|client|usr|uname|handle|nick|correo|benutzer|usuario|utilisateur|utente|gebruiker/;
-  const PASS_HINT = /pass|pwd|pin/;
-  const NEW_HINT = /new|confirm|repeat|retype|regis|sign.?up|create|join/;
+  const SKIP_HINT = /search|(^|\s)q(\s|$)|query|newsletter|subscribe|promo|coupon|discount|voucher|gift.?card|quantity/;
+  const USER_HINT = /user|logon|login|sign.?in|e-?mail|mail|account|acct|identifier|customer|member|client|usr|uname|handle|nick|correo|benutzer|usuario|utilisateur|utente|gebruiker|kullan[iı]c[iı]|e-?posta/;
+  const PASS_HINT = /pass|pwd|pin|parola|[sş]ifre/;
+  const NEW_HINT = /new|confirm|repeat|retype|regis|sign.?up|create|join|yeni|tekrar/;
   const SIGNUP_FORM = /sign.?up|register|create.?account|new.?account|join now/;
   const CONFIRM_HINT = /confirm|repeat|retype|again|verify|tekrar/;
   const TEXTISH = ["text", "email", "tel", ""];
@@ -83,7 +95,7 @@ export function fillInPage(req: FillRequest): FillResult | PageLogin | null {
   };
   /** False for fields nobody can see: zero-size decoys are a favourite of login pages. */
   const shown = (el: Field) => {
-    if (el.disabled || (el instanceof HTMLInputElement && el.type === "hidden")) return false;
+    if (el.disabled || (el instanceof HTMLInputElement && el.type === "hidden") || el.getAttribute("aria-hidden") === "true") return false;
     const r = el.getBoundingClientRect();
     if (r.width < 24 || r.height < 8) return false;
     // Off the page's origin (document coordinates, so scrolled-away fields still count): unreachable decoys.
@@ -94,12 +106,25 @@ export function fillInPage(req: FillRequest): FillResult | PageLogin | null {
   };
   /** A field a fill may write to: shown, and not a read-only copy the page only displays. */
   const onScreen = (el: Field) => shown(el) && !(el instanceof HTMLInputElement && el.readOnly);
-  /** Everything that can name a field: its attributes, its label(s) and aria-labelledby text. */
+  /** The visible text right before a field, up to the previous control: forms often have only a <span> there. */
+  const textBefore = (el: Field) => {
+    const walker = document.createTreeWalker(el.form ?? el.getRootNode(), NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
+    walker.currentNode = el;
+    for (let i = 0; i < 40 && walker.previousNode(); i++) {
+      const n = walker.currentNode;
+      if (n instanceof HTMLButtonElement || n instanceof HTMLSelectElement || n instanceof HTMLTextAreaElement || (n instanceof HTMLInputElement && n.type !== "hidden")) return "";
+      const text = n.nodeType === Node.TEXT_NODE ? (n.textContent ?? "").trim() : "";
+      // Longer than a label: a paragraph about something else.
+      if (text && n.parentElement?.checkVisibility()) return text.length <= 150 ? text : "";
+    }
+    return "";
+  };
+  /** Everything that can name a field: its attributes and what a user sees as its label. */
   const hints = (el: Field) => {
-    const parts = [el.name, el.id, el instanceof HTMLInputElement ? el.placeholder : "", el.getAttribute("aria-label") ?? ""];
-    for (const id of (el.getAttribute("aria-labelledby") ?? "").split(/\s+/)) if (id) parts.push(el.ownerDocument.getElementById(id)?.textContent ?? "");
-    for (const l of el.labels ?? []) parts.push(l.textContent ?? "");
-    return parts.join(" ").toLowerCase();
+    const seen = [el instanceof HTMLInputElement ? el.placeholder : "", el.getAttribute("aria-label") ?? ""];
+    for (const id of (el.getAttribute("aria-labelledby") ?? "").split(/\s+/)) if (id) seen.push((el.getRootNode() as Document).getElementById(id)?.textContent ?? "");
+    for (const l of el.labels ?? []) seen.push(l.textContent ?? "");
+    return [el.name, el.id, ...(seen.some((s) => s.trim()) ? seen : [textBefore(el)])].join(" ").toLowerCase();
   };
   /** Writes through the prototype setter, so framework-controlled inputs see the change. */
   const setNative = (el: HTMLInputElement, value: string) => {
@@ -117,13 +142,19 @@ export function fillInPage(req: FillRequest): FillResult | PageLogin | null {
     } else {
       el.click();
       el.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Unidentified" }));
-      setNative(el, value);
       el.dispatchEvent(new InputEvent("beforeinput", { bubbles: true, composed: true, inputType: "insertText", data: value }));
+      setNative(el, value);
     }
     el.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, inputType: "insertText", data: value }));
     if (el instanceof HTMLInputElement) el.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: "Unidentified" }));
     el.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+    el.blur(); // forms that validate, or update their model, on blur
   };
+
+  if (req.mode === "probe") {
+    const hint = hints(req.el);
+    return { hints: hint, avoid: req.el.type === "search" || SKIP_HINT.test(hint) || OTP_HINT.test(hint) };
+  }
 
   if (req.mode === "read") {
     // Read-only fields count: sites show the account name in one and only let the password be typed.
@@ -181,14 +212,20 @@ export function fillInPage(req: FillRequest): FillResult | PageLogin | null {
       return { el, kind: weight ? "user" : "text", weight };
     });
 
-  // Document order, and the block two fields share: a password and its username live in one.
-  const before = (a: Element, b: Element) => !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+  // Document order, and the block two fields share: a password and its username live in one. Both cross
+  // shadow roots, since a component library gives every input its own: compareDocumentPosition cannot.
+  const order = new Map(fields.map((f, i) => [f.el as Element, i]));
+  const before = (a: Element, b: Element) => order.get(a)! < order.get(b)!;
+  const up = (p: Element) => p.parentElement ?? (p.getRootNode() as ShadowRoot).host ?? null;
   const sharedBlock = (a: Element, b: Element) => {
     const seen = new Set<Element>();
-    for (let p: Element | null = a; p; p = p.parentElement) seen.add(p);
-    for (let p: Element | null = b; p; p = p.parentElement) if (seen.has(p)) return p;
-    return document.body; // disjoint trees (shadow roots) count as page-wide, like a shared <body>
+    for (let p: Element | null = a; p; p = up(p)) seen.add(p);
+    for (let p: Element | null = b; p; p = up(p)) if (seen.has(p)) return p;
+    return document.body;
   };
+  // The field the user last focused (content.ts): its form is the one they mean. Not on page load.
+  const last = req.onlyEmpty ? undefined : (globalThis as { plugwardenFocused?: HTMLInputElement }).plugwardenFocused;
+  const focused = last?.isConnected ? last : undefined;
 
   // Named inputs clobber form.innerText / form.textContent with elements: only trust strings.
   const formText = (form: HTMLFormElement) => {
@@ -205,6 +242,7 @@ export function fillInPage(req: FillRequest): FillResult | PageLogin | null {
       if (form) score += 2;
       if (form && SIGNUP_FORM.test(formText(form))) score -= 12;
       if (candidates.some((u) => u.el.form === form && before(u.el, f.el))) score += 6;
+      if (focused && (form ? focused.form === form : !focused.form && sharedBlock(focused, f.el) !== document.body)) score += 100;
       return { f, score };
     })
     .sort((a, b) => b.score - a.score)[0]?.f;
@@ -246,6 +284,16 @@ export function fillInPage(req: FillRequest): FillResult | PageLogin | null {
   return n || !req.onlyEmpty ? { filled: true } : { filled: false, reason: "noFields" };
 }
 
+/** Elements matching `sel` under `root`, open shadow roots included. */
+export function deepAll(root: ParentNode, sel: string, out: Element[] = []): Element[] {
+  // A named input ("querySelector") clobbers a form's own methods: call the native ones.
+  for (const el of root instanceof Element ? Element.prototype.querySelectorAll.call(root, "*") : root.querySelectorAll("*")) {
+    if (Element.prototype.matches.call(el, sel)) out.push(el);
+    if (el.shadowRoot) deepAll(el.shadowRoot, sel, out);
+  }
+  return out;
+}
+
 /**
  * True for a field of a registration form. A password field is required: a lone "Sign up" is as often a
  * newsletter box. Attributes and the submit button only, since login forms often link to "Sign up".
@@ -253,16 +301,16 @@ export function fillInPage(req: FillRequest): FillResult | PageLogin | null {
  */
 export function isSignupField(el: HTMLInputElement): boolean {
   const form = el.form;
-  // A named input ("querySelector") clobbers the form's own methods: call the native ones.
-  const all = (sel: string) => [...(form ? Element.prototype.querySelectorAll.call(form, sel) : (el.getRootNode() as ParentNode).querySelectorAll(sel))];
-  const ac = (all("input[type=password]") as HTMLInputElement[]).map((p) => p.autocomplete.toLowerCase());
+  const ac = (deepAll(form ?? document, "input[type=password]") as HTMLInputElement[]).map((p) => p.autocomplete.toLowerCase());
   if (!ac.length || ac.some((a) => a.includes("current-password"))) return false;
   if (ac.length > 1 || ac.some((a) => a.includes("new-password"))) return true;
   if (!form) return false;
   const attrs = ["id", "name", "action"].map((a) => Element.prototype.getAttribute.call(form, a) ?? "");
-  const buttons = (all("button:not([type=button],[type=reset]),input[type=submit]") as HTMLButtonElement[]).map((b) => b.textContent || b.value);
+  const buttons = (deepAll(form, "button:not([type=button],[type=reset]),input[type=submit]") as HTMLButtonElement[]).map((b) => b.textContent || b.value);
   return /sign.?up|regist|create.?(an.?|your.?)?account|new.?account|join|kay[iı]t|kaydol|üye ol|hesap oluştur/.test([...attrs, ...buttons].join(" ").toLowerCase());
 }
 
 /** The content script's copy: reads a typed-in login without being injected. */
 export const readLogin = (): PageLogin | null => fillInPage({ mode: "read" }) as PageLogin | null;
+
+export const probeField = (el: HTMLInputElement): FieldProbe => fillInPage({ mode: "probe", el }) as FieldProbe;

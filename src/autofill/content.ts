@@ -3,20 +3,12 @@
 // iframe (menu.html) the page cannot read; the list and the fill come from the service worker. It also
 // reports submitted logins so Plugwarden can offer to save or update them (bar.html, top frame only).
 // Bundled as a classic script and kept small.
-import { isSignupField, readLogin } from "./page.ts";
+import { deepAll, isSignupField, probeField, readLogin } from "./page.ts";
 
 type Kind = "login" | "card" | "identity";
 
 const IDENTITY = /^(name|given-name|additional-name|family-name|email|tel|organization|street-address|address-line[123]|address-level[12]|postal-code|country|country-name)$/;
 const TEXTISH = ["text", "email", "tel", "", "search", "number"];
-
-/** Everything that can name a field: its attributes, its label(s) and aria-labelledby text. */
-function hintsOf(el: HTMLInputElement): string {
-  const parts = [el.name, el.id, el.getAttribute("aria-label") ?? "", el.placeholder];
-  for (const id of (el.getAttribute("aria-labelledby") ?? "").split(/\s+/)) if (id) parts.push(document.getElementById(id)?.textContent ?? "");
-  for (const l of el.labels ?? []) parts.push(l.textContent ?? "");
-  return parts.join(" ").toLowerCase();
-}
 
 /** What kind of menu a field gets, if any. The autocomplete attribute wins; names and labels are hints. */
 function kindOf(el: Element): Kind | undefined {
@@ -24,11 +16,11 @@ function kindOf(el: Element): Kind | undefined {
   if (el.type === "password") return "login";
   if (!TEXTISH.includes(el.type)) return undefined;
   const ac = el.autocomplete.toLowerCase().split(/\s+/).pop() ?? "";
-  const hint = hintsOf(el);
+  const { hints: hint, avoid } = probeField(el);
   if (ac.startsWith("cc-") || /card.?num|cc.?num|cvc|cvv|csc|card.?holder|expir/.test(hint)) return "card";
   if (ac === "username" || ac === "webauthn") return "login";
   if (IDENTITY.test(ac) && !(ac === "email" && hasPassword(el))) return "identity";
-  if ((el.type === "email" || /user|login|e-?mail|account/.test(hint)) && hasPassword(el)) return "login";
+  if ((el.type === "email" || /user|login|e-?mail|account|kullan[iı]c[iı]|e-?posta/.test(hint)) && !avoid && hasPassword(el)) return "login";
   return undefined;
 }
 
@@ -39,21 +31,10 @@ function active(): Element | null {
   return a;
 }
 
-/** A password field near `el`: in its form, else in its own root (a shadow root is its own document). */
-const hasPassword = (el: HTMLInputElement) =>
-  // A named input ("querySelector") clobbers the form's own method: call the native one.
-  !!(el.form ? Element.prototype.querySelector.call(el.form, "input[type=password]") : (el.getRootNode() as ParentNode).querySelector("input[type=password]"));
+/** A password field near `el`: in its form, else anywhere in the frame (a component may wrap each input in its own shadow root). */
+const hasPassword = (el: HTMLInputElement) => deepAll(el.form ?? document, "input[type=password]").length > 0;
 
-/** True when this frame has a password field anywhere, open shadow roots included. */
-function hasPasswordField(): boolean {
-  const roots: (Document | ShadowRoot)[] = [document];
-  while (roots.length) {
-    const root = roots.pop()!;
-    if (root.querySelector('input[type="password"]')) return true;
-    for (const el of root.querySelectorAll("*")) if (el.shadowRoot) roots.push(el.shadowRoot);
-  }
-  return false;
-}
+const hasPasswordField = () => deepAll(document, "input[type=password]").length > 0;
 
 // ---------- inline menu ----------
 
@@ -90,7 +71,7 @@ function close() {
 }
 
 async function open(el: HTMLInputElement, kind: Kind) {
-  if (kind === "login") focusedLogin = el;
+  if (kind === "login") (globalThis as { plugwardenFocused?: HTMLInputElement }).plugwardenFocused = focusedLogin = el; // read by the injected fill, same isolated world
   if (anchor === el || dismissed === el || Date.now() < quietUntil) return;
   const mine = ++gen;
   const r = ((await chrome.runtime.sendMessage({ type: "inlineFocus", kind, nonce, signup: kind === "login" && isSignupField(el) }).catch(() => undefined)) as { data?: { rows: number } } | undefined)?.data;
@@ -155,8 +136,10 @@ addEventListener(
       const kind = kindOf(el);
       if (kind) void open(el as HTMLInputElement, kind);
     }
-    // Submit buttons only (a <button> without a type is one), not "show password" toggles and the like.
-    if ((el instanceof HTMLButtonElement || el instanceof HTMLInputElement) && el.type === "submit") setTimeout(report);
+    // Submit buttons (a <button> without a type is one), and the plain buttons single-page apps use when
+    // they say what they do; not "show password" toggles and the like. The click may land on a child.
+    const b = el.closest<HTMLButtonElement>("button,input[type=submit],[role=button]");
+    if (b && (b.type === "submit" || /log.?in|sign.?(in|up)|regist|create|continue|next|submit|giri[sş]|kay[iı]t|devam/.test((b.textContent || b.value || "").toLowerCase()))) setTimeout(report);
   },
   true,
 );
