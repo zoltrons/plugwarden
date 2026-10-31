@@ -111,6 +111,8 @@ export type Request =
   | { type: "passkeyDecision"; id: string; action: "use" | "fallback"; itemId?: string; credentialId?: string }
   // autofill on the active tab (host permissions cover every http(s) tab)
   | { type: "pageMatches" }
+  /** One-shot: the origin the inline menu's "Create account" asked a new login for, if any. */
+  | { type: "takeNewLogin" }
   | { type: "fill"; id: string }
   | { type: "readPageLogin" };
 
@@ -212,6 +214,7 @@ const requestValidators: { [K in Request["type"]]: Validator<Extract<Request, { 
   passkeyPrompt: obj({ type: literal("passkeyPrompt"), id: str }),
   passkeyDecision: obj({ type: literal("passkeyDecision"), id: str, action: literal("use", "fallback"), itemId: opt(str), credentialId: opt(str) }),
   pageMatches: obj({ type: literal("pageMatches") }),
+  takeNewLogin: obj({ type: literal("takeNewLogin") }),
   fill: obj({ type: literal("fill"), id: str }),
   readPageLogin: obj({ type: literal("readPageLogin") }),
 };
@@ -311,6 +314,7 @@ export interface VaultItem {
 /** Logins matching the active tab. `host` is absent when the tab is not an http(s) page. */
 export interface PageMatches {
   host?: string;
+  origin?: string;
   items: VaultItem[];
 }
 
@@ -562,15 +566,18 @@ export type FieldKind = "login" | "card" | "identity";
 
 /** From the content script. Sender tab, frame and URL come from the browser (sender), never from here. */
 export type PageRequest =
-  /** `nonce` is a per-document secret, echoed by the menu frame it opens (see FrameRequest). */
-  | { type: "inlineFocus"; kind: FieldKind; nonce: string }
+  /**
+   * `nonce` is a per-document secret, echoed by the menu frame it opens (see FrameRequest). `signup` is
+   * the page's own claim: all it can do is add a "Create account" row.
+   */
+  | { type: "inlineFocus"; kind: FieldKind; nonce: string; signup: boolean }
   | { type: "loginSubmitted"; username: string; password: string }
   /** Sent on load only when the frame contains a password field; the worker decides whether to fill. */
   | { type: "pageLoad" };
 
 /** A page-controlled form value: big enough for any real credential, small enough to bound storage. */
 const pageValidators: { [K in PageRequest["type"]]: Validator<Extract<PageRequest, { type: K }>> } = {
-  inlineFocus: obj({ type: literal("inlineFocus"), kind: literal("login", "card", "identity"), nonce: secret }),
+  inlineFocus: obj({ type: literal("inlineFocus"), kind: literal("login", "card", "identity"), nonce: secret, signup: bool }),
   loginSubmitted: obj({ type: literal("loginSubmitted"), username: field, password: field }),
   pageLoad: obj({ type: literal("pageLoad") }),
 };
@@ -586,6 +593,7 @@ export type FrameRequest =
   | { type: "inlineFill"; id: string; nonce: string }
   | { type: "inlinePasskey"; nonce: string }
   | { type: "inlineUnlock"; nonce: string }
+  | { type: "inlineNewLogin"; nonce: string }
   | { type: "barInfo"; token: string }
   | { type: "barAction"; action: "save" | "never" | "close"; token: string };
 
@@ -594,6 +602,7 @@ const frameValidators: { [K in FrameRequest["type"]]: Validator<Extract<FrameReq
   inlineFill: obj({ type: literal("inlineFill"), id: str, nonce: secret }),
   inlinePasskey: obj({ type: literal("inlinePasskey"), nonce: secret }),
   inlineUnlock: obj({ type: literal("inlineUnlock"), nonce: secret }),
+  inlineNewLogin: obj({ type: literal("inlineNewLogin"), nonce: secret }),
   barInfo: obj({ type: literal("barInfo"), token: secret }),
   barAction: obj({ type: literal("barAction"), action: literal("save", "never", "close"), token: secret }),
 };
@@ -622,6 +631,8 @@ export interface MenuData {
   items: MenuItem[];
   /** A website's conditional passkey sign-in is waiting: offer "Sign in with a passkey". */
   passkey: boolean;
+  /** No login for this site yet, or a registration form: offer "Create account". */
+  create: boolean;
 }
 
 export interface BarInfo {

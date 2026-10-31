@@ -467,6 +467,9 @@
   "ssoHint": {
     "message": "SSO signs you in; you still unlock the vault with your master password."
   },
+  "createAccount": {
+    "message": "Create account"
+  },
   "unlockToFill": {
     "message": "Unlock to fill"
   },

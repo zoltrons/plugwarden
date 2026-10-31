@@ -152,6 +152,11 @@ async function handle(req: Request): Promise<unknown> {
       if (repromptPending(await coreCall<VaultItem>({ op: "cipherSummary", id: req.id }))) throw new UserError("reprompt", REPROMPT_MESSAGE);
       return coreCall({ op: "totp", id: req.id });
     }
+    case "takeNewLogin": {
+      const { newLogin } = await getSession();
+      if (newLogin) await updateSession({ newLogin: undefined });
+      return newLogin ?? null;
+    }
     case "pageMatches":
     case "fill":
     case "readPageLogin":
@@ -351,7 +356,7 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, reply: (r: Response<
   const run = () => handle(req).then((data) => reply({ ok: true, data } as Response<unknown>), (e: unknown) => reply(toError(e)));
   // Reads run immediately; anything that changes state or talks to the server is queued, and may
   // change what the badge and the context menu show (unlock, lock, sync, edits).
-  if (["getState", "vaultList", "getItem", "totp", "generate", "aliasSettings", "generatorHistory", "downloadAttachment", "pageMatches", "readPageLogin", "sendList", "getSend", "passkeyPrompt", "repromptGranted"].includes(req.type)) void run();
+  if (["getState", "vaultList", "getItem", "totp", "generate", "aliasSettings", "generatorHistory", "downloadAttachment", "pageMatches", "takeNewLogin", "readPageLogin", "sendList", "getSend", "passkeyPrompt", "repromptGranted"].includes(req.type)) void run();
   // Locking must not wait behind a slow server call: it ends whatever is running by killing the worker.
   else if (req.type === "lock") void run().then(updateTabUi);
   else queue = queue.then(run, run).then(updateTabUi);

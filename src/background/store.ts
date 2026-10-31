@@ -52,6 +52,8 @@ export interface Session {
    * logout and when the browser session ends, so a token is re-entered after a restart.
    */
   alias?: Partial<Record<AliasVendor, AliasSettings>>;
+  /** Origin the inline menu's "Create account" wants a new login for; the popup it opens takes it. */
+  newLogin?: string;
 }
 
 /**

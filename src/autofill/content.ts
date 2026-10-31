@@ -3,7 +3,7 @@
 // iframe (menu.html) the page cannot read; the list and the fill come from the service worker. It also
 // reports submitted logins so Plugwarden can offer to save or update them (bar.html, top frame only).
 // Bundled as a classic script and kept small.
-import { readLogin } from "./page.ts";
+import { isSignupField, readLogin } from "./page.ts";
 
 type Kind = "login" | "card" | "identity";
 
@@ -28,7 +28,7 @@ function kindOf(el: Element): Kind | undefined {
   if (ac.startsWith("cc-") || /card.?num|cc.?num|cvc|cvv|csc|card.?holder|expir/.test(hint)) return "card";
   if (ac === "username" || ac === "webauthn") return "login";
   if (IDENTITY.test(ac) && !(ac === "email" && hasPassword(el))) return "identity";
-  if (/user|login|e-?mail|account/.test(hint) && hasPassword(el)) return "login";
+  if ((el.type === "email" || /user|login|e-?mail|account/.test(hint)) && hasPassword(el)) return "login";
   return undefined;
 }
 
@@ -93,7 +93,7 @@ async function open(el: HTMLInputElement, kind: Kind) {
   if (kind === "login") focusedLogin = el;
   if (anchor === el || dismissed === el || Date.now() < quietUntil) return;
   const mine = ++gen;
-  const r = ((await chrome.runtime.sendMessage({ type: "inlineFocus", kind, nonce }).catch(() => undefined)) as { data?: { rows: number } } | undefined)?.data;
+  const r = ((await chrome.runtime.sendMessage({ type: "inlineFocus", kind, nonce, signup: kind === "login" && isSignupField(el) }).catch(() => undefined)) as { data?: { rows: number } } | undefined)?.data;
   // rows = 0: nothing to offer (no matches, or not logged in), so stay out of the way.
   if (mine !== gen || !r?.rows || active() !== el || Date.now() < quietUntil) return;
   close();

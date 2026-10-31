@@ -7,7 +7,7 @@ import { coreCall } from "./core.ts";
 import { touchAutoLock } from "./lock.ts";
 import { pageLoadFill } from "./autofill.ts";
 import { conditionalReady, openConditional } from "./passkey.ts";
-import { getLocal, getSettings, getTabState, setLocal, setTabState } from "./store.ts";
+import { getLocal, getSettings, getTabState, setLocal, setTabState, updateSession } from "./store.ts";
 import { REPROMPT_MESSAGE, repromptPending } from "./reprompt.ts";
 import { copyToClipboard, ensureLoaded, isUnlocked, list, markUsed, save } from "./vault.ts";
 
@@ -17,6 +17,8 @@ export interface InlineContext {
   kind: FieldKind;
   /** The opening document's secret, echoed by the menu frame (see PageRequest.inlineFocus). */
   nonce: string;
+  /** The field is in a registration form (see isSignupField). */
+  signup: boolean;
 }
 
 export interface PendingSave {
@@ -74,19 +76,22 @@ export async function handlePage(req: PageRequest, sender: chrome.runtime.Messag
   const tabId = sender.tab?.id;
   if (!url || tabId === undefined || sender.frameId === undefined) return { rows: 0 };
   if (req.type === "inlineFocus")
-    return oncePerTab("focus", tabId, () => onFocus(req.kind, req.nonce, url, tabId!, sender.frameId!), { rows: 0 });
+    return oncePerTab("focus", tabId, () => onFocus(req.kind, req.nonce, req.signup, url, tabId!, sender.frameId!), { rows: 0 });
   await loginSubmitted(tabId, url, req.username, req.password);
   return null;
 }
 
-async function onFocus(kind: FieldKind, nonce: string, url: string, tabId: number, frameId: number): Promise<{ rows: number }> {
+const offerCreate = (ctx: InlineContext, logins: number) => ctx.kind === "login" && (ctx.signup || !logins);
+
+async function onFocus(kind: FieldKind, nonce: string, signup: boolean, url: string, tabId: number, frameId: number): Promise<{ rows: number }> {
   if (!(await getSettings()).inlineMenu || !(await getLocal("account"))) return { rows: 0 };
-  await setTabState("inline", tabId, { frameId, url, kind, nonce });
+  const ctx: InlineContext = { frameId, url, kind, nonce, signup };
+  await setTabState("inline", tabId, ctx);
   if (!(await isUnlocked())) return { rows: 1 }; // "Unlock to fill"
   const logins = (await items(kind, url)).length;
   // A website waiting on a conditional passkey request gets one extra row for it.
   const passkey = kind === "login" && (await conditionalReady(tabId, frameId));
-  return { rows: logins + (passkey ? 1 : 0) };
+  return { rows: logins + (passkey ? 1 : 0) + (offerCreate(ctx, logins) ? 1 : 0) };
 }
 
 async function loginSubmitted(tabId: number, url: string, username: string, password: string) {
@@ -185,10 +190,16 @@ export async function handleFrame(req: FrameRequest, tabId: number): Promise<unk
     await openConditional(tabId, ctx.frameId);
     return null;
   }
-  if (!(await isUnlocked())) return { kind: ctx.kind, locked: true, items: [], passkey: false } satisfies MenuData;
+  if (!(await isUnlocked())) return { kind: ctx.kind, locked: true, items: [], passkey: false, create: false } satisfies MenuData;
+  if (req.type === "inlineNewLogin") {
+    await touchAutoLock();
+    await updateSession({ newLogin: new URL(ctx.url).origin });
+    await chrome.action.openPopup().catch(() => updateSession({ newLogin: undefined }));
+    return null;
+  }
   const available = await items(ctx.kind, ctx.url);
   const passkey = ctx.kind === "login" && (await conditionalReady(tabId, ctx.frameId));
-  if (req.type === "inlineList") return { kind: ctx.kind, locked: false, items: available, passkey } satisfies MenuData;
+  if (req.type === "inlineList") return { kind: ctx.kind, locked: false, items: available, passkey, create: offerCreate(ctx, available.length) } satisfies MenuData;
 
   // inlineFill: only an item offered for this field and frame.
   if (!available.some((i) => i.id === req.id)) throw new Error("item not available here");

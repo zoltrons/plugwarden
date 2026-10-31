@@ -6,9 +6,10 @@ import { parseFrameRequest, parsePasskeyCall, parsePageRequest, parseRequest } f
 const throws = (fn: () => unknown, what: RegExp) => assert.throws(fn, what);
 
 test("page requests: the inline nonce is required", () => {
-  assert.deepEqual(parsePageRequest({ type: "inlineFocus", kind: "login", nonce: "n" }), { type: "inlineFocus", kind: "login", nonce: "n" });
-  throws(() => parsePageRequest({ type: "inlineFocus", kind: "login" }), /nonce/);
-  throws(() => parsePageRequest({ type: "inlineFocus", kind: "password", nonce: "n" }), /kind/);
+  assert.deepEqual(parsePageRequest({ type: "inlineFocus", kind: "login", nonce: "n", signup: false }), { type: "inlineFocus", kind: "login", nonce: "n", signup: false });
+  throws(() => parsePageRequest({ type: "inlineFocus", kind: "login", signup: false }), /nonce/);
+  throws(() => parsePageRequest({ type: "inlineFocus", kind: "login", nonce: "n" }), /signup/);
+  throws(() => parsePageRequest({ type: "inlineFocus", kind: "password", nonce: "n", signup: false }), /kind/);
 });
 
 test("page requests: a submitted login is size-capped", () => {

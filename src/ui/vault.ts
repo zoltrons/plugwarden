@@ -356,6 +356,9 @@ async function loadList(ctx: Ctx) {
   if (!r.ok) return;
   const p = await send<PageMatches>({ type: "pageMatches" });
   if (p.ok) st.page = p.data;
+  // Opened by the inline menu's "Create account": go straight to the form.
+  const site = await send<string | null>({ type: "takeNewLogin" });
+  if (site.ok && site.data) startEdit(ctx, undefined, sitePrefill(site.data));
   await syncNow(ctx, false);
 }
 
@@ -685,7 +688,7 @@ function listView(ctx: Ctx): HTMLElement {
     errorBox(),
     st.query || st.folder ? null : suggestions(ctx),
     st.loading && !st.list ? skeletonList() : listBox,
-    h("button", { type: "button", class: "fab", onclick: () => startEdit(ctx, undefined) }, icon("plus"), t("newItem")),
+    h("button", { type: "button", class: "fab", onclick: () => void newItem(ctx) }, icon("plus"), t("newItem")),
   );
 }
 
@@ -710,8 +713,7 @@ async function saveFromPage(ctx: Ctx) {
     if (item.ok) return startEdit(ctx, item.data, { data: { password: login.password } });
     if (item.code === "reprompt") return open(ctx, { kind: "item", id: same.id }); // never fall through to a duplicate
   }
-  const url = new URL(login.url);
-  startEdit(ctx, undefined, { name: url.hostname, data: { username: login.username, password: login.password }, uris: [{ uri: url.origin, match: null }] });
+  startEdit(ctx, undefined, { ...sitePrefill(new URL(login.url).origin), data: { username: login.username, password: login.password } });
 }
 
 /** A row of the site section: the body opens the item, the button fills it (cards and identities too). */
@@ -1441,6 +1443,14 @@ interface Prefill {
   data?: Record<string, string>;
 }
 
+const sitePrefill = (origin: string | undefined): Prefill => (origin ? { name: new URL(origin).hostname, uris: [{ uri: origin, match: null }] } : {});
+
+/** A new item starts on the site of the active tab, read now: a side panel outlives tab switches. */
+async function newItem(ctx: Ctx) {
+  await refreshPageMatches();
+  startEdit(ctx, undefined, sitePrefill(st.page?.origin));
+}
+
 export function startEdit(ctx: Ctx, item: Json | undefined, prefill: Prefill = {}, asNew = !item) {
   const base: Json = item ? structuredClone(item) : { type: 1, favorite: false, reprompt: 0, folderId: null, organizationId: null };
   const type = Number(base.type) || 1;
@@ -1724,7 +1734,12 @@ function editView(ctx: Ctx, isNew: boolean): HTMLElement {
     toast(ctx, t("saved"));
   };
   const typeChip = (type: number, ic: IconName) =>
-    h("button", { type: "button", class: "chip", "aria-pressed": String(d.type === type), onclick: () => ((d.type = type), ctx.rerender()) }, icon(ic), t(TYPE_LABEL[type]!));
+    h("button", { type: "button", class: "chip", "aria-pressed": String(d.type === type), onclick: () => {
+      // The site's name only fits a login: a card or a note started from a site tab starts unnamed.
+      if (type !== 1 && d.name === URL.parse(d.uris[0]?.uri ?? "")?.hostname) d.name = "";
+      d.type = type;
+      ctx.rerender();
+    } }, icon(ic), t(TYPE_LABEL[type]!));
   const fav = h("input", { type: "checkbox", checked: d.favorite, "aria-label": t("favorite"), onchange: (e: Event) => (d.favorite = (e.target as HTMLInputElement).checked) });
   const customRow = (f: EditDraft["fields"][number], i: number) =>
     f.type === 3

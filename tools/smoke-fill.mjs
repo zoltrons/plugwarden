@@ -39,6 +39,12 @@ const fixtures = {
     <form onsubmit="return false"><input id="u" name="username"><input id="p" type="password" name="password"><button>Sign in</button></form>`,
   // A registration form before the login one: the login must win, the registration stay empty.
   signup,
+  // Registration forms: a repeated password; only the submit button or the form's attributes say so.
+  register: `<form onsubmit="return false"><input id="u" type="email"><input id="p" type="password" name="password">
+    <input id="p2" type="password" name="password2" placeholder="Confirm password"><button>Create account</button></form>`,
+  signupButton: `<form onsubmit="return false"><input id="u" name="email"><input id="p" type="password"><button>Kayıt ol</button></form>`,
+  loginLink: `<form onsubmit="return false"><input id="u" name="email"><input id="p" type="password"><a href="/x">Sign up</a><button>Sign in</button></form>`,
+  newsletter: `<form onsubmit="return false"><input id="u" type="email"><button>Sign up</button></form>`,
   // Two-step login: one account field, no password anywhere.
   useronly: `<form onsubmit="return false"><input id="u" name="login" placeholder="Email or phone"><button>Next</button></form>`,
   // Nothing but labels and placeholders to go on.
@@ -218,6 +224,38 @@ await scenario("a frame on another origin is refused", "decoy", async (page) => 
   assert.deepEqual(r, { filled: false, reason: "origin" });
   const v = await values(page);
   assert.deepEqual([v.u, v.p], ["", ""]);
+});
+const isSignup = (page, id = "u") => page.evaluate((id) => PW.isSignupField(document.getElementById(id)), id);
+
+await scenario("a registration form is recognised and its confirm field filled", "register", async (page) => {
+  assert.equal(await isSignup(page), true);
+  assert.deepEqual(await fill(page), { filled: true });
+  const v = await values(page);
+  assert.deepEqual([v.u, v.p, v.p2], ["user@example.com", "pa55word", "pa55word"]);
+});
+
+await scenario("a submit button can name a registration form, in Turkish too", "signupButton", async (page) => {
+  assert.equal(await isSignup(page), true);
+});
+
+await scenario("a login form that links to sign up is not a registration form", "loginLink", async (page) => {
+  assert.equal(await isSignup(page), false);
+});
+
+await scenario("a newsletter box is not a registration form", "newsletter", async (page) => {
+  assert.equal(await isSignup(page), false);
+});
+
+await scenario("new-password marks registration, current-password a login or change form", "signup", async (page) => {
+  assert.equal(await isSignup(page, "su-email"), true);
+  assert.equal(await isSignup(page), false);
+});
+
+await scenario("a change-password form leaves the new password alone", "change", async (page) => {
+  assert.equal(await isSignup(page), false);
+  await fill(page);
+  const v = await values(page);
+  assert.deepEqual([v.cur, v.new, v.rep], ["pa55word", "", ""]);
 });
 
 await browser.close();

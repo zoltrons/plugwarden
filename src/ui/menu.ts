@@ -32,11 +32,13 @@ async function render() {
         t("passkeySignInTitle"),
       )
     : null;
+  const create = d.create ? row(icon("plus"), t("createAccount"), t("appName"), () => void ask({ type: "inlineNewLogin", nonce })) : null;
   app.replaceChildren(
     h(
       "div",
       { class: "group", role: "list", "aria-label": t("appName") },
       passkey,
+      create,
       ...d.items.map((i) =>
         row(tile(i.name, i.type), i.name || t("untitled"), i.sub, async () => {
           const f = await ask({ type: "inlineFill", id: i.id, nonce });

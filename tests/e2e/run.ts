@@ -172,6 +172,7 @@ const pages: Record<string, string> = {
   // Fills the form and fires submit on load, with no user gesture at all.
   "/forge": `${LOGIN_FORM}<script>onload = () => { document.getElementById("u").value = "forged-user"; document.getElementById("p").value = "forged-guess"; document.querySelector("form").dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); };</script>`,
   "/change": `<form onsubmit="return false"><input id="u" autocomplete="username"><input id="cur" type="password" autocomplete="current-password"><input id="new" type="password" autocomplete="new-password"><input id="rep" type="password"><button>Change</button></form>`,
+  "/register": `<form onsubmit="return false"><input id="u" type="email"><input id="p" type="password" autocomplete="new-password"><button>Go</button></form>`,
   "/framed": `<p>outer</p><iframe id="f" src="/login" style="width:500px;height:200px"></iframe>`,
   // A zero-size password decoy in front of the real form, and a two-step login with no password at all.
   "/decoy": `<input id="decoy" type="password" style="position:absolute;width:0;height:0;opacity:0;border:0">${LOGIN_FORM}`,
@@ -1166,6 +1167,60 @@ try {
     await (await frameOf(loginPage, "menu.html")).getByRole("button", { name: "Fill Visa" }).click();
     await loginPage.waitForFunction(() => (document.getElementById("cc") as HTMLInputElement).value !== "");
     assert.deepEqual(await values(loginPage, ["cn", "cc", "m", "y", "cvc"]), ["Ada L", "4111111111111111", "01", "2030", "123"]);
+  });
+
+  await step("new item: the form starts on the active tab's site, other types start unnamed", async () => {
+    await reopenPopup();
+    await page.getByRole("button", { name: "New item" }).click();
+    assert.equal(await page.getByLabel("Name", { exact: true }).inputValue(), "localhost");
+    assert.equal(await page.getByLabel("Website 1").inputValue(), SITE);
+    await page.getByRole("button", { name: "Card", exact: true }).click();
+    assert.equal(await page.getByLabel("Name", { exact: true }).inputValue(), "");
+    await page.getByRole("button", { name: "Cancel" }).click();
+  });
+
+  await step("inline menu: a site without a login offers Create account, which opens the form for that site", async () => {
+    const other = await ctx.newPage();
+    await other.goto("http://127.0.0.1:8099/login");
+    await other.bringToFront();
+    await other.click("#u");
+    const menu = await frameOf(other, "menu.html");
+    // Playwright does not list the action popup as a page: watch the call, and that the popup took the request.
+    await sw.evaluate(() => {
+      const real = chrome.action.openPopup.bind(chrome.action);
+      Object.defineProperty(chrome.action, "openPopup", { configurable: true, value: () => real().then((r: unknown) => (((globalThis as any).popupOpened = true), r)) });
+    });
+    const newLogin = () => sw.evaluate(async () => (await chrome.storage.session.get("session")).session.newLogin);
+    await menu.getByRole("button", { name: "Create account" }).click();
+    for (let i = 0; i < 50 && !(await sw.evaluate(() => (globalThis as any).popupOpened)); i++) await other.waitForTimeout(100);
+    assert.equal(await sw.evaluate(() => (globalThis as any).popupOpened), true);
+    for (let i = 0; i < 50 && (await newLogin()); i++) await other.waitForTimeout(100);
+    assert.equal(await newLogin(), undefined);
+    await sw.evaluate(() => delete (chrome.action as any).openPopup);
+    await other.close();
+    // What the action popup does with the request, in a tab the test can read. It is taken only once.
+    await sw.evaluate(async () => {
+      const { session } = await chrome.storage.session.get("session");
+      await chrome.storage.session.set({ session: { ...session, newLogin: "http://127.0.0.1:8099" } });
+    });
+    await reopenPopup();
+    await page.getByRole("heading", { name: "New item" }).waitFor();
+    assert.equal(await page.getByLabel("Name", { exact: true }).inputValue(), "127.0.0.1");
+    assert.equal(await page.getByLabel("Website 1").inputValue(), "http://127.0.0.1:8099");
+    await reopenPopup();
+    await page.getByRole("button", { name: "New item" }).waitFor();
+  });
+
+  await step("inline menu: a site with a login only offers Create account on a registration form", async () => {
+    await loginPage.bringToFront();
+    await loginPage.goto(`${SITE}/login`);
+    await loginPage.click("#u");
+    const menu = await frameOf(loginPage, "menu.html");
+    await menu.getByRole("button", { name: "Fill Local app" }).waitFor();
+    assert.equal(await menu.getByRole("button", { name: "Create account" }).count(), 0);
+    await loginPage.goto(`${SITE}/register`);
+    await loginPage.click("#u");
+    await (await frameOf(loginPage, "menu.html")).getByRole("button", { name: "Create account" }).waitFor();
   });
 
   await step("save bar: a page's own submit events without a gesture offer nothing", async () => {

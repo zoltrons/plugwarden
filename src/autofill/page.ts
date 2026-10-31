@@ -46,6 +46,7 @@ export function fillInPage(req: FillRequest): FillResult | PageLogin | null {
   const PASS_HINT = /pass|pwd|pin/;
   const NEW_HINT = /new|confirm|repeat|retype|regis|sign.?up|create|join/;
   const SIGNUP_FORM = /sign.?up|register|create.?account|new.?account|join now/;
+  const CONFIRM_HINT = /confirm|repeat|retype|again|verify|tekrar/;
   const TEXTISH = ["text", "email", "tel", ""];
   const AUTOFILL_RULES: [string, RegExp][] = [
     ["cc-number", /card.?(num|number)|cc.?(num|number)|cardnumber/],
@@ -237,7 +238,30 @@ export function fillInPage(req: FillRequest): FillResult | PageLogin | null {
   };
   fill(user?.el, req.username);
   fill(pass?.el, req.password);
+  // A registration form repeats the password, and a confirm field left empty blocks its submit.
+  if (pass && !req.onlyEmpty) {
+    const next = fields.find((f) => (f.kind === "pass" || f.kind === "new") && f.el.form === pass.el.form && before(pass.el, f.el));
+    if (next && ((pass.kind === "new" && next.kind === "new") || CONFIRM_HINT.test(hints(next.el)))) fill(next.el, req.password);
+  }
   return n || !req.onlyEmpty ? { filled: true } : { filled: false, reason: "noFields" };
+}
+
+/**
+ * True for a field of a registration form. A password field is required: a lone "Sign up" is as often a
+ * newsletter box. Attributes and the submit button only, since login forms often link to "Sign up".
+ * shortcut: email-first signups (password on the next step) are not recognised, add a signal if they matter.
+ */
+export function isSignupField(el: HTMLInputElement): boolean {
+  const form = el.form;
+  // A named input ("querySelector") clobbers the form's own methods: call the native ones.
+  const all = (sel: string) => [...(form ? Element.prototype.querySelectorAll.call(form, sel) : (el.getRootNode() as ParentNode).querySelectorAll(sel))];
+  const ac = (all("input[type=password]") as HTMLInputElement[]).map((p) => p.autocomplete.toLowerCase());
+  if (!ac.length || ac.some((a) => a.includes("current-password"))) return false;
+  if (ac.length > 1 || ac.some((a) => a.includes("new-password"))) return true;
+  if (!form) return false;
+  const attrs = ["id", "name", "action"].map((a) => Element.prototype.getAttribute.call(form, a) ?? "");
+  const buttons = (all("button:not([type=button],[type=reset]),input[type=submit]") as HTMLButtonElement[]).map((b) => b.textContent || b.value);
+  return /sign.?up|regist|create.?(an.?|your.?)?account|new.?account|join|kay[iı]t|kaydol|üye ol|hesap oluştur/.test([...attrs, ...buttons].join(" ").toLowerCase());
 }
 
 /** The content script's copy: reads a typed-in login without being injected. */

@@ -40,7 +40,7 @@ export async function pageMatches(): Promise<PageMatches> {
   const items = await matches(url);
   const wanted = [settings.showCardsOnTab ? 3 : 0, settings.showIdentitiesOnTab ? 4 : 0].filter(Boolean);
   if (wanted.length) items.push(...(await list()).items.filter((i) => wanted.includes(i.type) && !i.failed));
-  return { host: url.host, items };
+  return { host: url.host, origin: url.origin, items };
 }
 
 /**
