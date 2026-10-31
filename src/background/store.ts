@@ -3,7 +3,6 @@
 //   local   (disk):   device id, server, settings, account (encrypted keys + refresh token), 2FA remember tokens
 //   session (memory): unlock flag, access token, pending 2FA login. Cleared on browser restart.
 import { DEFAULT_AUTO_LOCK_MINUTES } from "../shared/constants.ts";
-import type { AliasSettings, AliasVendor } from "../shared/alias.ts";
 import type { HistoryEntry, KdfParams, Settings, TwoFactorChallenge } from "../shared/messages.ts";
 import type { InlineContext, PendingSave } from "./inline.ts";
 
@@ -46,12 +45,6 @@ export interface Session {
   ssoError?: string;
   /** PIN unlock: the user key wrapped with the PIN key, and wrong tries so far. */
   pin?: { email: string; key: string; attempts: number };
-  /**
-   * Forwarded email alias settings, one entry per service. Session storage on purpose: a vendor API
-   * token is a secret, and SECURITY.md forbids writing secrets unencrypted to disk. It is dropped on
-   * logout and when the browser session ends, so a token is re-entered after a restart.
-   */
-  alias?: Partial<Record<AliasVendor, AliasSettings>>;
   /** Origin the inline menu's "Create account" wants a new login for; the popup it opens takes it. */
   newLogin?: string;
 }
@@ -121,6 +114,8 @@ interface LocalSchema {
   rememberTokens: Record<string, string>;
   /** Copied generator values, encrypted with the user key, newest first. */
   genHistory: HistoryEntry[];
+  /** Forwarded email alias settings per service (API tokens), as JSON encrypted with the user key. */
+  aliasSettings: string;
   /** cipher id -> epoch ms of the last user-gesture fill (page-load autofill prefers it, like the clients). */
   lastUsed: Record<string, number>;
   /** Biometric unlock, when set up (removed on logout). */

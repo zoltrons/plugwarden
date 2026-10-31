@@ -10,7 +10,7 @@ import { passwordLevel } from "../shared/strength.ts";
 import { isInsecureUri, mainPage, toHttps } from "../shared/uri-tools.ts";
 import type { PageMatches, Settings, VaultItem, VaultList } from "../shared/messages.ts";
 import { type Child, h, send, t, withChevron } from "./dom.ts";
-import { passwordGenOptions, resetGenerator } from "./generator.ts";
+import { type GeneratorPick, generatorScreen, resetGenerator, startGeneratorPick } from "./generator.ts";
 import { icon, type IconName } from "./icons.ts";
 import { renderMarkdown } from "./markdown.ts";
 import { pwnedCount } from "./pwned.ts";
@@ -134,6 +134,8 @@ const st = {
   sawList: false,
   /** Editor: URI rows whose match-detection select is open, by index. */
   uriOpen: new Set<number>(),
+  /** Editor: the generator is open for this field. */
+  picking: undefined as GeneratorPick["field"] | undefined,
 };
 let totpTimer: ReturnType<typeof setInterval> | undefined;
 /** An open flagged item re-checks its grant: it expires, and dies with the service worker. */
@@ -154,14 +156,14 @@ export function resetVault(): void {
     list: undefined, page: undefined, loading: false, syncing: false, busy: false, error: undefined, route: { kind: "list" }, query: "",
     folder: "", item: undefined, reveal: new Set(), totp: undefined, confirmDelete: 0, draft: undefined,
     large: undefined, qr: undefined, pwned: undefined, memory: undefined, notesPreview: false,
-    toast: "", copied: "", sawList: false, uriOpen: new Set(),
+    toast: "", copied: "", sawList: false, uriOpen: new Set(), picking: undefined,
   });
 }
 
 /** Which screen the vault tab is showing; the popup remembers a scroll position per key. */
 export function vaultRouteKey(): string {
   const r = st.route;
-  return r.kind === "list" ? "list" : r.kind === "item" ? `item:${r.id}` : r.kind === "edit" ? `edit:${r.isNew ? "new" : "item"}` : "folders";
+  return r.kind === "list" ? "list" : r.kind === "item" ? `item:${r.id}` : r.kind === "edit" ? `edit:${st.picking ?? (r.isNew ? "new" : "item")}` : "folders";
 }
 
 // ---------- helpers ----------
@@ -386,7 +388,7 @@ async function syncNow(ctx: Ctx, force: boolean) {
 function open(ctx: Ctx, route: Route) {
   clearInterval(totpTimer);
   stopRepromptWatch();
-  Object.assign(st, { route, error: undefined, confirmDelete: 0, totp: undefined, large: undefined, qr: undefined, notesPreview: false, pwned: undefined, memory: undefined, reveal: new Set(), copied: "", uriOpen: new Set(), repromptFor: undefined, itemFailedFor: undefined });
+  Object.assign(st, { route, error: undefined, confirmDelete: 0, totp: undefined, large: undefined, qr: undefined, notesPreview: false, pwned: undefined, memory: undefined, reveal: new Set(), copied: "", uriOpen: new Set(), picking: undefined, repromptFor: undefined, itemFailedFor: undefined });
   if (route.kind !== "edit") st.draft = undefined;
   if (route.kind === "item") noteOpened(route.id);
   ctx.rerender();
@@ -1669,7 +1671,13 @@ function editView(ctx: Ctx, isNew: boolean): HTMLElement {
       if (known.length) below.push(h("div", { class: "chips scroll", role: "group", "aria-label": t("suggestions") }, ...known.map((u) => h("button", { type: "button", class: "chip", onclick: () => ((d.data.username = u), ctx.rerender()) }, u))));
     }
     const wrap = (block: HTMLElement) => (below.length ? h("div", { class: "field-block" }, block, ...below) : block);
-    if (!f.secret) return wrap(field(id, f.icon, label(f.key), text(get, set, { autocomplete: "off", spellcheck: false, area: f.area })));
+    const openGenerator = (field: GeneratorPick["field"]) => {
+      startGeneratorPick(field);
+      st.picking = field;
+      ctx.rerender();
+    };
+    const generateUsername = d.type === 1 && f.key === "username" ? h("span", { class: "trailing" }, iconButton("dice", t("generateUsername"), () => openGenerator("username"))) : undefined;
+    if (!f.secret) return wrap(field(id, f.icon, label(f.key), text(get, set, { autocomplete: "off", spellcheck: false, area: f.area }), generateUsername));
     const reveal = st.reveal.has(id);
     const control = text(get, set, { type: reveal ? "text" : "password", autocomplete: "new-password", spellcheck: false, class: "mono", onchange, inputMode: cardNumber ? "numeric" : undefined });
     const block = field(
@@ -1686,13 +1694,7 @@ function editView(ctx: Ctx, isNew: boolean): HTMLElement {
           ctx.rerender();
         }),
         d.type === 1 && f.key === "password"
-          ? iconButton("dice", t("generatePassword"), async () => {
-              const r = await send<string>({ type: "generate", options: passwordGenOptions() });
-              if (!r.ok) return;
-              d.data.password = r.data;
-              st.reveal.add(id);
-              ctx.rerender();
-            })
+          ? iconButton("dice", t("generatePassword"), () => openGenerator("password"))
           : null,
         d.type === 1 && f.key === "totp" && barcodeDetector()
           ? h(
@@ -1880,6 +1882,23 @@ export function vaultScreen(ctx: Ctx): HTMLElement {
   if (st.large) return largeTypeView(ctx);
   if (st.qr) return qrView(ctx);
   if (r.kind === "item") return itemView(ctx, r.id);
+  if (r.kind === "edit" && st.draft && st.picking) {
+    const field = st.picking;
+    const d = st.draft;
+    const back = () => {
+      st.picking = undefined;
+      ctx.rerender();
+    };
+    return generatorScreen(ctx, {
+      field,
+      back,
+      use: (value) => {
+        d.data[field] = value;
+        if (field === "password") st.reveal.add("edit-password");
+        back();
+      },
+    });
+  }
   if (r.kind === "edit" && st.draft) return editView(ctx, r.isNew);
   if (r.kind === "folders") return foldersView(ctx);
   return listView(ctx);

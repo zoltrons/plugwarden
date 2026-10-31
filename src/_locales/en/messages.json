@@ -279,6 +279,15 @@
   "name": {
     "message": "Name"
   },
+  "usePassword": {
+    "message": "Use this password"
+  },
+  "useUsername": {
+    "message": "Use this username"
+  },
+  "generateUsername": {
+    "message": "Generate username"
+  },
   "generatePassword": {
     "message": "Generate password"
   },
@@ -1405,7 +1414,7 @@
     "message": "API key"
   },
   "aliasApiKeyHint": {
-    "message": "For this session only"
+    "message": "Stored encrypted with your vault key"
   },
   "aliasDomain": {
     "message": "Email domain"

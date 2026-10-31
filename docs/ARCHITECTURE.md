@@ -108,8 +108,8 @@ field carries the address) are ported from the official clients into `src/shared
 unit tested, no fetch — and `src/background/alias.ts` performs the call from the service worker, only
 after a click, never from the popup. Supported: SimpleLogin, Addy.io, DuckDuckGo, Fastmail, Firefox
 Relay and Forward Email; SimpleLogin and Addy.io also take a self-hosted base URL. API tokens are kept
-per service in `chrome.storage.session` (dropped on logout and on browser restart), so a token can only
-ever be sent to the service it belongs to.
+per service in `chrome.storage.local`, encrypted with the user key and removed on logout, so a token can
+only ever be sent to the service it belongs to.
 
 ## Permissions
 

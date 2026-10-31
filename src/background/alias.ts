@@ -1,8 +1,8 @@
 // Forwarded email aliases: the one place that talks to a forwarding service.
 //
 // Nothing here touches the vault: an alias is created from the user's API token and the page they are
-// on. Tokens live in storage.session (see store.ts), the request shapes in shared/alias.ts. A request
-// only ever leaves after an explicit click in the generator.
+// on. Tokens are on disk only encrypted with the user key, the request shapes are in shared/alias.ts. A
+// request only ever leaves after an explicit click in the generator.
 import {
   ALIAS_INFO,
   type AliasContext,
@@ -21,7 +21,8 @@ import {
 import { readBytes } from "../transport/http.ts";
 import { ci } from "../shared/validate.ts";
 import { UserError } from "./account.ts";
-import { getSession, updateSession } from "./store.ts";
+import { coreCall } from "./core.ts";
+import { getLocal, setLocal } from "./store.ts";
 
 /** An alias is a small JSON body; a broken or hostile service must not fill the worker's memory. */
 const MAX_ALIAS_BYTES = 64 * 1024;
@@ -29,9 +30,23 @@ const ALIAS_TIMEOUT_MS = 15_000;
 
 const msg = (key: string, ...subs: string[]): string => chrome.i18n.getMessage(key, subs) || key;
 
+type AliasStore = Partial<Record<AliasVendor, AliasSettings>>;
+
+/** Every service's settings. Unreadable ones (another key, damaged data) count as not set up. */
+async function readAliasStore(): Promise<AliasStore> {
+  const enc = await getLocal("aliasSettings");
+  if (!enc) return {};
+  const [json] = await coreCall<string[]>({ op: "decryptText", values: [enc] });
+  try {
+    return JSON.parse(json ?? "") as AliasStore;
+  } catch {
+    return {};
+  }
+}
+
 /** Settings for one service, with defaults filled in. */
 export async function getAliasSettings(vendor: AliasVendor): Promise<AliasSettings> {
-  const saved = (await getSession()).alias?.[vendor];
+  const saved = (await readAliasStore())[vendor];
   return saved ? { ...defaultAliasSettings(vendor), ...saved, vendor } : defaultAliasSettings(vendor);
 }
 
@@ -45,8 +60,8 @@ export async function saveAliasSettings(settings: AliasSettings): Promise<void> 
       throw new UserError("invalid", (e as Error).message);
     }
   }
-  const current = (await getSession()).alias ?? {};
-  await updateSession({ alias: { ...current, [settings.vendor]: settings } });
+  const [enc] = await coreCall<string[]>({ op: "encryptText", values: [JSON.stringify({ ...(await readAliasStore()), [settings.vendor]: settings })] });
+  await setLocal("aliasSettings", enc!);
 }
 
 /** The page the alias is being made for: the active tab, never a URL from the message. Query and fragment stay home (reset tokens, session ids). */

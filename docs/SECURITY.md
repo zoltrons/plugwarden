@@ -48,7 +48,7 @@ freed rather than zeroed in place.
    `sender.tab` absent (`src/offscreen/offscreen.ts`). Conversely the worker answers only its parent.
 
 6. **Vault secrets are never written unencrypted to disk.** `storage.local` holds the encrypted cache, the
-   protected user key, the wrapped PIN and an encrypted generator history. The refresh token and the 2FA
+   protected user key, the wrapped PIN, an encrypted generator history and encrypted alias settings. The refresh token and the 2FA
    remember tokens are the exception, see Known gaps. Access tokens, and a typed password waiting in the
    save bar until it expires or the vault locks, live in `storage.session` (memory only); the decrypted
    vault lives in the crypto worker. Both stores are set to `TRUSTED_CONTEXTS` on *every* worker start, so
@@ -123,8 +123,8 @@ freed rather than zeroed in place.
 - **Forwarded email aliases call a third-party service, on an explicit click only.** The generator sends
   the service's API token plus the current page's origin and path (no query or fragment) to the selected forwarding service
   (`src/background/alias.ts`); nothing runs automatically and no vault data is included. Tokens are kept
-  per service in `storage.session` (never on disk), so switching the selected service cannot send one
-  service's token to another, and they are dropped on logout. A self-hosted base URL must be https, or
+  per service in `storage.local`, encrypted with the user key (readable only while unlocked), so switching the
+  selected service cannot send one service's token to another, and they are removed on logout. A self-hosted base URL must be https, or
   plain http on loopback; unlike the official client there is no "trust this unsafe URL" override, so a
   LAN forwarding service over http is refused.
 - **The list carries two derived flags, not secrets.** `reused` (how many items share a password) and

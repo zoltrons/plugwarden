@@ -1,5 +1,5 @@
 // Generator tab: password / passphrase / PIN / username, forwarded email aliases, and the history screen.
-// Own state (`gst`); the vault screens only reach it through `resetGenerator` and `passwordGenOptions`.
+// Own state (`gst`); the vault screens only reach it through `resetGenerator`, `startGeneratorPick` and `generatorScreen`.
 import {
   ALIAS_INFO,
   ALIAS_VENDORS,
@@ -68,7 +68,7 @@ function genOptions(): Json {
 const gst = {
   gen: savedGen(),
   generated: "",
-  /** Forwarded email alias settings for the service selected in the generator (session-backed). */
+  /** Forwarded email alias settings for the service selected in the generator (kept by the worker). */
   alias: undefined as AliasSettings | undefined,
   /** Which service's settings are being read right now (a switch mid-flight must not land). */
   aliasLoadingFor: undefined as AliasVendor | undefined,
@@ -85,9 +85,19 @@ export function resetGenerator(): void {
   Object.assign(gst, { gen: savedGen(), generated: "", suggestions: [], history: undefined, alias: undefined, aliasLoadingFor: undefined, aliasBusy: false, error: undefined });
 }
 
-/** Options for the edit form's "generate password" dice: the saved ones, unless the generator is on a PIN or username. */
-export function passwordGenOptions(): Json {
-  return gst.gen.type === "password" || gst.gen.type === "passphrase" ? genOptions() : { ...GEN_DEFAULTS };
+/** The edit form's generator: which field it fills, and how the value gets back to the form. */
+export interface GeneratorPick {
+  field: "password" | "username";
+  use(value: string): void;
+  back(): void;
+}
+
+const PICK_TYPES = { password: ["password", "passphrase", "pin"], username: ["username", "alias"] };
+
+/** Opens the generator on a type that fits the field, with a value made for it. */
+export function startGeneratorPick(field: GeneratorPick["field"]): void {
+  if (!PICK_TYPES[field].includes(str(gst.gen.type))) gst.gen.type = PICK_TYPES[field][0];
+  Object.assign(gst, { generated: "", suggestions: [], error: undefined });
 }
 
 const errorBox = (): Child => (gst.error ? h("div", { class: "error", role: "alert" }, icon("error"), h("div", {}, gst.error)) : null);
@@ -136,7 +146,7 @@ async function generateAliasNow(ctx: Ctx) {
   }
 }
 
-/** Loads the selected service's settings (session storage in the worker) once per generator visit. */
+/** Loads the selected service's settings from the worker once per generator visit. */
 async function loadAlias(ctx: Ctx, vendor: AliasVendor) {
   gst.aliasLoadingFor = vendor;
   const r = await send<AliasSettings>({ type: "aliasSettings", vendor });
@@ -204,7 +214,7 @@ function historyScreen(ctx: Ctx, list: HistoryEntry[]): HTMLElement {
   );
 }
 
-export function generatorScreen(ctx: Ctx): HTMLElement {
+export function generatorScreen(ctx: Ctx, pick?: GeneratorPick): HTMLElement {
   if (gst.history) return historyScreen(ctx, gst.history);
   if (gst.gen.type !== "alias" && !gst.generated && !gst.error) void regenerate(ctx);
   const g = gst.gen;
@@ -257,7 +267,7 @@ export function generatorScreen(ctx: Ctx): HTMLElement {
       h("input", { ...props, value: str(g[k]), "aria-label": label, spellcheck: false, onchange: (e: Event) => set(k, (e.target as HTMLInputElement).value) }),
     );
   const custom = g.type === "passphrase" && savedWordlist().length >= 100;
-  // The alias settings live in the worker's session storage (a token is a secret; no localStorage).
+  // The worker keeps the alias settings, encrypted (a token is a secret; no localStorage).
   const aliasVendor: AliasVendor = (ALIAS_VENDORS as readonly string[]).includes(str(g.aliasVendor)) ? (g.aliasVendor as AliasVendor) : "simplelogin";
   if (g.type === "alias" && gst.alias === undefined && gst.aliasLoadingFor !== aliasVendor) void loadAlias(ctx, aliasVendor);
   const aliasReady = !!gst.alias && gst.alias.vendor === aliasVendor && missingAliasFields(gst.alias).length === 0;
@@ -312,9 +322,12 @@ export function generatorScreen(ctx: Ctx): HTMLElement {
   else if (g.type === "alias") {
     const info = ALIAS_INFO[aliasVendor];
     const saved = gst.alias;
-    const save = (patch: Partial<AliasSettings>) => {
+    // `typing`: saved as it is typed, since closing the popup fires no change event and would lose a
+    // pasted key. A re-render would take the focus, so that and any error wait for the change event.
+    const save = (patch: Partial<AliasSettings>, typing = false) => {
       if (!saved) return;
-      const next = { ...saved, ...patch, vendor: aliasVendor };
+      // gst.alias, not `saved`: a field typed into before the last re-render must not undo another.
+      const next = { ...(gst.alias ?? saved), ...patch, vendor: aliasVendor };
       gst.alias = next;
       // The address on screen was made with the old settings, and making a new one is the user's
       // click, not a side effect of typing a key.
@@ -322,6 +335,7 @@ export function generatorScreen(ctx: Ctx): HTMLElement {
       gst.error = undefined;
       void (async () => {
         const r = await send({ type: "setAliasSettings", settings: next });
+        if (typing) return;
         if (!r.ok) gst.error = r.error;
         ctx.rerender();
       })();
@@ -338,6 +352,7 @@ export function generatorScreen(ctx: Ctx): HTMLElement {
           "aria-label": label,
           spellcheck: false,
           autocomplete: "off",
+          oninput: (e: Event) => save({ [field]: (e.target as HTMLInputElement).value } as Partial<AliasSettings>, true),
           onchange: (e: Event) => save({ [field]: (e.target as HTMLInputElement).value } as Partial<AliasSettings>),
         }),
       );
@@ -393,15 +408,17 @@ export function generatorScreen(ctx: Ctx): HTMLElement {
   return h(
     "div",
     { class: "page" },
-    topBar(h("h1", { class: "grow" }, t("generator")), iconButton("timer", t("generatorHistory"), () => void openHistory(ctx))),
+    topBar(pick ? iconButton("back", t("back"), pick.back) : null, h("h1", { class: "grow" }, t("generator")), iconButton("timer", t("generatorHistory"), () => void openHistory(ctx))),
     h(
       "div",
       { class: "chips", role: "group", "aria-label": t("generator") },
-      chip("password", t("typePassword")),
-      chip("passphrase", t("typePassphrase")),
-      chip("pin", t("typePin")),
-      chip("username", t("username")),
-      chip("alias", t("forwardedEmail")),
+      ...[
+        chip("password", t("typePassword")),
+        chip("passphrase", t("typePassphrase")),
+        chip("pin", t("typePin")),
+        chip("username", t("username")),
+        chip("alias", t("forwardedEmail")),
+      ].filter((_, i) => !pick || (pick.field === "password" ? i < 3 : i >= 3)),
     ),
     h(
       "div",
@@ -441,7 +458,10 @@ export function generatorScreen(ctx: Ctx): HTMLElement {
           h("div", { class: "group", role: "list" }, ...gst.suggestions.map((v, i) => h("div", { class: "row", role: "listitem" }, h("div", { class: "body" }, h("span", { class: "title mono ellipsis" }, ...colorize(v)), h("span", { class: "sub" }, t("characters", String(v.length)))), copyButton(ctx, `sug.${i}`, v, t("copyField", t("generatedValue")))))),
         )
       : null,
-    gst.generated
+    pick && gst.generated
+      ? h("div", { class: "editor-footer" }, h("button", { type: "button", class: "btn filled wide", onclick: () => pick.use(gst.generated) }, icon("check"), t(pick.field === "password" ? "usePassword" : "useUsername")))
+      : null,
+    !pick && gst.generated
       ? actionRow("plus", t(g.type === "alias" ? "createLoginWithEmail" : g.type === "username" ? "createLoginWithUsername" : "createLoginWithPassword"), () => {
           ctx.goto("vault");
           startEdit(ctx, undefined, { data: { [g.type === "username" || g.type === "alias" ? "username" : "password"]: gst.generated } });

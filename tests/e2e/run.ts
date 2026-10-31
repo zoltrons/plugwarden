@@ -667,8 +667,24 @@ try {
   await step("create login in popup; server copy decrypts independently", async () => {
     await page.getByRole("button", { name: "New item" }).click();
     await fill("Name", "Example");
+    await page.getByRole("button", { name: "Generate username" }).click();
+    await page.getByRole("button", { name: "Use this username" }).click();
+    assert.notEqual(await page.getByLabel("Username", { exact: true }).inputValue(), "");
     await fill("Username", "alice");
+    // The generator keeps the form as it was, and its settings apply to the value it hands back.
     await page.getByRole("button", { name: "Generate password" }).click();
+    await page.getByRole("button", { name: "Use this password" }).waitFor();
+    const length = page.getByRole("slider", { name: "Length" });
+    await length.fill("30");
+    await page.waitForFunction(() => document.querySelector("output")?.textContent?.length === 30);
+    await page.getByRole("button", { name: "Use this password" }).click();
+    assert.equal((await page.getByLabel("Password", { exact: true }).inputValue()).length, 30);
+    assert.equal(await page.getByLabel("Username", { exact: true }).inputValue(), "alice");
+    assert.equal(await page.getByLabel("Name", { exact: true }).inputValue(), "Example");
+    await page.getByRole("button", { name: "Generate password" }).click();
+    await length.fill("20"); // later steps expect the default length
+    await page.waitForFunction(() => document.querySelector("output")?.textContent?.length === 20);
+    await page.getByRole("button", { name: "Back" }).click();
     await page.getByRole("button", { name: "Add website" }).click();
     await fill("Website 1", "example.com");
     await page.getByRole("button", { name: "Add website" }).click();
@@ -679,7 +695,7 @@ try {
     const c = (await s.ciphers()).find((x) => x.name === "Example");
     s.done();
     assert.equal(c?.login.username, "alice");
-    assert.equal(c?.login.password.length, 20);
+    assert.equal(c?.login.password.length, 30);
     assert.deepEqual(c?.login.uris.map((u: { uri: string }) => u.uri), ["example.com", "https://login.example.com"]);
   });
 
@@ -900,6 +916,21 @@ try {
     await page.getByLabel("Domain").fill("catch.example");
     await page.getByLabel("Domain").blur();
     await until(/^[a-z0-9]{8}@catch\.example$/);
+  });
+
+  await step("generator: an alias API key survives closing the popup and a lock, encrypted at rest", async () => {
+    await page.getByRole("button", { name: "Forwarded email" }).click();
+    await page.getByLabel("API key").fill("sl-token-secret");
+    // No blur and no change event: the popup just goes away, like a click outside it.
+    await poll("alias key saved", () => sw.evaluate(async () => !!(await chrome.storage.local.get("aliasSettings")).aliasSettings));
+    const raw = await sw.evaluate(async () => (await chrome.storage.local.get("aliasSettings")).aliasSettings);
+    assert.ok(raw.startsWith("2.") && !raw.includes("sl-token-secret"), raw);
+    await page.evaluate(() => chrome.runtime.sendMessage({ type: "lock" }));
+    await unlockIfLocked();
+    await page.getByRole("button", { name: "Generator" }).click();
+    await poll("alias key restored", async () => (await page.getByLabel("API key").inputValue()) === "sl-token-secret");
+    await page.getByRole("button", { name: "Username", exact: true }).click();
+    await page.waitForFunction(() => /^[a-z0-9]{8}@catch\.example$/.test(document.querySelector("output")?.textContent ?? ""));
   });
 
   await step("generator history: copied values listed, encrypted at rest, clearable", async () => {

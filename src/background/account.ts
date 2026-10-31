@@ -340,8 +340,8 @@ export async function unlockWithPin(pin: string): Promise<void> {
 
 export async function logout(): Promise<void> {
   await lockNow();
-  await removeLocal("account", "vault", "genHistory", "biometric");
-  await updateSession({ accessToken: undefined, accessExpiresAt: undefined, pin: undefined, alias: undefined });
+  await removeLocal("account", "vault", "genHistory", "aliasSettings", "biometric");
+  await updateSession({ accessToken: undefined, accessExpiresAt: undefined, pin: undefined });
 }
 
 /** The refresh in flight, if any. The server may rotate the refresh token, so a second concurrent
