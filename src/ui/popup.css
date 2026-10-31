@@ -177,7 +177,7 @@
 html, body { margin: 0; }
 /* The action popup sizes itself to its content, up to Chrome's 600 px limit. Asking for the limit keeps the
    window the same height on every screen; taller screens scroll. The gutter does the same for the width. */
-html:not(.frame) { scrollbar-gutter: stable; }
+html:not(.frame):not(:has(body.panel)) { scrollbar-gutter: stable; }
 body {
   width: 380px;
   min-height: 600px;
