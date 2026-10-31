@@ -2,13 +2,13 @@
 import { AUTO_LOCK_CHOICES, CLEAR_CLIPBOARD_CHOICES, type ClearClipboardDelay, TWO_FACTOR, URI_MATCH, URI_MATCH_ADVANCED } from "../shared/constants.ts";
 import type { Request, State } from "../shared/messages.ts";
 import { normalizeServerUrl } from "../shared/url.ts";
-import { applyTheme, type Child, h, inPanel, savedTheme, send, t, THEMES, withChevron } from "./dom.ts";
+import { applyTheme, type Child, h, inPanel, savedTheme, send, t, THEMES, when, withChevron } from "./dom.ts";
 import { icon, type IconName } from "./icons.ts";
 import { createBiometricCredential, getBiometricPrf, platformAuthenticatorAvailable } from "./biometric.ts";
 import { passkeyRequestId, passkeyScreen } from "./passkey.ts";
 import { resetSend, sendScreen, startTextSend } from "./send.ts";
 import { generatorScreen } from "./generator.ts";
-import { type Ctx, iconButton, monogramHue, refreshPageMatches, resetVault, setIconBase, toastEl, uriMatchLabel, vaultRouteKey, vaultScreen } from "./vault.ts";
+import { type Ctx, iconButton, refreshPageMatches, resetVault, setIconBase, toastEl, uriMatchLabel, vaultRouteKey, vaultScreen } from "./vault.ts";
 
 // ---------- state ----------
 
@@ -52,7 +52,6 @@ async function act(req: Request, busyLabel?: string): Promise<boolean> {
 const host = (url?: string) => (url ? new URL(url).host : "");
 
 function field(opts: {
-  icon: IconName;
   label: string;
   input: HTMLInputElement | HTMLSelectElement;
   trailing?: Child;
@@ -63,7 +62,6 @@ function field(opts: {
   return h(
     "div",
     { class: `field ${opts.extraClass ?? ""}` },
-    icon(opts.icon),
     h("label", { for: id }, h("span", {}, opts.label), opts.input),
     opts.trailing,
   );
@@ -99,7 +97,7 @@ function passwordField(autocomplete: string) {
     },
     icon(ui.reveal ? "eyeOff" : "eye"),
   );
-  return field({ icon: "key", label: t("masterPassword"), input, trailing: toggle });
+  return field({ label: t("masterPassword"), input, trailing: toggle });
 }
 
 function errorBox(): Child {
@@ -140,7 +138,6 @@ function setupView(): HTMLElement {
     { class: "page center", onsubmit, novalidate: true },
     brand(t("appName"), t("setupSubtitle")),
     field({
-      icon: "server",
       label: t("serverUrl"),
       input: bound("server", {
         type: "url",
@@ -170,7 +167,7 @@ function serverChip() {
     "button",
     {
       type: "button",
-      class: "chip server-chip",
+      class: "btn text small server-link",
       disabled: ui.busy,
       "aria-label": t("changeServer"),
       onclick: () => {
@@ -180,8 +177,8 @@ function serverChip() {
         render();
       },
     },
-    icon("server"),
     host(state?.serverUrl),
+    icon("chevronDown"),
   );
 }
 
@@ -198,7 +195,6 @@ function loginView(): HTMLElement {
     brand(t("loginTitle")),
     serverChip(),
     field({
-      icon: "mail",
       label: t("email"),
       input: bound("email", { type: "email", autocomplete: "username", required: true, spellcheck: false, "data-autofocus": draft.email ? undefined : "1" }),
     }),
@@ -344,7 +340,6 @@ function twoFactorView(s: State): HTMLElement {
     ui.provider === TWO_FACTOR.YubiKey ? h("p", { class: "note" }, t("yubiKeyHint")) : null,
     typed
       ? field({
-          icon: "lock",
           label: t("verificationCode"),
           extraClass: ui.provider === TWO_FACTOR.YubiKey ? undefined : "code",
           // A YubiKey OTP is 44 modhex letters typed by the key itself.
@@ -411,7 +406,7 @@ function lockedView(s: State): HTMLElement {
     void act(withPin ? { type: "unlockPin", pin } : { type: "unlock", password }, t("busyUnlocking"));
   };
   const pinField = () =>
-    field({ icon: "lock", label: t("pin"), input: bound("pin", { type: "password", autocomplete: "off", required: true, spellcheck: false, "data-autofocus": "1" }) });
+    field({ label: t("pin"), input: bound("pin", { type: "password", autocomplete: "off", required: true, spellcheck: false, "data-autofocus": "1" }) });
   const switchMethod = s.pinUnlock
     ? h("button", { type: "button", class: "btn text", disabled: ui.busy, onclick: () => ((ui.usePassword = !ui.usePassword), (ui.error = undefined), render()) }, t(withPin ? "useMasterPassword" : "usePin"))
     : null;
@@ -421,7 +416,6 @@ function lockedView(s: State): HTMLElement {
     h(
       "div",
       { class: "brand" },
-      h("div", { class: "avatar", style: `--h:${monogramHue(s.email ?? "")}`, "aria-hidden": "true" }, (s.email ?? "?").slice(0, 1).toUpperCase()),
       h("h1", {}, t("lockedTitle")),
       h("p", {}, s.email ?? ""),
       h("p", { class: "host" }, host(s.serverUrl)),
@@ -472,8 +466,8 @@ function navButton(tab: Ui["tab"], label: string, ic: IconName) {
   );
 }
 
-function row(ic: IconName, title: string, sub?: string, trailing?: Child, extra: Record<string, unknown> = {}, tag: "div" | "button" = "div") {
-  return h(tag, { class: "row", ...extra }, icon(ic), h("div", { class: "body" }, h("span", { class: "title" }, title), sub ? h("span", { class: "sub" }, sub) : null), trailing);
+function row(title: string, sub?: string, trailing?: Child, extra: Record<string, unknown> = {}, tag: "div" | "button" = "div") {
+  return h(tag, { class: "row", ...extra }, h("div", { class: "body" }, h("span", { class: "title" }, title), sub ? h("span", { class: "sub wrap" }, sub) : null), trailing);
 }
 
 function autoLockLabel(m: number): string {
@@ -545,40 +539,38 @@ function settingsTab(s: State): HTMLElement {
     h(
       "div",
       { class: "group" },
-      row("home", t("inlineMenu"), t("inlineMenuHint"), toggle(t("inlineMenu"), s.settings.inlineMenu, (b) => void act({ type: "setSettings", inlineMenu: b.checked }))),
+      row(t("inlineMenu"), t("inlineMenuHint"), toggle(t("inlineMenu"), s.settings.inlineMenu, (b) => void act({ type: "setSettings", inlineMenu: b.checked }))),
       s.settings.inlineMenu
-        ? row("card", t("inlineMenuCards"), undefined, toggle(t("inlineMenuCards"), s.settings.inlineMenuCards, (b) => void act({ type: "setSettings", inlineMenuCards: b.checked })))
+        ? row(t("inlineMenuCards"), undefined, toggle(t("inlineMenuCards"), s.settings.inlineMenuCards, (b) => void act({ type: "setSettings", inlineMenuCards: b.checked })))
         : null,
       s.settings.inlineMenu
-        ? row("user", t("inlineMenuIdentities"), undefined, toggle(t("inlineMenuIdentities"), s.settings.inlineMenuIdentities, (b) => void act({ type: "setSettings", inlineMenuIdentities: b.checked })))
+        ? row(t("inlineMenuIdentities"), undefined, toggle(t("inlineMenuIdentities"), s.settings.inlineMenuIdentities, (b) => void act({ type: "setSettings", inlineMenuIdentities: b.checked })))
         : null,
-      row("card", t("showCardsOnTab"), undefined, toggle(t("showCardsOnTab"), s.settings.showCardsOnTab, (b) => void act({ type: "setSettings", showCardsOnTab: b.checked }))),
-      row("user", t("showIdentitiesOnTab"), undefined, toggle(t("showIdentitiesOnTab"), s.settings.showIdentitiesOnTab, (b) => void act({ type: "setSettings", showIdentitiesOnTab: b.checked }))),
-      row("timer", t("autoCopyTotp"), t("autoCopyTotpHint"), toggle(t("autoCopyTotp"), s.settings.autoCopyTotp, (b) => void act({ type: "setSettings", autoCopyTotp: b.checked }))),
-      row("more", t("enableContextMenu"), undefined, toggle(t("enableContextMenu"), s.settings.contextMenu, (b) => void act({ type: "setSettings", contextMenu: b.checked }))),
-      row("plus", t("savePrompt"), t("savePromptHint"), toggle(t("savePrompt"), s.settings.savePrompt, (b) => void act({ type: "setSettings", savePrompt: b.checked }))),
+      row(t("showCardsOnTab"), undefined, toggle(t("showCardsOnTab"), s.settings.showCardsOnTab, (b) => void act({ type: "setSettings", showCardsOnTab: b.checked }))),
+      row(t("showIdentitiesOnTab"), undefined, toggle(t("showIdentitiesOnTab"), s.settings.showIdentitiesOnTab, (b) => void act({ type: "setSettings", showIdentitiesOnTab: b.checked }))),
+      row(t("autoCopyTotp"), t("autoCopyTotpHint"), toggle(t("autoCopyTotp"), s.settings.autoCopyTotp, (b) => void act({ type: "setSettings", autoCopyTotp: b.checked }))),
+      row(t("enableContextMenu"), undefined, toggle(t("enableContextMenu"), s.settings.contextMenu, (b) => void act({ type: "setSettings", contextMenu: b.checked }))),
+      row(t("savePrompt"), t("savePromptHint"), toggle(t("savePrompt"), s.settings.savePrompt, (b) => void act({ type: "setSettings", savePrompt: b.checked }))),
       s.settings.neverSave.length
-        ? row("globe", t("neverSaveSites", String(s.settings.neverSave.length)), s.settings.neverSave.join(", "), h("button", { type: "button", class: "btn text small", onclick: () => void act({ type: "setSettings", clearNeverSave: true }) }, t("clear")))
+        ? row(t("neverSaveSites", String(s.settings.neverSave.length)), s.settings.neverSave.join(", "), h("button", { type: "button", class: "btn text small", onclick: () => void act({ type: "setSettings", clearNeverSave: true }) }, t("clear")))
         : null,
       ...s.settings.neverSave.map((h0) =>
-        row("globe", h0, undefined, iconButton("close", t("removeNeverSave", h0), () => void act({ type: "setSettings", removeNeverSave: h0 }))),
+        row(h0, undefined, iconButton("close", t("removeNeverSave", h0), () => void act({ type: "setSettings", removeNeverSave: h0 }))),
       ),
-      row("shield", t("defaultManager"), t("defaultManagerHint"), toggle(t("defaultManager"), s.settings.defaultManager, defaultManager)),
-      row("key", t("autosubmit"), t("autosubmitHint"), toggle(t("autosubmit"), s.settings.autosubmit, (b) => void act({ type: "setSettings", autosubmit: b.checked }))),
+      row(t("defaultManager"), t("defaultManagerHint"), toggle(t("defaultManager"), s.settings.defaultManager, defaultManager)),
+      row(t("autosubmit"), t("autosubmitHint"), toggle(t("autosubmit"), s.settings.autosubmit, (b) => void act({ type: "setSettings", autosubmit: b.checked }))),
     ),
     h("h2", { class: "section-title" }, t("autofillOnPageLoad")),
     h(
       "div",
       { class: "group" },
       row(
-        "timer",
         t("autofillOnPageLoad"),
         t("autofillOnPageLoadHint"),
         toggle(t("autofillOnPageLoad"), s.settings.autofillOnPageLoad, (b) => void act({ type: "setSettings", autofillOnPageLoad: b.checked })),
       ),
       s.settings.autofillOnPageLoad
         ? row(
-            "key",
             t("autofillOnPageLoadDefault"),
             t("autofillOnPageLoadDefaultHint"),
             withChevron(
@@ -600,7 +592,6 @@ function settingsTab(s: State): HTMLElement {
       "div",
       { class: "group" },
       row(
-        "timer",
         t("clearClipboard"),
         t("clearClipboardDesc"),
         withChevron(
@@ -615,7 +606,6 @@ function settingsTab(s: State): HTMLElement {
         ),
       ),
       row(
-        "globe",
         t("defaultUriMatchDetection"),
         t(URI_MATCH_ADVANCED.includes(s.settings.defaultUriMatch) ? "uriMatchDefaultAdvancedHint" : "uriMatchDefaultHint"),
         withChevron(
@@ -636,16 +626,15 @@ function settingsTab(s: State): HTMLElement {
     h(
       "div",
       { class: "group" },
-      row("user", s.email ?? "", t("loggedIn")),
-      row("server", host(s.serverUrl), s.serverVersion ? t("serverVersion", s.serverVersion) : undefined),
+      row(s.email ?? "", t("loggedIn")),
+      row(host(s.serverUrl), s.serverVersion ? t("serverVersion", s.serverVersion) : undefined),
     ),
     h("h2", { class: "section-title" }, t("security")),
     h(
       "div",
       { class: "group" },
-      row("timer", t("autoLock"), undefined, withChevron(select)),
+      row(t("autoLock"), undefined, withChevron(select)),
       row(
-        "logout",
         t("timeoutAction"),
         undefined,
         withChevron(
@@ -658,7 +647,6 @@ function settingsTab(s: State): HTMLElement {
         ),
       ),
       row(
-        "eye",
         t("theme"),
         undefined,
         withChevron(
@@ -675,16 +663,14 @@ function settingsTab(s: State): HTMLElement {
           ),
         ),
       ),
-      row("globe", t("favicons"), t("faviconsHint"), toggle(t("favicons"), s.settings.favicons, (b) => void act({ type: "setSettings", favicons: b.checked }))),
-      row("lock", t("lockOnSystemLock"), undefined, h("span", { class: "switch" }, sysLock, h("span"))),
+      row(t("favicons"), t("faviconsHint"), toggle(t("favicons"), s.settings.favicons, (b) => void act({ type: "setSettings", favicons: b.checked }))),
+      row(t("lockOnSystemLock"), undefined, h("span", { class: "switch" }, sysLock, h("span"))),
       row(
-        "key",
         t("unlockWithPin"),
         t("unlockWithPinHint"),
         toggle(t("unlockWithPin"), !!s.pinSet || !!ui.pinSetup, (b) => (b.checked ? ((ui.pinSetup = true), render()) : void act({ type: "setPin" }))),
       ),
       row(
-        "fingerprint",
         t("biometricUnlock"),
         t("biometricUnlockHint"),
         toggle(t("biometricUnlock"), !!s.biometric, (b) => void (b.checked ? setupBiometric() : disableBiometric())),
@@ -712,12 +698,11 @@ function settingsTab(s: State): HTMLElement {
       "div",
       { class: "group" },
       row(
-        "refresh",
         t("syncNow"),
-        s.syncedAt ? t("lastSync", new Date(s.syncedAt).toLocaleString()) : t("never"),
+        s.syncedAt ? t("lastSync", when(s.syncedAt)) : t("never"),
         h("button", { type: "button", class: "btn text small", disabled: ui.busy, onclick: () => void syncNow() }, icon("refresh"), t("syncNow")),
       ),
-      row("download", t("exportVault"), t("exportHint"), null, { type: "button", disabled: ui.busy, onclick: () => ((ui.exporting = !ui.exporting), render()) }, "button"),
+      row(t("exportVault"), t("exportHint"), null, { type: "button", disabled: ui.busy, onclick: () => ((ui.exporting = !ui.exporting), render()) }, "button"),
       ui.exporting
         ? h(
             "form",
@@ -737,8 +722,7 @@ function settingsTab(s: State): HTMLElement {
       h(
         "label",
         { class: "row" },
-        icon("plus"),
-        h("div", { class: "body" }, h("span", { class: "title" }, t("importVault")), h("span", { class: "sub" }, t("importHint"))),
+        h("div", { class: "body" }, h("span", { class: "title" }, t("importVault")), h("span", { class: "sub wrap" }, t("importHint"))),
         h("input", { type: "file", accept: ".json,application/json", class: "sr-only", "aria-label": t("importVault"), disabled: ui.busy, onchange: (e: Event) => void importVault((e.target as HTMLInputElement).files?.[0]) }),
       ),
     ),
@@ -748,26 +732,26 @@ function settingsTab(s: State): HTMLElement {
     h(
       "div",
       { class: "group" },
-      row("info", t("about"), chrome.runtime.getManifest().version),
-      row("globe", t("helpCenter"), undefined, null, { type: "button", onclick: () => openExternal("https://bitwarden.com/help/") }, "button"),
-      s.serverUrl ? row("vault", t("webVault"), host(s.serverUrl), null, { type: "button", onclick: () => openExternal(`${s.serverUrl}/#/`) }, "button") : null,
+      row(t("about"), chrome.runtime.getManifest().version),
+      row(t("helpCenter"), undefined, null, { type: "button", onclick: () => openExternal("https://bitwarden.com/help/") }, "button"),
+      s.serverUrl ? row(t("webVault"), host(s.serverUrl), null, { type: "button", onclick: () => openExternal(`${s.serverUrl}/#/`) }, "button") : null,
     ),
     h(
       "div",
       { class: "group" },
       inPanel || windowId === undefined
         ? null
-        : row("panel", t("openSidePanel"), undefined, null, {
+        : row(t("openSidePanel"), undefined, null, {
             type: "button",
             // sidePanel.open needs the user gesture, so no await before it.
             onclick: () => void chrome.sidePanel.open({ windowId: windowId! }).then(() => window.close(), (e: unknown) => ((ui.error = String(e)), render())),
           }, "button"),
       // The OS biometric prompt can close the action popup; setup and unlock also work in a tab.
       !inPanel && !inTab
-        ? row("external", t("openInTab"), t("openInTabHint"), null, { type: "button", onclick: () => void chrome.tabs.create({ url: location.href }) }, "button")
+        ? row(t("openInTab"), t("openInTabHint"), null, { type: "button", onclick: () => void chrome.tabs.create({ url: location.href }) }, "button")
         : null,
-      row("lock", t("lockNow"), undefined, null, { type: "button", onclick: () => void act({ type: "lock" }) }, "button"),
-      row("logout", t("logOut"), undefined, null, { type: "button", class: "row danger", onclick: () => void act({ type: "logout" }) }, "button"),
+      row(t("lockNow"), undefined, null, { type: "button", onclick: () => void act({ type: "lock" }) }, "button"),
+      row(t("logOut"), undefined, null, { type: "button", class: "row danger", onclick: () => void act({ type: "logout" }) }, "button"),
     ),
     errorBox(),
   );

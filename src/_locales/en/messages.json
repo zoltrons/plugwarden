@@ -30,7 +30,7 @@
     "message": "Back"
   },
   "setupHint": {
-    "message": "Plugwarden only asks for access to this one server."
+    "message": "Plugwarden only asks for access to this one server"
   },
   "busyCheckingServer": {
     "message": "Checking server…"
@@ -343,7 +343,7 @@
     "message": "Fill the login for this page"
   },
   "onThisSite": {
-    "message": "On this site — $P1$",
+    "message": "On $P1$",
     "placeholders": {
       "p1": {
         "content": "$1"
@@ -650,7 +650,7 @@
     "message": "Remove from favorites"
   },
   "inTrash": {
-    "message": "This item is in the trash."
+    "message": "This item is in the trash"
   },
   "passwordChanged": {
     "message": "Password last changed $P1$",
@@ -1035,7 +1035,7 @@
     "message": "Regular expression"
   },
   "uriMatchHint": {
-    "message": "How the saved website is matched against a page's address."
+    "message": "How the saved website is matched against a page's address"
   },
   "uriMatchStartsWithHint": {
     "message": "Starts with can match unintended websites. Check the saved address."
@@ -1044,7 +1044,7 @@
     "message": "Regular expressions are powerful and can match unintended websites. Check the expression."
   },
   "uriMatchDefaultHint": {
-    "message": "Applied to saved websites that are set to Default."
+    "message": "Applied to saved websites that are set to Default"
   },
   "uriMatchDefaultAdvancedHint": {
     "message": "An advanced default applies to every saved website set to Default. Check it carefully."
@@ -1082,7 +1082,7 @@
     "message": "Default autofill on page load"
   },
   "autofillOnPageLoadDefaultHint": {
-    "message": "Used for logins whose own setting is Default."
+    "message": "Used for logins whose own setting is Default"
   },
   "on": {
     "message": "On"
@@ -1114,7 +1114,7 @@
     "message": "Clear clipboard"
   },
   "clearClipboardDesc": {
-    "message": "How long copied values stay on the clipboard."
+    "message": "How long copied values stay on the clipboard"
   },
   "never": {
     "message": "Never"
@@ -1158,7 +1158,7 @@
     "message": "Remove password"
   },
   "removeSendPasswordHint": {
-    "message": "The link stays the same and anyone with it can open the send."
+    "message": "The link stays the same and anyone with it can open the send"
   },
   "additionalOptions": {
     "message": "Additional options"
@@ -1187,10 +1187,10 @@
     "message": "Unlock with biometrics"
   },
   "biometricEnabled": {
-    "message": "Biometric unlock is on."
+    "message": "Biometric unlock is on"
   },
   "biometricRemoved": {
-    "message": "Biometric unlock is off."
+    "message": "Biometric unlock is off"
   },
   "biometricUnavailable": {
     "message": "Biometric unlock is not available on this device."
@@ -1208,13 +1208,13 @@
     "message": "Waiting for biometric verification…"
   },
   "openInTabHint": {
-    "message": "Biometric prompts can close this popup; a tab stays open."
+    "message": "Biometric prompts can close this popup; a tab stays open"
   },
   "repromptTitle": {
     "message": "Master password required"
   },
   "repromptHint": {
-    "message": "This item is marked for a check of your master password."
+    "message": "This item is marked for a check of your master password"
   },
   "repromptConfirm": {
     "message": "Confirm"
@@ -1295,7 +1295,7 @@
     }
   },
   "pwnedClean": {
-    "message": "Not found in known data breaches."
+    "message": "Not found in known data breaches"
   },
   "pwnedFailed": {
     "message": "Could not reach the breach service. Try again later."
@@ -1384,7 +1384,7 @@
     "message": "Show authenticator QR code"
   },
   "authQrNote": {
-    "message": "Scan this with another authenticator app to copy the key."
+    "message": "Scan this with another authenticator app to copy the key"
   },
   "invalidCardNumber": {
     "message": "This number does not pass the card checksum. Check for a typo."
@@ -1425,8 +1425,8 @@
   "minLowercase": {
     "message": "Minimum lowercase letters"
   },
-  "forwardedEmail": {
-    "message": "Forwarded email alias"
+  "forwardedEmailShort": {
+    "message": "Alias"
   },
   "aliasService": {
     "message": "Service"

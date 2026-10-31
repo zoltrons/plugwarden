@@ -76,7 +76,7 @@ async function open(el: HTMLInputElement) {
   frame.src = `${chrome.runtime.getURL("menu.html")}#${nonce}`;
   frame.allow = "clipboard-write";
   // Row metrics come from the menu's own CSS: 44 px rows, 1 px separators, 6 px frame padding.
-  frame.style.cssText = `all:initial;display:block;width:100%;height:${Math.min(r.rows, 5) * 45 + 13}px;border:0;border-radius:8px;box-shadow:0 8px 28px rgba(0,0,0,.28);color-scheme:normal`;
+  frame.style.cssText = `all:initial;display:block;width:100%;height:${Math.min(r.rows, 5) * 44 + 8}px;border:0;border-radius:8px;box-shadow:0 8px 28px rgba(0,0,0,.28);color-scheme:normal`;
   host.attachShadow({ mode: "closed" }).append(frame);
   document.documentElement.append(host);
   place();

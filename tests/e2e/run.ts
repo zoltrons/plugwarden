@@ -797,7 +797,7 @@ try {
   await step("trash: restore, then delete forever", async () => {
     await page.getByRole("button", { name: "Trash (1)" }).click();
     await rows().filter({ hasText: "Wifi note" }).click();
-    await page.getByText("This item is in the trash.").waitFor();
+    await page.getByText("This item is in the trash").waitFor();
     await page.getByRole("button", { name: "Restore" }).click();
     await page.getByRole("status").filter({ hasText: "Restored" }).waitFor();
     await rows().filter({ hasText: "Wifi note" }).click();
@@ -929,7 +929,7 @@ try {
   });
 
   await step("generator: an alias API key survives closing the popup and a lock, encrypted at rest", async () => {
-    await page.getByRole("button", { name: "Forwarded email" }).click();
+    await page.getByRole("button", { name: "Alias", exact: true }).click();
     await page.getByLabel("API key").fill("sl-token-secret");
     // No blur and no change event: the popup just goes away, like a click outside it.
     await poll("alias key saved", () => sw.evaluate(async () => !!(await chrome.storage.local.get("aliasSettings")).aliasSettings));
@@ -1032,7 +1032,7 @@ try {
   await step("autofill: popup lists site matches and fills the page; TOTP code copied", async () => {
     await unlockIfLocked();
     await reopenPopup();
-    await page.getByRole("heading", { name: "On this site — localhost:8099" }).waitFor();
+    await page.getByRole("heading", { name: "On localhost:8099" }).waitFor();
     await page.getByRole("button", { name: "Fill Local app" }).click();
     await loginPage.waitForFunction(() => (document.getElementById("p") as HTMLInputElement).value !== "");
     assert.deepEqual(await fieldValues(), ["local-user", "local-pass"]);
@@ -1045,7 +1045,7 @@ try {
 
   await step("a TOTP refresh is not activity: an open item cannot keep the vault unlocked", async () => {
     await reopenPopup();
-    await page.getByRole("heading", { name: "On this site — localhost:8099" }).waitFor();
+    await page.getByRole("heading", { name: "On localhost:8099" }).waitFor();
     await page.waitForTimeout(500); // let the popup's own start-up requests settle
     const { data } = await page.evaluate(() => chrome.runtime.sendMessage({ type: "pageMatches" }));
     const id = data.items.find((i: { hasTotp: boolean }) => i.hasTotp).id;

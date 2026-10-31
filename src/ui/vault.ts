@@ -10,7 +10,7 @@ import { type Clause, matchesQuery, parseQuery, type Searchable } from "../share
 import { passwordLevel } from "../shared/strength.ts";
 import { isInsecureUri, mainPage, toHttps } from "../shared/uri-tools.ts";
 import type { PageMatches, Settings, VaultItem, VaultList } from "../shared/messages.ts";
-import { type Child, h, inPanel, send, t, withChevron } from "./dom.ts";
+import { type Child, h, inPanel, send, t, when, withChevron } from "./dom.ts";
 import { type GeneratorPick, generatorScreen, resetGenerator, startGeneratorPick } from "./generator.ts";
 import { icon, type IconName } from "./icons.ts";
 import { renderMarkdown } from "./markdown.ts";
@@ -177,9 +177,6 @@ function hue(s: string): number {
   for (const c of s) x = (x * 31 + c.charCodeAt(0)) >>> 0;
   return x % 360;
 }
-
-/** The monogram hue for a name, shared with the account avatar on the lock screen. */
-export const monogramHue = hue;
 
 /** An absolute http(s) URL for `u`, or undefined when it is not one. */
 function webUrl(u: string): string | undefined {
@@ -721,7 +718,7 @@ async function saveFromPage(ctx: Ctx) {
 }
 
 /** A row of the site section: the body opens the item, the button fills it (cards and identities too). */
-function suggestionRow(ctx: Ctx, i: VaultItem): HTMLElement {
+function suggestionRow(ctx: Ctx, i: VaultItem, best: boolean): HTMLElement {
   const name = i.name || t("untitled");
   return h(
     "div",
@@ -732,7 +729,7 @@ function suggestionRow(ctx: Ctx, i: VaultItem): HTMLElement {
       tile(i.name, i.type, i.uris),
       h("div", { class: "body" }, h("span", { class: "title" }, name), i.sub ? h("span", { class: "sub" }, i.sub) : null),
     ),
-    h("button", { type: "button", class: "btn tonal small", "aria-label": `${t("fill")} ${i.name}`, onclick: () => void fill(ctx, i.id) }, icon("key"), t("fill")),
+    h("button", { type: "button", class: `btn small ${best ? "tonal" : "neutral"}`, "aria-label": `${t("fill")} ${i.name}`, onclick: () => void fill(ctx, i.id) }, t("fill")),
   );
 }
 
@@ -743,7 +740,7 @@ function suggestions(ctx: Ctx): Child {
   // never appears under the site heading: it gets a heading of its own, like the official client.
   const group = (title: string, type: number): Child[] => {
     const items = page.items.filter((i) => i.type === type);
-    return items.length ? [sectionTitle(title), h("div", { class: "group" }, ...items.map((i) => suggestionRow(ctx, i)))] : [];
+    return items.length ? [sectionTitle(title), h("div", { class: "group" }, ...items.map((i, n) => suggestionRow(ctx, i, type === 1 && n === 0)))] : [];
   };
   return h(
     "section",
@@ -856,7 +853,7 @@ function repromptView(ctx: Ctx, id: string): HTMLElement {
     { class: "page center", onsubmit },
     topBar(iconButton("back", t("back"), () => open(ctx, { kind: "list" }))),
     h("div", { class: "brand" }, h("div", { class: "logo" }, icon("lock")), h("h1", {}, t("repromptTitle")), h("p", {}, t("repromptHint"))),
-    h("div", { class: "field" }, icon("key"), h("label", { for: "reprompt-password" }, h("span", {}, t("masterPassword")), input)),
+    h("div", { class: "field" }, h("label", { for: "reprompt-password" }, h("span", {}, t("masterPassword")), input)),
     errorBox(),
     st.busy ? progress() : null,
     h("div", { class: "actions" }, h("button", { type: "submit", class: "btn filled wide", disabled: st.busy }, t("repromptConfirm"))),
@@ -1292,7 +1289,7 @@ function itemView(ctx: Ctx, id: string): HTMLElement {
   const attachments = Array.isArray(item.attachments) ? (item.attachments as Json[]) : [];
   const org = st.list?.organizations?.find((o) => o.id === item.organizationId);
   const collections = (Array.isArray(item.collectionIds) ? (item.collectionIds as string[]) : []).map((c) => st.list?.collections?.find((x) => x.id === c)?.name).filter(Boolean);
-  const date = (v: unknown) => (typeof v === "string" && v ? new Date(v).toLocaleString() : "");
+  const date = (v: unknown) => (typeof v === "string" && v ? when(v) : "");
   const passkeys = Array.isArray(login?.fido2Credentials) ? (login!.fido2Credentials as Json[]).length : 0;
   const confirm = st.confirmDelete > 0;
   const password = type === 1 ? str(data.password) : "";
@@ -1318,7 +1315,7 @@ function itemView(ctx: Ctx, id: string): HTMLElement {
       spacer(),
       editable
         ? iconButton(item.favorite ? "star" : "starBorder", t(item.favorite ? "unfavorite" : "favorite"), () => void vaultAction(ctx, { type: "saveItem", item: { ...item, favorite: !item.favorite } }, "saved", false), {
-            class: `icon-btn${item.favorite ? " on" : ""}`,
+            class: `icon-btn${item.favorite ? " fav" : ""}`,
             "aria-pressed": String(item.favorite === true),
           })
         : null,
@@ -1679,10 +1676,10 @@ const moveButtons = (ctx: Ctx, list: unknown[], i: number, reset?: () => void): 
 function editView(ctx: Ctx, isNew: boolean): HTMLElement {
   const d = st.draft!;
   const back = () => open(ctx, isNew ? { kind: "list" } : { kind: "item", id: str(d.base.id) });
-  const field = (id: string, ic: IconName, title: string, control: HTMLElement, trailing?: Child) => {
+  const field = (id: string, title: string, control: HTMLElement, trailing?: Child) => {
     // A select is wrapped for its chevron: the label must point at the select itself.
     (control.querySelector("select") ?? control).id = id;
-    return h("div", { class: "field" }, icon(ic), h("label", { for: id }, h("span", {}, title), control), trailing);
+    return h("div", { class: "field" }, h("label", { for: id }, h("span", {}, title), control), trailing);
   };
   const text = (get: () => string, set: (v: string) => void, props: Record<string, unknown> = {}) => {
     const { area, ...rest } = props;
@@ -1695,7 +1692,7 @@ function editView(ctx: Ctx, isNew: boolean): HTMLElement {
     const get = () => d.data[f.key] ?? "";
     const set = (v: string) => (d.data[f.key] = v);
     const id = `edit-${f.key}`;
-    if (f.options) return field(id, f.icon, label(f.key), select(get, set, [["", "—"], ...f.options.map((o): [string, string] => [o, o])]));
+    if (f.options) return field(id, label(f.key), select(get, set, [["", "—"], ...f.options.map((o): [string, string] => [o, o])]));
     // Card number: fill in the brand once the number is entered, and warn (never block) on a typo.
     const cardNumber = d.type === 3 && f.key === "number";
     const cardWarn = () => !!get() && !luhnValid(get());
@@ -1720,12 +1717,11 @@ function editView(ctx: Ctx, isNew: boolean): HTMLElement {
       ctx.rerender();
     };
     const generateUsername = d.type === 1 && f.key === "username" ? h("span", { class: "trailing" }, iconButton("dice", t("generateUsername"), () => openGenerator("username"))) : undefined;
-    if (!f.secret) return wrap(field(id, f.icon, label(f.key), text(get, set, { autocomplete: "off", spellcheck: false, area: f.area }), generateUsername));
+    if (!f.secret) return wrap(field(id, label(f.key), text(get, set, { autocomplete: "off", spellcheck: false, area: f.area }), generateUsername));
     const reveal = st.reveal.has(id);
     const control = text(get, set, { type: reveal ? "text" : "password", autocomplete: "new-password", spellcheck: false, class: "mono", onchange, inputMode: cardNumber ? "numeric" : undefined });
     const block = field(
       id,
-      f.icon,
       label(f.key),
       control,
       h(
@@ -1845,13 +1841,12 @@ function editView(ctx: Ctx, isNew: boolean): HTMLElement {
     topBar(iconButton("back", t("cancel"), back), h("h1", {}, t(isNew ? "newItem" : "editItem")), spacer()),
     errorBox(),
     isNew ? h("div", { class: "chips", role: "group", "aria-label": t("itemType") }, typeChip(1, "key"), typeChip(3, "card"), typeChip(4, "user"), typeChip(2, "note"), typeChip(5, "key")) : null,
-    field("edit-name", "edit", t("name"), text(() => d.name, (v) => (d.name = v), { required: true, "data-autofocus": "1" })),
+    field("edit-name", t("name"), text(() => d.name, (v) => (d.name = v), { required: true, "data-autofocus": "1" })),
     ...(SCHEMA[d.type]?.fields ?? []).map(specField),
     ...(d.type === 1 ? uriEditor(ctx) : []),
     d.type === 1 && settingsOf()?.autofillOnPageLoad
       ? field(
           "edit-auto-pageload",
-          "timer",
           t("autofillOnPageLoad"),
           select(
             () => (d.autofillOnPageLoad === null ? "" : String(d.autofillOnPageLoad)),
@@ -1868,18 +1863,17 @@ function editView(ctx: Ctx, isNew: boolean): HTMLElement {
       h("button", { type: "button", class: "btn text small add-field", onclick: () => (d.fields.push({ name: "", value: "", type: 0 }), ctx.rerender()) }, icon("plus"), t("addField")),
       h("button", { type: "button", class: "btn text small add-field", onclick: () => void pickFromPage(ctx, isNew) }, icon("globe"), t("pickField")),
     ),
-    field("edit-notes", "note", t("notes"), text(() => d.notes, (v) => (d.notes = v), { area: true, rows: 3 })),
+    field("edit-notes", t("notes"), text(() => d.notes, (v) => (d.notes = v), { area: true, rows: 3 })),
     hasMarkup(d.notes)
       ? h("button", { type: "button", class: "chip small", "aria-pressed": String(st.notesPreview), onclick: () => ((st.notesPreview = !st.notesPreview), ctx.rerender()) }, t("previewNotes"))
       : null,
     st.notesPreview && hasMarkup(d.notes) ? renderMarkdown(d.notes) : null,
-    field("edit-folder", "folder", t("folder"), select(() => d.folderId, (v) => (d.folderId = v), [["", t("noFolder")], ...(st.list?.folders ?? []).map((f): [string, string] => [f.id, f.name])])),
-    h("label", { class: "row check-card" }, icon("star"), h("div", { class: "body" }, h("span", { class: "title" }, t("favorite"))), h("span", { class: "switch" }, fav, h("span"))),
+    field("edit-folder", t("folder"), select(() => d.folderId, (v) => (d.folderId = v), [["", t("noFolder")], ...(st.list?.folders ?? []).map((f): [string, string] => [f.id, f.name])])),
+    h("label", { class: "row check-card" }, h("div", { class: "body" }, h("span", { class: "title" }, t("favorite"))), h("span", { class: "switch" }, fav, h("span"))),
     h(
       "label",
       { class: "row check-card" },
-      icon("lock"),
-      h("div", { class: "body" }, h("span", { class: "title" }, t("repromptToggle")), h("span", { class: "sub" }, t("repromptToggleHint"))),
+      h("div", { class: "body" }, h("span", { class: "title" }, t("repromptToggle")), h("span", { class: "sub wrap" }, t("repromptToggleHint"))),
       h("span", { class: "switch" }, h("input", { type: "checkbox", checked: d.reprompt, onchange: (e: Event) => (d.reprompt = (e.target as HTMLInputElement).checked) }), h("span")),
     ),
     st.busy ? progress() : null,

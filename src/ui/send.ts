@@ -181,9 +181,9 @@ async function create(ctx: Ctx, d: Draft) {
 }
 
 function createView(ctx: Ctx, d: Draft): HTMLElement {
-  const field = (id: string, ic: IconName, label: string, control: HTMLElement) => {
+  const field = (id: string, label: string, control: HTMLElement) => {
     control.id = id;
-    return h("div", { class: "field" }, icon(ic), h("label", { for: id }, h("span", {}, label), control));
+    return h("div", { class: "field" }, h("label", { for: id }, h("span", {}, label), control));
   };
   const input = (key: "name" | "password" | "maxAccess", props: Record<string, unknown>) =>
     h("input", { ...props, value: d[key], oninput: (e: Event) => (d[key] = (e.target as HTMLInputElement).value) });
@@ -200,27 +200,26 @@ function createView(ctx: Ctx, d: Draft): HTMLElement {
     { class: "page", onsubmit: (e: Event) => (e.preventDefault(), void create(ctx, d)) },
     h("div", { class: "top" }, iconButton("back", t("cancel"), () => ((sd.draft = undefined), (sd.error = undefined), ctx.rerender())), h("h1", {}, t(isNew ? "newSend" : "editSend"))),
     isNew ? h("div", { class: "chips", role: "group", "aria-label": t("sendType") }, kindChip("text", t("sendText"), "note"), kindChip("file", t("sendFile"), "attach")) : null,
-    field("send-name", "edit", t("name"), input("name", { required: true, "data-autofocus": "1" })),
+    field("send-name", t("name"), input("name", { required: true, "data-autofocus": "1" })),
     d.kind === "text"
-      ? field("send-text", "note", t("sendText"), h("textarea", { rows: 4, value: d.text, oninput: (e: Event) => (d.text = (e.target as HTMLTextAreaElement).value) }))
+      ? field("send-text", t("sendText"), h("textarea", { rows: 4, value: d.text, oninput: (e: Event) => (d.text = (e.target as HTMLTextAreaElement).value) }))
       : isNew
-        ? field("send-file", "attach", t("sendFile"), h("input", { type: "file", onchange: (e: Event) => (d.file = (e.target as HTMLInputElement).files?.[0]) }))
+        ? field("send-file", t("sendFile"), h("input", { type: "file", onchange: (e: Event) => (d.file = (e.target as HTMLInputElement).files?.[0]) }))
         : null,
     d.kind === "text" ? h("label", { class: "row" }, icon("eyeOff"), h("div", { class: "body" }, t("hideText")), h("span", { class: "switch" }, hidden, h("span"))) : null,
     field(
       "send-days",
-      "timer",
       t("deleteAfter"),
       withChevron(h("select", { onchange: (e: Event) => (d.days = Number((e.target as HTMLSelectElement).value)) }, ...dayChoices.map((n) => h("option", { value: String(n), selected: n === d.days }, dayLabel(n))))),
     ),
-    field("send-password", "key", t(isNew || !d.originalHasPassword || d.removePassword ? "sendPasswordOptional" : "newPasswordOptional"), input("password", { type: "password", autocomplete: "new-password", disabled: d.removePassword })),
-    field("send-max", "user", t("maxAccessOptional"), input("maxAccess", { type: "number", min: 1, inputMode: "numeric" })),
+    field("send-password", t(isNew || !d.originalHasPassword || d.removePassword ? "sendPasswordOptional" : "newPasswordOptional"), input("password", { type: "password", autocomplete: "new-password", disabled: d.removePassword })),
+    field("send-max", t("maxAccessOptional"), input("maxAccess", { type: "number", min: 1, inputMode: "numeric" })),
     !isNew && d.originalHasPassword
       ? h(
           "label",
           { class: "row" },
           icon("lock"),
-          h("div", { class: "body" }, h("span", { class: "title" }, t("removePassword")), h("span", { class: "sub" }, t("removeSendPasswordHint"))),
+          h("div", { class: "body" }, h("span", { class: "title" }, t("removePassword")), h("span", { class: "sub wrap" }, t("removeSendPasswordHint"))),
           h("span", { class: "switch" }, h("input", { type: "checkbox", checked: d.removePassword, "aria-label": t("removePassword"), onchange: (e: Event) => ((d.removePassword = (e.target as HTMLInputElement).checked), (d.password = ""), ctx.rerender()) }), h("span")),
         )
       : null,

@@ -3,6 +3,9 @@ import { icon } from "./icons.ts";
 
 export const t = (key: string, ...subs: string[]): string => chrome.i18n.getMessage(key, subs) || key;
 
+/** A date as people read it: no seconds. */
+export const when = (v: string | number): string => new Date(v).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+
 // Theme is a per-device UI preference (localStorage of the extension origin, shared by popup, panel and
 // the in-page frames); applied before the first render to avoid a flash.
 export const THEMES = ["system", "light", "dark"] as const;

@@ -10,7 +10,7 @@ import {
   missingAliasFields,
 } from "../shared/alias.ts";
 import type { HistoryEntry } from "../shared/messages.ts";
-import { type Child, h, send, t, withChevron } from "./dom.ts";
+import { type Child, h, send, t, when, withChevron } from "./dom.ts";
 import { icon } from "./icons.ts";
 import { actionRow, colorize, copy, copyButton, type Ctx, iconButton, sectionTitle, startEdit, strength, strengthBar, topBar } from "./vault.ts";
 
@@ -193,7 +193,7 @@ function historyScreen(ctx: Ctx, list: HistoryEntry[]): HTMLElement {
             h(
               "div",
               { class: "row", role: "listitem" },
-              h("div", { class: "body" }, h("span", { class: "title mono" }, e.value), h("span", { class: "sub" }, new Date(e.date).toLocaleString())),
+              h("div", { class: "body" }, h("span", { class: "title mono" }, e.value), h("span", { class: "sub" }, when(e.date))),
               iconButton("copy", t("copyField", e.value), () => void copy(ctx, e.value)),
             ),
           ),
@@ -344,7 +344,7 @@ export function generatorScreen(ctx: Ctx, pick?: GeneratorPick): HTMLElement {
       h(
         "label",
         { class: "row" },
-        h("div", { class: "body" }, h("span", { class: "title" }, label), h("span", { class: "sub" }, hint)),
+        h("div", { class: "body" }, h("span", { class: "title" }, label), h("span", { class: "sub wrap" }, hint)),
         h("input", {
           ...props,
           value: saved ? str(saved[field]) : "",
@@ -365,7 +365,7 @@ export function generatorScreen(ctx: Ctx, pick?: GeneratorPick): HTMLElement {
         h(
           "div",
           { class: "row" },
-          h("div", { class: "body" }, h("span", { class: "title" }, t("aliasService")), h("span", { class: "sub" }, t("aliasServiceHint"))),
+          h("div", { class: "body" }, h("span", { class: "title" }, t("aliasService")), h("span", { class: "sub wrap" }, t("aliasServiceHint"))),
           withChevron(
             h(
               "select",
@@ -381,7 +381,7 @@ export function generatorScreen(ctx: Ctx, pick?: GeneratorPick): HTMLElement {
           ? h(
               "label",
               { class: "row" },
-              h("div", { class: "body" }, h("span", { class: "title" }, t("aliasWebsitePrefix")), h("span", { class: "sub" }, t("aliasWebsitePrefixHint"))),
+              h("div", { class: "body" }, h("span", { class: "title" }, t("aliasWebsitePrefix")), h("span", { class: "sub wrap" }, t("aliasWebsitePrefixHint"))),
               h("span", { class: "switch" }, h("input", { type: "checkbox", checked: saved?.prefix === true, disabled: !saved, "aria-label": t("aliasWebsitePrefix"), onchange: (e: Event) => save({ prefix: (e.target as HTMLInputElement).checked }) }), h("span")),
             )
           : null,
@@ -417,10 +417,10 @@ export function generatorScreen(ctx: Ctx, pick?: GeneratorPick): HTMLElement {
         chip("passphrase", t("typePassphrase")),
         chip("pin", t("typePin")),
         chip("username", t("username")),
-        chip("alias", t("forwardedEmail")),
+        chip("alias", t("forwardedEmailShort")),
       ].filter((_, i) => !pick || (pick.field === "password" ? i < 3 : i >= 3)),
     ),
-    h(
+    g.type === "alias" && !gst.generated ? null : h(
       "div",
       { class: "generated" },
       h(
@@ -429,7 +429,7 @@ export function generatorScreen(ctx: Ctx, pick?: GeneratorPick): HTMLElement {
         h(
           "output",
           { class: "mono", "aria-live": "polite", "aria-label": t("generatedValue") },
-          ...(gst.generated ? colorize(gst.generated) : [g.type === "alias" && !aliasReady ? t("aliasNotConfigured") : "…"]),
+          ...(gst.generated ? colorize(gst.generated) : ["…"]),
         ),
         h(
           "div",
@@ -449,7 +449,11 @@ export function generatorScreen(ctx: Ctx, pick?: GeneratorPick): HTMLElement {
       h("div", { class: "generated-foot" }, gst.generated && g.type !== "alias" ? strengthBar(gst.generated) : null, gst.generated && g.type !== "alias" ? h("span", { class: "meter-label" }, strength(gst.generated).label) : null),
     ),
     options,
-    g.type === "alias" && aliasReady && !gst.generated ? actionRow("refresh", t("generateEmail"), () => void generateAliasNow(ctx)) : null,
+    g.type === "alias" && !gst.generated
+      ? aliasReady
+        ? h("button", { type: "button", class: "btn filled wide", onclick: () => void generateAliasNow(ctx) }, t("generateEmail"))
+        : h("p", { class: "caption" }, t("aliasNotConfigured"))
+      : null,
     gst.suggestions.length
       ? h(
           "div",
