@@ -1,0 +1,18 @@
+[package]
+name = "autofill-resolver"
+version = "0.0.0"
+description = "The eight-pass field classification pipeline"
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+autofill-cpd.workspace = true
+autofill-designation.workspace = true
+autofill-clue.workspace = true
+autofill-autocomplete-off.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

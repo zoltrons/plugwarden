@@ -1,6 +1,28 @@
 [workspace]
 resolver = "3"
-members = ["crates/core-wasm"]
+members = [
+  "crates/core-wasm",
+  "crates/autofill-core",
+  "crates/autofill-cpd",
+  "crates/autofill-designation",
+  "crates/autofill-clue",
+  "crates/autofill-resolver",
+  "crates/autofill-autocomplete-off",
+  "crates/autofill-fill",
+  "crates/autofill-autosubmit",
+]
+
+[workspace.dependencies]
+serde = { version = "1", default-features = false, features = ["std", "derive"] }
+serde_json = { version = "1", default-features = false, features = ["std"] }
+regex-lite = "0.1"
+autofill-cpd = { path = "crates/autofill-cpd" }
+autofill-designation = { path = "crates/autofill-designation" }
+autofill-clue = { path = "crates/autofill-clue" }
+autofill-resolver = { path = "crates/autofill-resolver" }
+autofill-autocomplete-off = { path = "crates/autofill-autocomplete-off" }
+autofill-fill = { path = "crates/autofill-fill" }
+autofill-autosubmit = { path = "crates/autofill-autosubmit" }
 
 [workspace.package]
 edition = "2024"

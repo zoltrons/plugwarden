@@ -1,0 +1,13 @@
+[package]
+name = "autofill-clue"
+version = "0.0.0"
+description = "Text clues and weights that score a field"
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+autofill-cpd.workspace = true
+autofill-designation.workspace = true
+regex-lite.workspace = true

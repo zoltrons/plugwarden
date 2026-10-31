@@ -1,28 +1,17 @@
-// Content script on every http(s) page and frame. Idle until the user focuses an input: it scans
-// nothing on load. For login, card and identity fields it shows Plugwarden's inline menu, an extension
-// iframe (menu.html) the page cannot read; the list and the fill come from the service worker. It also
-// reports submitted logins so Plugwarden can offer to save or update them (bar.html, top frame only).
-// Bundled as a classic script and kept small.
-import { deepAll, isSignupField, probeField, readLogin } from "./page.ts";
+// Content script on every http(s) page and frame, right after page.js. It watches for focus and for a
+// first password field, and scans nothing else. For login, card and identity fields it shows Plugwarden's
+// inline menu, an extension iframe (menu.html) the page cannot read; what a field is, the list and the fill
+// come from the service worker. It also reports submitted logins so Plugwarden can offer to save or update
+// them (bar.html, top frame only). Bundled as a classic script and kept small.
+import { watchForPasswordField } from "./collector/field-watcher.ts";
+import type { PageApi } from "./page.ts";
 
-type Kind = "login" | "card" | "identity";
+const pw = (globalThis as unknown as { plugwarden: PageApi }).plugwarden;
 
-const IDENTITY = /^(name|given-name|additional-name|family-name|email|tel|organization|street-address|address-line[123]|address-level[12]|postal-code|country|country-name)$/;
-const TEXTISH = ["text", "email", "tel", "", "search", "number"];
+const MENU_TYPES = ["text", "email", "tel", "", "search", "number", "password"];
 
-/** What kind of menu a field gets, if any. The autocomplete attribute wins; names and labels are hints. */
-function kindOf(el: Element): Kind | undefined {
-  if (!(el instanceof HTMLInputElement) || el.disabled || el.readOnly) return undefined;
-  if (el.type === "password") return "login";
-  if (!TEXTISH.includes(el.type)) return undefined;
-  const ac = el.autocomplete.toLowerCase().split(/\s+/).pop() ?? "";
-  const { hints: hint, avoid } = probeField(el);
-  if (ac.startsWith("cc-") || /card.?num|cc.?num|cvc|cvv|csc|card.?holder|expir/.test(hint)) return "card";
-  if (ac === "username" || ac === "webauthn") return "login";
-  if (IDENTITY.test(ac) && !(ac === "email" && hasPassword(el))) return "identity";
-  if ((el.type === "email" || /user|login|e-?mail|account|kullan[iı]c[iı]|e-?posta/.test(hint)) && !avoid && hasPassword(el)) return "login";
-  return undefined;
-}
+/** Only a field that can type a value is worth asking the service worker about. */
+const askable = (el: Element): el is HTMLInputElement => el instanceof HTMLInputElement && !el.disabled && !el.readOnly && MENU_TYPES.includes(el.type);
 
 /** The focused element, looking inside open shadow roots. */
 function active(): Element | null {
@@ -30,11 +19,6 @@ function active(): Element | null {
   while (a?.shadowRoot?.activeElement) a = a.shadowRoot.activeElement;
   return a;
 }
-
-/** A password field near `el`: in its form, else anywhere in the frame (a component may wrap each input in its own shadow root). */
-const hasPassword = (el: HTMLInputElement) => deepAll(el.form ?? document, "input[type=password]").length > 0;
-
-const hasPasswordField = () => deepAll(document, "input[type=password]").length > 0;
 
 // ---------- inline menu ----------
 
@@ -70,13 +54,19 @@ function close() {
   removeEventListener("resize", place);
 }
 
-async function open(el: HTMLInputElement, kind: Kind) {
-  if (kind === "login") (globalThis as { plugwardenFocused?: HTMLInputElement }).plugwardenFocused = focusedLogin = el; // read by the injected fill, same isolated world
+async function open(el: HTMLInputElement) {
   if (anchor === el || dismissed === el || Date.now() < quietUntil) return;
   const mine = ++gen;
-  const r = ((await chrome.runtime.sendMessage({ type: "inlineFocus", kind, nonce, signup: kind === "login" && isSignupField(el) }).catch(() => undefined)) as { data?: { rows: number } } | undefined)?.data;
-  // rows = 0: nothing to offer (no matches, or not logged in), so stay out of the way.
-  if (mine !== gen || !r?.rows || active() !== el || Date.now() < quietUntil) return;
+  const details = pw.collectActive(el);
+  const r = ((await chrome.runtime.sendMessage({ type: "inlineFocus", nonce, details }).catch(() => undefined)) as { data?: { rows: number; kind?: string } } | undefined)?.data;
+  if (r?.kind === "login") pw.setFocused((focusedLogin = el)); // read by the fill
+  if (mine !== gen) return;
+  // rows = 0: nothing to offer (no matches, not logged in, not a field we fill), so stay out of the way.
+  if (!r?.rows) {
+    if (el !== anchor) close();
+    return;
+  }
+  if (active() !== el || Date.now() < quietUntil) return;
   close();
   anchor = el;
   host = document.createElement("plugwarden-menu");
@@ -98,8 +88,7 @@ addEventListener(
   (e) => {
     const el = e.composedPath()[0] as Element; // fields inside open shadow roots too
     if (el === host) return; // focus moved into our menu
-    const kind = kindOf(el);
-    if (kind) void open(el as HTMLInputElement, kind);
+    if (askable(el)) void open(el);
     else if (el !== anchor) close();
   },
   true,
@@ -133,8 +122,7 @@ addEventListener(
     const el = e.composedPath()[0] as Element;
     if (el === dismissed) {
       dismissed = undefined;
-      const kind = kindOf(el);
-      if (kind) void open(el as HTMLInputElement, kind);
+      if (askable(el)) void open(el);
     }
     // Submit buttons (a <button> without a type is one), and the plain buttons single-page apps use when
     // they say what they do; not "show password" toggles and the like. The click may land on a child.
@@ -149,16 +137,13 @@ addEventListener("submit", () => report(), true);
 // ---------- autofill on page load ----------
 
 /** The service worker decides whether anything is filled (setting, lock, matches). */
-function offerPageLoad() {
-  if (!hasPasswordField()) return;
-  void chrome.runtime.sendMessage({ type: "pageLoad" }).catch(() => undefined);
-}
+const offerPageLoad = () => void chrome.runtime.sendMessage({ type: "pageLoad" }).catch(() => undefined);
 
-// The script runs at document_idle, so the DOM is normally ready; `pageshow` covers bfcache returns
-// and same-document back/forward navigations, like the official autofiller.
-offerPageLoad();
+// Once per document, when its first password field exists, however late a single-page app renders it.
+watchForPasswordField(offerPageLoad);
+// bfcache returns, like the official autofiller.
 addEventListener("pageshow", (e) => {
-  if ((e as PageTransitionEvent).persisted) offerPageLoad();
+  if ((e as PageTransitionEvent).persisted && pw.hasPasswordField()) offerPageLoad();
 });
 
 // ---------- save / update detection ----------
@@ -172,7 +157,7 @@ function report() {
   // A page can fire submit events itself, and whether the bar appears tells it if a guessed password
   // matches the saved one: only a real gesture counts, and only one guess per REPORT_GAP_MS.
   if (!navigator.userActivation.isActive) return;
-  const login = readLogin();
+  const login = pw.readLogin();
   if (!login) return;
   const key = `${login.username}\n${login.password}`;
   if (key === reported || Date.now() - lastReport < REPORT_GAP_MS) return;
@@ -194,10 +179,9 @@ chrome.runtime.onMessage.addListener((msg: { type?: string }) => {
   // field may not have had a menu yet (no matching logins when it was focused), so fall back to it.
   if (msg.type === "passkeyAvailable") {
     const el = anchor ?? (focusedLogin && active() === focusedLogin ? focusedLogin : undefined);
-    const kind = el && kindOf(el);
-    if (el && kind) {
+    if (el) {
       close();
-      void open(el, kind);
+      void open(el);
     }
   }
   if (msg.type === "barShow" && window === top) {

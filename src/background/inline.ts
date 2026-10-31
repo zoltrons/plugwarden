@@ -1,9 +1,10 @@
 // Inline menu and save/update bar. The content script reports focused fields and submitted logins;
 // menu.html / bar.html (extension pages framed into the site) ask for data and act. Matching always
 // uses the URL of the frame the field is in, as reported by the browser (sender.url).
-import { type FillResult, fillInPage } from "../autofill/page.ts";
+import type { FillResult } from "../autofill/types.ts";
 import type { BarInfo, FieldKind, FrameRequest, MenuData, MenuItem, PageRequest, VaultItem } from "../shared/messages.ts";
 import { coreCall } from "./core.ts";
+import { analyzeFocus, fillInFrames } from "./engine.ts";
 import { touchAutoLock } from "./lock.ts";
 import { pageLoadFill } from "./autofill.ts";
 import { conditionalReady, openConditional } from "./passkey.ts";
@@ -17,7 +18,7 @@ export interface InlineContext {
   kind: FieldKind;
   /** The opening document's secret, echoed by the menu frame (see PageRequest.inlineFocus). */
   nonce: string;
-  /** The field is in a registration form (see isSignupField). */
+  /** The field is in a registration form (the engine's form_clues). */
   signup: boolean;
 }
 
@@ -69,14 +70,23 @@ const oncePerTab = async <T>(key: string, tabId: number, fn: () => Promise<T>, b
   }
 };
 
-/** Content script: `rows` tells it how tall the menu is, 0 = do not show one. */
+/** Content script: `rows` tells it how tall the menu is, 0 = do not show one; `kind` what the field is. */
 export async function handlePage(req: PageRequest, sender: chrome.runtime.MessageSender): Promise<unknown> {
   if (req.type === "pageLoad") return pageLoadFill(sender);
   const url = httpUrl(sender.url);
   const tabId = sender.tab?.id;
   if (!url || tabId === undefined || sender.frameId === undefined) return { rows: 0 };
   if (req.type === "inlineFocus")
-    return oncePerTab("focus", tabId, () => onFocus(req.kind, req.nonce, req.signup, url, tabId!, sender.frameId!), { rows: 0 });
+    return oncePerTab(
+      "focus",
+      tabId,
+      async () => {
+        const field = await analyzeFocus(req.details);
+        if (!field.kind) return { rows: 0 };
+        return { kind: field.kind, ...(await onFocus(field.kind, req.nonce, field.signup, url, tabId, sender.frameId!)) };
+      },
+      { rows: 0 },
+    );
   await loginSubmitted(tabId, url, req.username, req.password);
   return null;
 }
@@ -211,20 +221,20 @@ export async function handleFrame(req: FrameRequest, tabId: number): Promise<unk
     await chrome.action.openPopup().catch(() => undefined);
     throw new Error(REPROMPT_MESSAGE);
   }
-  const target = { tabId, frameIds: [ctx.frameId] };
   await chrome.tabs.sendMessage(tabId, { type: "inlineClose" }, { frameId: ctx.frameId }).catch(() => undefined);
   const origin = new URL(ctx.url).origin;
   let res: FillResult | undefined;
   if (ctx.kind === "login") {
     const { username, password, totp } = await coreCall<{ username: string; password: string; totp?: string }>({ op: "fillData", id: req.id });
-    res = (await chrome.scripting.executeScript({ target, func: fillInPage, args: [{ mode: "login", origin, username, password }] }))[0]?.result as FillResult | undefined;
+    const { autosubmit } = await getSettings();
+    res = (await fillInFrames(tabId, { frameIds: [ctx.frameId] }, { mode: "login", origin, username, password, totp, autosubmit }))[0]?.result;
     if (res?.filled) {
       await markUsed(req.id);
       if (totp && (await getSettings()).autoCopyTotp) await copyToClipboard(totp);
     }
   } else {
     const values = await coreCall<Record<string, string>>({ op: "formValues", id: req.id });
-    res = (await chrome.scripting.executeScript({ target, func: fillInPage, args: [{ mode: "form", origin, values }] }))[0]?.result as FillResult | undefined;
+    res = (await fillInFrames(tabId, { frameIds: [ctx.frameId] }, { mode: "form", origin, values }))[0]?.result;
   }
   await setTabState("inline", tabId, undefined);
   return res ?? { filled: false };

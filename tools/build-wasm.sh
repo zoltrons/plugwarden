@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Builds crates/core-wasm -> dist/wasm/{core_wasm.js,core_wasm_bg.wasm}.
+# Builds crates/core-wasm -> dist/wasm/{core_wasm.js,core_wasm_bg.wasm}
+# and crates/autofill-core -> dist/wasm/{autofill_core.js,autofill_core_bg.wasm}.
 #   tools/build-wasm.sh [--features register] [--simd]
 # Needs: rustup target wasm32-unknown-unknown, wasm-bindgen-cli (exact version from upstream.lock),
 # wasm-opt (binaryen). Override binaries with WASM_BINDGEN / WASM_OPT.
@@ -34,4 +35,11 @@ mkdir -p "$OUT"
 "$WASM_OPT" -Oz --enable-bulk-memory --enable-nontrapping-float-to-int --enable-sign-ext \
   --enable-mutable-globals ${RUSTFLAGS_EXTRA:+--enable-simd} \
   "$OUT/core_wasm_bg.wasm" -o "$OUT/core_wasm_bg.wasm"
+
+# The autofill engine: separate from the module that holds the keys. No features and no SIMD to gain.
+cargo build --release --target wasm32-unknown-unknown -p autofill-core
+"$WASM_BINDGEN" target/wasm32-unknown-unknown/release/autofill_core.wasm \
+  --target web --out-dir "$OUT" --out-name autofill_core
+"$WASM_OPT" -Oz --enable-bulk-memory --enable-nontrapping-float-to-int --enable-sign-ext \
+  --enable-mutable-globals "$OUT/autofill_core_bg.wasm" -o "$OUT/autofill_core_bg.wasm"
 ls -l "$OUT"

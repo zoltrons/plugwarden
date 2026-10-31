@@ -242,6 +242,7 @@ async function handle(req: Request): Promise<unknown> {
         clearClipboardDelay: req.clearClipboardDelay ?? current.clearClipboardDelay,
         autofillOnPageLoad: req.autofillOnPageLoad ?? current.autofillOnPageLoad,
         autofillOnPageLoadDefault: req.autofillOnPageLoadDefault ?? current.autofillOnPageLoadDefault,
+        autosubmit: req.autosubmit ?? current.autosubmit,
         inlineMenuCards: req.inlineMenuCards ?? current.inlineMenuCards,
         inlineMenuIdentities: req.inlineMenuIdentities ?? current.inlineMenuIdentities,
         contextMenu: req.contextMenu ?? current.contextMenu,

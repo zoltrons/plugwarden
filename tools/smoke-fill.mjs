@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-// Field-detection smoke test: bundles the injected page functions and runs them against fixture pages in
-// Helium or Chromium, no extension host and no server needed. Covers the login/card heuristics that the
+// Field-detection smoke test: runs page.js against fixture pages in Helium or Chromium and the autofill
+// engine (dist/wasm) here in Node, no extension host and no server needed. Covers the login/card rules the
 // autofill path depends on (decoys, registration-vs-login, labels, forms, shadow roots, page load).
 //   node tools/smoke-fill.mjs        HEADED=1 to watch it
 import assert from "node:assert/strict";
 import { build } from "esbuild";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -13,6 +13,8 @@ import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+const engine = await import(join(root, "dist/wasm/autofill_core.js"));
+engine.initSync({ module: readFileSync(join(root, "dist/wasm/autofill_core_bg.wasm")) });
 const bundle = (
   await build({
     absWorkingDir: root,
@@ -20,7 +22,6 @@ const bundle = (
     bundle: true,
     write: false,
     format: "iife",
-    globalName: "PW",
     target: "chrome120",
     logLevel: "warning",
   })
@@ -56,6 +57,38 @@ const fixtures = {
   // Only a <div> says what the field is.
   bareLabels: `<form onsubmit="return false"><div>Card number</div><div><input id="c"></div><div>CVC</div><div><input id="v"></div></form>
     <form onsubmit="return false"><p>E-posta adresiniz</p><input id="tu"><p>Parola</p><input id="tp" type="password"></form>`,
+  // A lone "*" is not a label; the label may also sit behind the input, or outside its shadow root.
+  starLabel: `<form onsubmit="return false"><div>Card number <span>*</span></div><input id="c"></form>`,
+  labelAfter: `<form onsubmit="return false"><div><input id="c"><span>Card number</span></div><div><input id="v"><span>CVC</span></div>
+    <div><input id="n"><span>CVC</span><input id="other"></div><div><input id="f"><a href="/x">Card number help</a></div></form>`,
+  namedHost: `<img name="host"><form onsubmit="return false"><input id="c"></form><div><input id="u" placeholder="Email"><input id="p" type="password"></div>`,
+  dataLabel: `<form onsubmit="return false"><input id="c" data-label="Card number"></form>`,
+  otherForm: `<form onsubmit="return false"><span>Card number</span></form><input id="c">`,
+  shadowLabel: `<form onsubmit="return false"><span>Card number</span><x-a></x-a></form><script>
+    document.querySelector("x-a").attachShadow({ mode: "open" }).innerHTML = '<input id="c">';
+  </script>`,
+  hiddenLabel: `<form onsubmit="return false"><span style="display:none">Card number</span><input id="c"></form>`,
+  // Registers an own "value" property on the input the way React's value tracker does: a plain
+  // el.value = x goes through it and the framework never notices the change.
+  controlled: `<form onsubmit="return false"><input id="u" name="username"><input id="p" type="password"></form><script>
+    window.state = {};
+    for (const el of document.querySelectorAll("input")) {
+      const proto = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value");
+      let tracked = "";
+      Object.defineProperty(el, "value", { configurable: true, get() { return proto.get.call(this); }, set(v) { tracked = v; proto.set.call(this, v); } });
+      el.addEventListener("input", () => { if (el.value !== tracked) { tracked = el.value; state[el.id] = el.value; } });
+    }
+  </script>`,
+  dark: `<body style="background:#111"><form onsubmit="return false"><input id="u" name="username" style="background:transparent"><input id="p" type="password" style="background:#fff"></form>`,
+  address: `<form onsubmit="return false"><label for="a">Street address</label><textarea id="a"></textarea><label for="e">Email us about your name</label><textarea id="e"></textarea></form>`,
+  otp: `<form onsubmit="window.submitted=true;return false"><label for="code">Verification code</label><input id="code" autocomplete="off"><button>Verify</button></form>`,
+  twoStep: `<form onsubmit="return false"><input id="u" name="username"><div id="step2" style="display:none"><input id="p" type="password" name="password"></div><button>Next</button></form>`,
+  autosubmit: `<form onsubmit="return false"><input id="u" name="username"><input id="p" type="password" name="password">
+    <button type="button" id="show">Show password</button><button id="go" onclick="window.submitted='button'">Sign in</button></form>`,
+  autosubmitEnter: `<form onsubmit="window.submitted='enter';return false"><input id="u" name="username"><input id="p" type="password" name="password"></form>`,
+  cardShapes: `<form onsubmit="return false"><input id="c" autocomplete="cc-number" maxlength="19"><input id="compact" autocomplete="cc-exp" maxlength="4">
+    <input id="long" autocomplete="cc-exp" placeholder="MM/YYYY"><input id="year" autocomplete="cc-exp-year" maxlength="2"></form>`,
+  long: `<form>${"x".repeat(3000)}<input name="${"n".repeat(1000)}"></form>`,
   // Boxes that must never take a username, right before the password; autocomplete=off changes nothing.
   avoid: `<form onsubmit="return false"><input id="q" name="q"><input id="coupon" name="discount_code"><input id="trap" aria-hidden="true" name="username">
     <input id="p" type="password" autocomplete="off"></form>`,
@@ -111,7 +144,7 @@ const values = (page) =>
   page.evaluate(() =>
     Object.fromEntries(
       [...(function walk(root, out) {
-        for (const el of root.querySelectorAll("input, select")) {
+        for (const el of root.querySelectorAll("input, select, textarea")) {
           out.push(el);
           if (el.shadowRoot) walk(el.shadowRoot, out);
         }
@@ -125,8 +158,6 @@ async function scenario(name, key, fn) {
   page.on("pageerror", (e) => errors.push(`${name}: ${e.message}`));
   await page.goto(`${base}/${key}`);
   await page.addScriptTag({ content: bundle });
-  // chrome.scripting serializes the function; a new Function has no closure either, so test that copy.
-  await page.evaluate(() => (PW.fill = new Function(`return (${PW.fillInPage.toString()})`)()));
   try {
     await fn(page);
     pass++;
@@ -139,11 +170,33 @@ async function scenario(name, key, fn) {
   }
 }
 
-const fill = (page, extra = {}) =>
-  page.evaluate(
-    (extra) => PW.fill({ mode: "login", origin: location.origin, username: "user@example.com", password: "pa55word", ...extra }),
-    extra,
-  );
+const collect = (page, origin) => page.evaluate((origin) => plugwarden.collect({ origin: origin ?? location.origin, mode: "FullPage" }), origin);
+
+/** What background/engine.ts does for one frame: collect, plan, and write the values the plan names. */
+async function run(page, intent, valueOf, onlyEmpty, origin) {
+  const details = await collect(page, origin);
+  if (typeof details.filled === "boolean") return details;
+  const plan = JSON.parse(engine.plan(JSON.stringify({ details, intent })));
+  if (!plan.ops.length) return { filled: false, reason: "noFields" };
+  const ops = plan.ops.map((o) => ({ fieldId: o.fieldId, value: valueOf(o.source), format: o.format })).filter((o) => o.value);
+  return page.evaluate((req) => plugwarden.execute({ ...req, origin: location.origin }), { ops, onlyEmpty, submit: plan.submit });
+}
+
+const fill = (page, { username = "user@example.com", password = "pa55word", onlyEmpty = false, passwordOnly = false, totp, autosubmit = false, origin } = {}) =>
+  run(page, { kind: "login", onlyEmpty, passwordOnly, hasTotp: !!totp, autosubmit }, (s) => ({ username, password, totp })[s], onlyEmpty, origin);
+
+const formFill = (page, values) => run(page, { kind: "form", keys: Object.keys(values) }, (s) => values[s]);
+
+const read = (page) => page.evaluate(() => plugwarden.readLogin());
+
+/** The engine's verdict on field `id`, as if the user had just focused it. */
+const analyzed = async (page, id) => {
+  const details = await page.evaluate((id) => plugwarden.collectActive(document.getElementById(id)), id);
+  const fieldId = details.fields.find((f) => f.isActive).fieldId;
+  return { field: details.fields.find((f) => f.isActive), ...JSON.parse(engine.analyze_page(JSON.stringify(details))).fields.find((f) => f.fieldId === fieldId) };
+};
+
+const focusOn = (page, id) => page.evaluate((id) => plugwarden.setFocused(document.getElementById(id)), id);
 
 await scenario("a zero-size password decoy is skipped", "decoy", async (page) => {
   assert.deepEqual(await fill(page), { filled: true });
@@ -186,8 +239,8 @@ await scenario("form-less login blocks are paired, page-wide boxes are not", "mo
 
 await scenario("fields inside an open shadow root are filled and read back", "shadow", async (page) => {
   assert.deepEqual(await fill(page), { filled: true });
-  const read = await page.evaluate(() => PW.fill({ mode: "read" }));
-  assert.deepEqual([read.username, read.password], ["user@example.com", "pa55word"]);
+  const login = await read(page);
+  assert.deepEqual([login.username, login.password], ["user@example.com", "pa55word"]);
 });
 
 await scenario("page load keeps what the page or the user already typed", "signup", async (page) => {
@@ -201,41 +254,32 @@ await scenario("page load keeps what the page or the user already typed", "signu
 
 await scenario("page load never fills a new password", "signup", async (page) => {
   await page.evaluate(() => (document.getElementById("u").value = ""));
-  const read = await page.evaluate(() => {
-    // Only the registration form is left: a page load must not fill it.
-    document.querySelectorAll("form")[1].remove();
-    return PW.fill({ mode: "login", origin: location.origin, username: "u", password: "p", onlyEmpty: true });
-  });
-  assert.deepEqual(read, { filled: false, reason: "noFields" });
+  // Only the registration form is left: a page load must not fill it.
+  await page.evaluate(() => document.querySelectorAll("form")[1].remove());
+  assert.deepEqual(await fill(page, { username: "u", password: "p", onlyEmpty: true }), { filled: false, reason: "noFields" });
 });
 
 await scenario("a read-only account field still names the login", "readonly", async (page) => {
   await page.fill("#p", "typed-pass");
-  const read = await page.evaluate(() => PW.fill({ mode: "read" }));
-  assert.deepEqual([read.username, read.password], ["shown@example.com", "typed-pass"]);
+  const login = await read(page);
+  assert.deepEqual([login.username, login.password], ["shown@example.com", "typed-pass"]);
 });
 
 await scenario("a change-password form reports the new password", "change", async (page) => {
   for (const [id, value] of [["u", "bar-user"], ["cur", "old-pass"], ["new", "new-pass"], ["rep", "new-pass"]]) await page.fill(`#${id}`, value);
-  const read = await page.evaluate(() => PW.fill({ mode: "read" }));
-  assert.deepEqual([read.username, read.password], ["bar-user", "new-pass"]);
+  const login = await read(page);
+  assert.deepEqual([login.username, login.password], ["bar-user", "new-pass"]);
 });
 
 await scenario("card fields are found by their labels and placeholders", "card", async (page) => {
-  const r = await page.evaluate(() =>
-    PW.fill({
-      mode: "form",
-      origin: location.origin,
-      values: { "cc-name": "Ada L", "cc-number": "4111111111111111", "cc-exp-month": "01", "cc-exp-year": "2030", "cc-csc": "123" },
-    }),
-  );
+  const r = await formFill(page, { "cc-name": "Ada L", "cc-number": "4111111111111111", "cc-exp-month": "01", "cc-exp-year": "2030", "cc-csc": "123" });
   assert.deepEqual(r, { filled: true });
   const v = await values(page);
   assert.deepEqual([v.n, v.c, v.m, v.y, v.v], ["Ada L", "4111111111111111", "01", "2030", "123"]);
 });
 
 await scenario("a frame on another origin is refused", "decoy", async (page) => {
-  const r = await page.evaluate(() => PW.fill({ mode: "login", origin: "https://elsewhere.example", username: "u", password: "p" }));
+  const r = await fill(page, { origin: "https://elsewhere.example", username: "u", password: "p" });
   assert.deepEqual(r, { filled: false, reason: "origin" });
   const v = await values(page);
   assert.deepEqual([v.u, v.p], ["", ""]);
@@ -247,34 +291,93 @@ await scenario("a login split over two shadow roots is paired", "splitShadow", a
 });
 
 await scenario("the form with the focused field wins", "twoForms", async (page) => {
-  await page.evaluate(() => (window.plugwardenFocused = document.getElementById("u2")));
+  await focusOn(page, "u2");
   await fill(page);
   const v = await values(page);
   assert.deepEqual([v.u1, v.p1, v.u2, v.p2], ["", "", "user@example.com", "pa55word"]);
-  await page.evaluate(() => (window.plugwardenFocused = undefined));
 });
 
 await scenario("a page-load fill ignores the focused field", "twoForms", async (page) => {
-  await page.evaluate(() => (window.plugwardenFocused = document.getElementById("u2")));
+  await focusOn(page, "u2");
   await fill(page, { onlyEmpty: true });
   const v = await values(page);
   assert.deepEqual([v.u2, v.p2], ["", ""]);
 });
 
 await scenario("the text before an unlabelled field names it", "bareLabels", async (page) => {
-  const r = await page.evaluate(() => PW.fill({ mode: "form", origin: location.origin, values: { "cc-number": "4111111111111111", "cc-csc": "123" } }));
+  const r = await formFill(page, { "cc-number": "4111111111111111", "cc-csc": "123" });
   assert.deepEqual(r, { filled: true });
   const v = await values(page);
   assert.deepEqual([v.c, v.v, v.tu], ["4111111111111111", "123", ""]);
-  const probe = await page.evaluate(() => PW.probeField(document.getElementById("tu")));
-  assert.match(probe.hints, /e-posta/);
+  assert.match((await analyzed(page, "tu")).field.labelBefore, /E-posta/);
+});
+
+const cardFill = (page) => formFill(page, { "cc-number": "4111", "cc-csc": "123" });
+
+await scenario("a lone asterisk does not hide the label before it", "starLabel", async (page) => {
+  assert.deepEqual(await cardFill(page), { filled: true });
+  assert.equal((await values(page)).c, "4111");
+});
+
+await scenario("text behind a field names it only when the field is alone in its parent", "labelAfter", async (page) => {
+  await cardFill(page);
+  const v = await values(page);
+  // "CVC" between two fields in one parent names the second of them, never the first.
+  assert.deepEqual([v.c, v.v, v.n, v.other, v.f], ["4111", "123", "", "123", ""]);
+});
+
+await scenario("an element named host does not hang the walk up the tree", "namedHost", async (page) => {
+  await fill(page);
+  assert.equal((await values(page)).p, "pa55word");
+  await cardFill(page);
+});
+
+await scenario("data-label names a field", "dataLabel", async (page) => {
+  await cardFill(page);
+  assert.equal((await values(page)).c, "4111");
+});
+
+await scenario("another form's text is not a label", "otherForm", async (page) => {
+  assert.deepEqual(await cardFill(page), { filled: false, reason: "noFields" });
+});
+
+await scenario("a label outside the input's shadow root names it", "shadowLabel", async (page) => {
+  assert.deepEqual(await cardFill(page), { filled: true });
+  assert.equal(await page.evaluate(() => document.querySelector("x-a").shadowRoot.querySelector("input").value), "4111");
+});
+
+await scenario("invisible text is not a label", "hiddenLabel", async (page) => {
+  assert.deepEqual(await cardFill(page), { filled: false, reason: "noFields" });
+});
+
+await scenario("a framework-controlled input sees the fill", "controlled", async (page) => {
+  await fill(page);
+  assert.deepEqual(await page.evaluate(() => window.state), { u: "user@example.com", p: "pa55word" });
+});
+
+await scenario("a filled field is marked for its background until it is edited", "dark", async (page) => {
+  await fill(page);
+  const mark = (id) => page.evaluate((id) => document.getElementById(id).getAttribute("data-pw-autofilled"), id);
+  assert.deepEqual([await mark("u"), await mark("p")], ["dark", "light"]);
+  await page.type("#u", "x");
+  assert.equal(await mark("u"), null);
+  assert.equal(await page.evaluate(() => document.getElementById("u").style.outline), "");
+  // A second fill marks it again, with one listener left.
+  await fill(page);
+  assert.equal(await mark("u"), "dark");
+});
+
+await scenario("a textarea takes an address, and nothing else", "address", async (page) => {
+  await formFill(page, { "street-address": "1 Main St", email: "a@b.c", name: "Ada" });
+  const v = await values(page);
+  assert.deepEqual([v.a, v.e], ["1 Main St", ""]);
 });
 
 await scenario("search, coupon and aria-hidden boxes never take the username", "avoid", async (page) => {
   await fill(page);
   const v = await values(page);
   assert.deepEqual([v.q, v.coupon, v.trap, v.p], ["", "", "", "pa55word"]);
-  assert.equal((await page.evaluate(() => PW.probeField(document.getElementById("q")))).avoid, true);
+  assert.equal((await analyzed(page, "q")).avoid, true);
 });
 
 await scenario("autocomplete=off does not stop a fill", "acOff", async (page) => {
@@ -283,7 +386,7 @@ await scenario("autocomplete=off does not stop a fill", "acOff", async (page) =>
   assert.deepEqual([v.u, v.p], ["user@example.com", "pa55word"]);
 });
 
-const isSignup = (page, id = "u") => page.evaluate((id) => PW.isSignupField(document.getElementById(id)), id);
+const isSignup = async (page, id = "u") => !!(await analyzed(page, id)).signup;
 
 await scenario("a registration form is recognised and its confirm field filled", "register", async (page) => {
   assert.equal(await isSignup(page), true);
@@ -314,6 +417,77 @@ await scenario("a change-password form leaves the new password alone", "change",
   await fill(page);
   const v = await values(page);
   assert.deepEqual([v.cur, v.new, v.rep], ["pa55word", "", ""]);
+});
+
+await scenario("autocomplete=off in a login form opens the menu and says so", "acOff", async (page) => {
+  const f = await analyzed(page, "u");
+  assert.deepEqual([f.menu, f.correctAutocompleteOff, f.requiresInteractionForMenu], ["login", true, true]);
+});
+
+await scenario("a lone one-time-code box takes the code of the login, only when it is focused", "otp", async (page) => {
+  assert.equal((await analyzed(page, "code")).menu, "login");
+  assert.deepEqual(await fill(page, { totp: "123456" }), { filled: false, reason: "noFields" });
+  await focusOn(page, "code");
+  assert.deepEqual(await fill(page, { totp: "123456", autosubmit: true }), { filled: true });
+  assert.equal((await values(page)).code, "123456");
+  assert.equal(await page.evaluate(() => window.submitted ?? false), false);
+});
+
+await scenario("a hidden password waits: only the username of a two-step form is filled", "twoStep", async (page) => {
+  await fill(page);
+  const v = await values(page);
+  assert.deepEqual([v.u, v.p], ["user@example.com", ""]);
+  assert.deepEqual(await page.evaluate(() => {
+    document.getElementById("step2").style.display = "block";
+    return plugwarden.hasPasswordField();
+  }), true);
+  await fill(page);
+  assert.equal((await values(page)).p, "pa55word");
+});
+
+await scenario("a page that hides a field after collection does not get a value there", "decoy", async (page) => {
+  const details = await collect(page);
+  const plan = JSON.parse(engine.plan(JSON.stringify({ details, intent: { kind: "login" } })));
+  await page.evaluate(() => (document.getElementById("p").style.display = "none"));
+  const ops = plan.ops.map((o) => ({ fieldId: o.fieldId, value: "secret" }));
+  await page.evaluate((ops) => plugwarden.execute({ origin: location.origin, ops }), ops);
+  const v = await values(page);
+  assert.deepEqual([v.u, v.p], ["secret", ""]);
+});
+
+await scenario("autosubmit clicks the login button", "autosubmit", async (page) => {
+  await fill(page, { autosubmit: true });
+  assert.equal(await page.evaluate(() => window.submitted), "button");
+});
+
+await scenario("without a login button autosubmit presses Enter and submits the form", "autosubmitEnter", async (page) => {
+  await fill(page, { autosubmit: true });
+  assert.equal(await page.evaluate(() => window.submitted), "enter");
+});
+
+await scenario("autosubmit stays off unless asked for, and never on page load", "autosubmit", async (page) => {
+  await fill(page);
+  assert.equal(await page.evaluate(() => window.submitted ?? false), false);
+  await page.evaluate(() => (document.getElementById("p").value = ""));
+  await fill(page, { autosubmit: true, onlyEmpty: true });
+  assert.equal(await page.evaluate(() => window.submitted ?? false), false);
+});
+
+await scenario("card values take the shape their field asks for", "cardShapes", async (page) => {
+  await formFill(page, { "cc-number": "4111 1111 1111 1111", "cc-exp": "12/30", "cc-exp-year": "2030" });
+  const v = await values(page);
+  assert.deepEqual([v.c, v.compact, v.long, v.year], ["4111111111111111", "1230", "12/2030", "30"]);
+});
+
+await scenario("a page details oversized string is truncated before it leaves the frame", "long", async (page) => {
+  const details = await collect(page);
+  assert.equal(details.fields[0].htmlName.length, 300);
+  assert.equal(details.forms[0].text.length, 2000);
+});
+
+await scenario("a page's field values are not part of what it reports", "signup", async (page) => {
+  await page.fill("#p", "typed-secret");
+  assert.ok(!JSON.stringify(await collect(page)).includes("typed-secret"));
 });
 
 await browser.close();

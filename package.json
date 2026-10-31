@@ -15,7 +15,7 @@
     "test:fill": "node tools/smoke-fill.mjs",
     "test:e2e": "node --experimental-strip-types tests/e2e/run.ts",
     "test:passkeys": "node tools/smoke-passkeys.mjs",
-    "size": "node tools/size-report.mjs --check dist/wasm/core_wasm_bg.wasm dist/wasm/core_wasm.js dist/ext/background.js dist/ext/offscreen.js dist/ext/worker.js dist/ext/popup.js dist/ext/popup.css dist/ext/passkey-page.js dist/ext/passkey-relay.js dist/ext/sso-callback.js",
+    "size": "node tools/size-report.mjs --check dist/wasm/core_wasm_bg.wasm dist/wasm/core_wasm.js dist/wasm/autofill_core_bg.wasm dist/wasm/autofill_core.js dist/ext/page.js dist/ext/content.js dist/ext/background.js dist/ext/offscreen.js dist/ext/worker.js dist/ext/popup.js dist/ext/popup.css dist/ext/passkey-page.js dist/ext/passkey-relay.js dist/ext/sso-callback.js",
     "sync-upstream": "node tools/sync-upstream.mjs",
     "test:biometric": "node tools/build.mjs --e2e && node tools/smoke-biometric.mjs"
   },

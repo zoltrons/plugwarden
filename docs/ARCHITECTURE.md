@@ -5,7 +5,7 @@ Plugwarden is a Manifest V3 Chrome extension (Chromium 156+) that talks to a sel
 
 1. Protocol compatibility with Vaultwarden (pinned in `upstream.lock`; the server is the source of truth).
 2. Security (minimal permissions, plaintext only in memory, auto-lock).
-3. Size and speed (no UI framework, esbuild, small pruned WASM, a content script that stays idle until a field is focused).
+3. Size and speed (no UI framework, esbuild, small pruned WASM, a content script that only reacts to a focus and a first password field).
 4. Easy upstream sync (pinned revs, upstream map, diff reports, contract tests).
 
 ## Process model
@@ -33,20 +33,31 @@ Plugwarden is a Manifest V3 Chrome extension (Chromium 156+) that talks to a sel
   WASM memory to. The SW never holds the user key, only encrypted blobs it passes through.
 * **Popup** (`src/ui`): vanilla TS, no components framework. Asks the SW for data; never sees keys, never calls
   `fetch`. First paint must not wait for WASM.
-* **Autofill** (`src/autofill`): a static content script (`content.js`, all http(s) pages and frames,
-  `document_idle`) that only looks for a password field on load (open shadow roots included) and
-  otherwise reacts when the user focuses an input. "Autofill on page load" (off by default) asks the
-  worker to fill the frame's best login: the per-item tri-state decides who takes part, the login last
-  used for the site wins, and only empty fields are written. For
-  login, card and identity fields it frames the inline menu (`menu.html`) under the field; after a login
-  form is submitted it asks the SW whether to show the save/update bar (`bar.html`, top frame only).
-  Both are extension pages (web-accessible resources), so the site cannot read their contents; they ask
-  the SW for data and the SW fills. Fills (inline menu, popup "Fill", Ctrl+Shift+L, context menu) inject
-  the self-contained `fillInPage` from `page.ts` with `chrome.scripting`. It scores the fields itself:
-  invisible/zero-size decoys are skipped, a login form beats a registration form, `current-password`
-  beats `new-password`, the username must be in the same form (or block, when there is no form), and
-  labels/`aria-labelledby`/placeholders count as names. Values are written through the prototype setter
-  with the events typing produces. The popup/gesture path tries the top frame first and then every
+* **Autofill** (`src/autofill`, `crates/autofill-*`): two static content scripts (`page.js`, `content.js`, all
+  http(s) pages and frames, `document_start`). `content.js` watches for the frame's first password field, however
+  late a single-page app renders it, and reacts when the user focuses an input. "Autofill on page load" (off by
+  default) asks the worker to fill the frame's best login once per document: the per-item tri-state decides who
+  takes part, the login last used for the site wins, and only empty fields are written.
+  The engine (`crates/autofill-core`, its own WebAssembly module run in the service worker through
+  `background/engine.ts`) decides what fields are. `collector/` reports a frame as `CollectedPageDetails`, without
+  any field value; the eight passes of `autofill-resolver` (form purpose, text clues, active field, two-step
+  logins, hidden fields, avoided boxes, per-site recipes, best pick) give each field a type; `autofill-fill` turns
+  that into a plan of field ids and value *names*. The worker fills in the values and `executor/fill.ts` writes
+  them, checking origin, visibility and emptiness again: the page has had time to change. Invisible/zero-size
+  decoys are skipped, a login form beats a registration form, `current-password` beats `new-password`, the
+  username must be in the same form (or block, when there is no form), and labels/`aria-labelledby`/`data-label`/
+  placeholders count as names, else the visible text around the field. A hidden password of a two-step form is
+  recognised and never filled while hidden. `autocomplete="off"` is overridden in login contexts. Per-site recipes
+  are compiled in and the list is still empty. Values are written through the prototype setter with the events
+  typing produces, and a filled field carries `data-pw-autofilled="light|dark"` and an outline until it is edited.
+  `readLogin` is the exception that decides in the page: a submit navigates away too soon to ask anyone.
+  For login, card and identity fields `content.js` frames the inline menu (`menu.html`) under the field, for a lone
+  one-time-code box too; after a login form is submitted it asks the SW whether to show the save/update bar
+  (`bar.html`, top frame only). Both are extension pages (web-accessible resources), so the site cannot read their
+  contents; they ask the SW for data and the SW fills. Fills (inline menu, popup "Fill", Ctrl+Shift+L, context menu)
+  call `page.js` with `chrome.scripting`, injecting it first into a frame opened before the extension was installed.
+  "Submit after filling" (off by default) presses the engine's best-ranked login button, else Enter in the password
+  field, after a fill the user asked for. The popup/gesture path tries the top frame first and then every
   frame, because the form is often in a (same-origin) iframe; each frame re-checks `location.origin`
   and refuses a foreign one. Matching always uses the URL the browser reports (`sender.url` /
   `tab.url`), never one the page supplies.
@@ -61,7 +72,8 @@ Plugwarden is a Manifest V3 Chrome extension (Chromium 156+) that talks to a sel
 | `src/vault` | Encrypted cache, lock state machine, incremental sync, in-memory search index | `shared`, `transport` (SW side), core-wasm (offscreen side) |
 | `src/background` | SW entry, router, alarms, commands, context menu | `shared`, `transport`, `vault` |
 | `src/offscreen` | WASM host + decrypted state | `shared`, core-wasm |
-| `src/autofill` | Injected fill/read functions (`fillInPage`), URI matching (+ Public Suffix List) | nothing (injected functions must declare everything inside themselves) |
+| `src/autofill` | Field collection, writing a fill plan, reading a typed login (`page.js`), URI matching (+ Public Suffix List) | nothing but `shared/page-limits.ts` and types |
+| `crates/autofill-*` | Autofill engine: what a field is, what fills it. No keys, no values | serde, regex-lite |
 | `src/ui` | Popup | `shared` |
 
 Rule: **UI and autofill never touch crypto or the network.** All cross-context calls go through the
@@ -125,7 +137,7 @@ the inline menu and the save bar need every site; fills and the side panel's "On
 manager" (it turns off the browser's own password saving and autofill through `chrome.privacy`) and
 removed when that setting is turned off.
 
-Static content script `content.js` (see Autofill above) plus the web-accessible `menu.html` and
+Static content scripts `page.js` and `content.js` (see Autofill above) plus the web-accessible `menu.html` and
 `bar.html`. Its per-tab state lives in `chrome.storage.session`, one key per tab, removed when the tab
 closes: `inline:<tabId>` (frame, URL and kind of the field the open menu belongs to) and `save:<tabId>`
 (a submitted login waiting in the save bar, 5 minute TTL).

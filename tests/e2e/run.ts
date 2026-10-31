@@ -181,6 +181,10 @@ const pages: Record<string, string> = {
   "/framed": `<p>outer</p><iframe id="f" src="/login" style="width:500px;height:200px"></iframe>`,
   // A zero-size password decoy in front of the real form, and a two-step login with no password at all.
   "/decoy": `<input id="decoy" type="password" style="position:absolute;width:0;height:0;opacity:0;border:0">${LOGIN_FORM}`,
+  // A single-page app that renders its login long after load.
+  "/late-login": `<div id="app"></div><script>setTimeout(() => { document.getElementById("app").innerHTML = ${JSON.stringify(LOGIN_FORM)}; }, 1200);</script>`,
+  "/otp": `<form onsubmit="return false"><label for="code">Verification code</label><input id="code" autocomplete="off"><button>Verify</button></form>`,
+  "/autosubmit": `<form onsubmit="window.submitted = true; return false"><input id="u" name="username"><input id="p" type="password" name="password"><button>Sign in</button></form>`,
   "/useronly": `<form onsubmit="return false"><input id="u" name="login" placeholder="Email or phone"><button type="submit">Next</button></form>`,
 };
 const site = createServer((req, res) => {
@@ -1266,6 +1270,58 @@ try {
     await (await frameOf(loginPage, "menu.html")).getByRole("button", { name: "Fill Local app" }).click();
     await loginPage.waitForFunction(() => document.querySelector("x-b")!.shadowRoot!.querySelector("input")!.value !== "");
     assert.equal(await loginPage.evaluate(() => document.querySelector("x-a")!.shadowRoot!.querySelector("input")!.value), "local-user");
+  });
+
+  const setSetting = (patch: Record<string, unknown>) => page.evaluate((m) => chrome.runtime.sendMessage(m), { type: "setSettings", ...patch });
+
+  await step("page load: a login rendered long after load is still filled, once", async () => {
+    await setSetting({ autofillOnPageLoad: true });
+    try {
+      await loginPage.bringToFront();
+      await loginPage.goto(`${SITE}/late-login`);
+      await loginPage.waitForFunction(() => (document.getElementById("p") as HTMLInputElement | null)?.value, undefined, { timeout: 10_000 });
+      assert.ok(await loginPage.getAttribute("#p", "data-pw-autofilled"), "the filled field is not marked");
+    } finally {
+      await setSetting({ autofillOnPageLoad: false });
+    }
+  });
+
+  await step("inline menu: autocomplete=off on a lone code box offers the logins and fills the code", async () => {
+    await loginPage.goto(`${SITE}/otp`);
+    await loginPage.click("#code");
+    await (await frameOf(loginPage, "menu.html")).getByRole("button", { name: "Fill Local app" }).click();
+    await loginPage.waitForFunction(() => /^\d{6}$/.test((document.getElementById("code") as HTMLInputElement).value));
+  });
+
+  await step("autosubmit: off by default, and with the setting a fill presses the login button", async () => {
+    await loginPage.goto(`${SITE}/autosubmit`);
+    await loginPage.click("#u");
+    await (await frameOf(loginPage, "menu.html")).getByRole("button", { name: "Fill Local app" }).click();
+    await loginPage.waitForFunction(() => (document.getElementById("p") as HTMLInputElement).value !== "");
+    assert.equal(await loginPage.evaluate(() => (window as unknown as { submitted?: boolean }).submitted ?? false), false);
+    await setSetting({ autosubmit: true });
+    try {
+      await loginPage.goto(`${SITE}/autosubmit`);
+      await loginPage.click("#u");
+      await (await frameOf(loginPage, "menu.html")).getByRole("button", { name: "Fill Local app" }).click();
+      await loginPage.waitForFunction(() => (window as unknown as { submitted?: boolean }).submitted === true);
+    } finally {
+      await setSetting({ autosubmit: false });
+    }
+  });
+
+  await step("a frame without page.js (opened before an update) gets it injected for a fill", async () => {
+    await loginPage.goto(`${SITE}/login`);
+    await loginPage.bringToFront();
+    await sw.evaluate(async (site) => {
+      const [tab] = await chrome.tabs.query({ url: `${site}/*`, active: true });
+      await chrome.scripting.executeScript({ target: { tabId: tab!.id! }, func: () => void delete (globalThis as { plugwarden?: unknown }).plugwarden });
+    }, SITE);
+    const { data } = await page.evaluate(() => chrome.runtime.sendMessage({ type: "pageMatches" }));
+    const id = data.items.find((i: { name: string }) => i.name === "Local app").id;
+    const r = await page.evaluate((id) => chrome.runtime.sendMessage({ type: "fill", id }), id);
+    assert.ok(r.data?.filled, JSON.stringify(r));
+    assert.equal(await loginPage.inputValue("#u"), "local-user");
   });
 
   await step("save bar: a single-page app's plain Sign in button offers the save", async () => {

@@ -14,6 +14,7 @@ comments and commits in English.
 | Build wasm (needs rustup, wasm-bindgen-cli = `upstream.lock`, binaryen) | `npm run build:wasm` |
 | Build extension → `dist/ext` | `node tools/fetch-psl.mjs` (once) then `npm run build` |
 | Rust tests | `bash tools/fetch-test-vectors.sh && PW_TEST_VECTORS=target/test-vectors cargo test -p plugwarden-core-wasm` |
+| Autofill engine tests | `cargo test -p autofill-designation -p autofill-cpd -p autofill-clue -p autofill-autocomplete-off -p autofill-resolver -p autofill-autosubmit -p autofill-fill` |
 | Biometric / passkey smoke (no server) | `npm run test:biometric` / `npm run test:passkeys` |
 | Autofill field-detection smoke (no server, real browser) | `npm run test:fill` |
 | e2e vs. real Vaultwarden | `docker compose -f dev/vaultwarden/docker-compose.yml up -d --wait`, `node tools/build.mjs --e2e`, `npm run test:e2e` |
@@ -28,6 +29,7 @@ Browser is **Helium**, never Chrome (see the user's global rules). Unit tests ar
 ui (popup/sidepanel/menu/bar)  --Request-->  background/index.ts  --coreCall-->  offscreen/offscreen.ts
 content.ts (web page)          --PageRequest-->  (router)                         └─ worker.ts → crates/core-wasm
 menu.html/bar.html frames      --FrameRequest-->  background/inline.ts
+page.js / content.js  --CollectedPageDetails-->  background/engine.ts  -->  crates/autofill-core (wasm, no keys)
 ```
 
 - `src/shared/messages.ts` — **single source of truth for every message**: `Request` (UI→worker),
@@ -41,8 +43,12 @@ menu.html/bar.html frames      --FrameRequest-->  background/inline.ts
 - `src/offscreen/` — holds keys + decrypted vault. `vault.ts` (cipher index, passkeys), `fido2.ts`,
   `worker.ts` (op switch), `offscreen.ts` (clipboard, worker lifecycle).
 - `src/transport/` — thin fetch client (`http.ts` bounded bodies, `auth.ts`, `vault.ts`); no keys here.
-- `src/autofill/` — content scripts (`content.ts` idle until a field is focused, `page.ts` injected
-  fill, `passkey-*.ts`), `match.ts` URI matching.
+- `src/autofill/` — `collector/` (page details, labels, shadow DOM, field watcher), `executor/fill.ts` (writes
+  a plan into the page), `page.ts` (their API in the isolated world, plus `readLogin`), `content.ts` (reacts to
+  focus), `passkey-*.ts`, `match.ts` URI matching.
+- `crates/autofill-*` — the engine that decides what a field is: `autofill-core` (wasm surface), `autofill-resolver`
+  (the 8 passes), `autofill-clue` (text rules, weights), `autofill-fill` (fill plan), `autofill-autosubmit`,
+  `autofill-autocomplete-off`, `autofill-cpd` / `autofill-designation` (types). Runs in the service worker.
 - `src/ui/` — `popup.ts` shell/auth screens/settings, `vault.ts` list/item/edit (largest file), `generator.ts` (generator + email aliases), `send.ts`,
   `biometric.ts`, `dom.ts` (`h`, `send`, `t`), strings in `src/_locales/en/messages.json` (English only).
 - `crates/core-wasm/` — `api.rs` (session, keys), `cipher.rs`, `send.rs`, `totp.rs`, `generator.rs`;
@@ -66,5 +72,6 @@ menu.html/bar.html frames      --FrameRequest-->  background/inline.ts
 - Every message crossing a trust boundary is validated (`messages.ts`); page-controlled data is size-capped.
 - Server-supplied URLs must stay on the configured server; http is allowed for loopback only.
 - Lock must go through `lockNow()` (closes in-page UI, revokes re-prompt grants, frees keys).
+- The autofill engine gets field details and value *names*, never a value or a key (`background/engine.ts`).
 - Size budget enforced by `npm run size` (`tools/size-budget.json`); no new dependencies without cause.
 - Vaultwarden mixes PascalCase/camelCase JSON: read with the case-insensitive helpers (`ci`).

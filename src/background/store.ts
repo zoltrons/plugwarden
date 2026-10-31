@@ -178,6 +178,7 @@ export async function getSettings(): Promise<Settings> {
     clearClipboardDelay: "fiveMinutes",
     autofillOnPageLoad: false,
     autofillOnPageLoadDefault: true,
+    autosubmit: false,
     inlineMenuCards: true,
     inlineMenuIdentities: true,
     contextMenu: true,

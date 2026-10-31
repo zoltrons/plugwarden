@@ -1,0 +1,19 @@
+[package]
+name = "autofill-fill"
+version = "0.0.0"
+description = "Plans which value goes in which field"
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+autofill-cpd.workspace = true
+autofill-designation.workspace = true
+autofill-clue.workspace = true
+autofill-resolver.workspace = true
+autofill-autosubmit.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

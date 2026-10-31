@@ -1048,6 +1048,12 @@
   "removeWebsite": {
     "message": "Remove website"
   },
+  "autosubmit": {
+    "message": "Submit after filling"
+  },
+  "autosubmitHint": {
+    "message": "Log in right after you fill a login. Not used for autofill on page load. A form you have not looked at gets submitted, so use with care."
+  },
   "autofillOnPageLoad": {
     "message": "Autofill on page load"
   },

@@ -116,6 +116,86 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
+name = "autofill-autocomplete-off"
+version = "0.0.0"
+dependencies = [
+ "autofill-cpd",
+ "autofill-designation",
+]
+
+[[package]]
+name = "autofill-autosubmit"
+version = "0.0.0"
+dependencies = [
+ "autofill-clue",
+ "autofill-cpd",
+ "regex-lite",
+]
+
+[[package]]
+name = "autofill-clue"
+version = "0.0.0"
+dependencies = [
+ "autofill-cpd",
+ "autofill-designation",
+ "regex-lite",
+]
+
+[[package]]
+name = "autofill-core"
+version = "0.0.0"
+dependencies = [
+ "autofill-cpd",
+ "autofill-fill",
+ "autofill-resolver",
+ "serde",
+ "serde_json",
+ "wasm-bindgen",
+]
+
+[[package]]
+name = "autofill-cpd"
+version = "0.0.0"
+dependencies = [
+ "autofill-designation",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "autofill-designation"
+version = "0.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "autofill-fill"
+version = "0.0.0"
+dependencies = [
+ "autofill-autosubmit",
+ "autofill-clue",
+ "autofill-cpd",
+ "autofill-designation",
+ "autofill-resolver",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "autofill-resolver"
+version = "0.0.0"
+dependencies = [
+ "autofill-autocomplete-off",
+ "autofill-clue",
+ "autofill-cpd",
+ "autofill-designation",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "base16ct"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1703,6 +1783,12 @@ dependencies = [
  "memchr",
  "regex-syntax",
 ]
+
+[[package]]
+name = "regex-lite"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cab834c73d247e67f4fae452806d17d3c7501756d98c8808d7c9c7aa7d18f973"
 
 [[package]]
 name = "regex-syntax"

@@ -9,7 +9,7 @@ away from being silently undone, and several are covered by unit tests.
 | Context | Trust | Holds |
 | --- | --- | --- |
 | Web page (any origin, http and https) | **untrusted** | nothing of ours; can read anything we inject into its DOM |
-| Content script (`content.js`, `passkey-relay.js`) | semi-trusted, page-adjacent | the page URL the browser reports, a per-document nonce |
+| Content scripts (`page.js`, `content.js`, `passkey-relay.js`) | semi-trusted, page-adjacent | the page URL the browser reports, a per-document nonce |
 | MAIN-world shim (`passkey-page.js`) | **untrusted** — it *is* page code | nothing; it only forwards `navigator.credentials` calls |
 | `menu.html` / `bar.html` frames | trusted extension page, but framed by a page | item names/usernames for the current origin only |
 | Service worker | trusted | encrypted cache, tokens, policy |
@@ -32,12 +32,28 @@ freed rather than zeroed in place.
    shape *and* size. Unknown types are refused; anything a page or a server can make arbitrarily large
    (form values, challenges, credential-id lists, imports) is capped at the boundary.
 
-3. **Filling is triple-checked.** For a login the item must match the site's URL, the injected function
-   re-checks `location.origin` inside the frame (`src/autofill/page.ts`), and the inline menu injects
-   into exactly the frame that asked (`frameIds: [ctx.frameId]`). A same-tab navigation or a tab switch
-   between the click and the injection therefore cannot fill another site. Popup and gesture fills try
-   the top frame first and, only when it has no form, every frame of the tab: the same origin check runs
-   in each one, so a cross-origin iframe returns before it reads a single field.
+3. **Filling is triple-checked.** For a login the item must match the site's URL, `page.js` re-checks
+   `location.origin` inside the frame both when it collects and when it writes (`src/autofill/page.ts`,
+   `executor/fill.ts`), and the inline menu fills exactly the frame that asked (`frameIds: [ctx.frameId]`).
+   A same-tab navigation or a tab switch between the click and the fill therefore cannot fill another
+   site. Popup and gesture fills try the top frame first and, only when it has no form, every frame of the
+   tab: the same origin check runs in each one, so a cross-origin iframe returns before it reads a single
+   field. A write also re-checks that its field is still on screen, so a field hidden after collection
+   gets nothing; a hidden password of a two-step form is only recognised, never filled.
+
+   **The autofill engine is separate from the keys.** `crates/autofill-core` parses page-controlled text, so
+   it is its own WebAssembly module in the service worker, never in the offscreen worker. It receives field
+   details and the *names* of the values an item has, and answers with field ids and those names; the worker
+   substitutes the values afterwards. A frame's report contains no field value at all. Page details are
+   capped at the boundary (`parsePageDetails`, `shared/page-limits.ts`), also when they come back from
+   `chrome.scripting`, and a report the engine cannot use fills nothing.
+
+   **Rules that change what a page can trigger.** A password field a page adds later offers the page-load fill
+   as well, once per document: a page's script could already have added it before load. "Submit after
+   filling" is off by default, needs a fill the user asked for (never page load, never a lone code), goes to
+   one frame at most, and clicks only a submit button or one that says it logs in. Per-site recipes are compiled
+   in; nothing about autofill is downloaded. `data-pw-autofilled` tells a page that a field was filled, which it
+   can see anyway from the value appearing.
 
 4. **An iframe of ours is not an authority.** `menu.html`/`bar.html` are web-accessible, so any site can
    frame them. Both carry a per-document secret (menu: from `content.js` via the URL fragment, inside a

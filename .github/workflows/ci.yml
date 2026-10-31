@@ -41,6 +41,7 @@ jobs:
       - run: bash tools/fetch-test-vectors.sh
         env: { GH_TOKEN: "${{ github.token }}" }
       - run: PW_TEST_VECTORS=target/test-vectors cargo test -p plugwarden-core-wasm
+      - run: cargo test -p autofill-designation -p autofill-cpd -p autofill-clue -p autofill-autocomplete-off -p autofill-resolver -p autofill-autosubmit -p autofill-fill
 
   # RustSec / npm advisories can go red on an unchanged tree when a new advisory lands, so this
   # job stays out of the `ci` gate: it warns, it does not block merges.

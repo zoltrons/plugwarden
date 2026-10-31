@@ -1,0 +1,15 @@
+[package]
+name = "autofill-cpd"
+version = "0.0.0"
+description = "Page details the content script collects"
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+autofill-designation.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

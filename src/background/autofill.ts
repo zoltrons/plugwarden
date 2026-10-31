@@ -1,10 +1,10 @@
-// Autofill on the active tab from the popup, Ctrl+Shift+L or the context menu: functions from
-// src/autofill/page.ts are injected with chrome.scripting (the required host permissions cover every tab).
-import { type FillRequest, type FillResult, fillInPage, type LoginFill, type PageLogin, type ReadFill } from "../autofill/page.ts";
+// Autofill on the active tab from the popup, Ctrl+Shift+L or the context menu.
+import type { FillResult, PageLogin } from "../autofill/types.ts";
 import type { PageMatches, VaultItem } from "../shared/messages.ts";
 import { pickPageLoadLogin } from "../shared/pageload.ts";
 import { UserError } from "./account.ts";
 import { coreCall } from "./core.ts";
+import { type FillRequest, fillInFrames, pageCall } from "./engine.ts";
 import { touchAutoLock } from "./lock.ts";
 import { getLocal, getSettings } from "./store.ts";
 import { REPROMPT_MESSAGE, repromptPending } from "./reprompt.ts";
@@ -59,12 +59,8 @@ export async function pageLoadFill(sender: chrome.runtime.MessageSender): Promis
   const pick = pickPageLoadLogin((await matches(url)).filter((i) => !i.reprompt), settings.autofillOnPageLoadDefault, (await getLocal("lastUsed")) ?? {});
   if (!pick) return { filled: false, reason: "noMatch" };
   const { username, password, totp } = await coreCall<{ username: string; password: string; totp?: string }>({ op: "fillData", id: pick.id });
-  const [res] = await chrome.scripting.executeScript({
-    target: { tabId, frameIds: [frameId] },
-    func: fillInPage,
-    args: [{ mode: "login", origin: url.origin, username, password, onlyEmpty: true } satisfies LoginFill],
-  });
-  const r = (res?.result as FillResult | undefined) ?? { filled: false };
+  const [res] = await fillInFrames(tabId, { frameIds: [frameId] }, { mode: "login", origin: url.origin, username, password, onlyEmpty: true });
+  const r = res?.result ?? { filled: false };
   if (r.filled) await closeInlineMenu(tabId, frameId);
   // The user did not pick this login, but the official client still copies the code.
   // No touchAutoLock: a page load is not user activity, and a page that reloads itself must not keep the vault open.
@@ -78,19 +74,17 @@ export async function pageLoadFill(sender: chrome.runtime.MessageSender): Promis
  * A login goes password-first: an e-mail box in the top frame must not win over a real form in an iframe,
  * so the username-only step is the last resort.
  */
-async function fillFrames(tabId: number, req: Exclude<FillRequest, ReadFill>): Promise<FillResult> {
-  const run = (target: { frameIds: number[] } | { allFrames: true }, r: FillRequest) =>
-    chrome.scripting.executeScript({ target: { tabId, ...target }, func: fillInPage, args: [r] });
-  const filledIn = (res: chrome.scripting.InjectionResult[]) => res.find((r) => (r.result as FillResult | undefined)?.filled);
+async function fillFrames(tabId: number, req: FillRequest): Promise<FillResult> {
+  const filledIn = (res: { result: FillResult; frameId: number }[]) => res.find((r) => r.result.filled);
   const strict = req.mode === "login" ? { ...req, passwordOnly: true } : req;
-  const top = await run({ frameIds: [0] }, strict);
-  const hit = filledIn(top) ?? filledIn(await run({ allFrames: true }, strict));
+  const top = await fillInFrames(tabId, { frameIds: [0] }, strict);
+  const hit = filledIn(top) ?? filledIn(await fillInFrames(tabId, { allFrames: true }, strict));
   if (hit) {
     await closeInlineMenu(tabId, hit.frameId);
-    return hit.result as FillResult;
+    return hit.result;
   }
-  if (req.mode !== "login") return (top[0]?.result as FillResult | undefined) ?? { filled: false };
-  const last = (await run({ frameIds: [0] }, req))[0]?.result as FillResult | undefined;
+  if (req.mode !== "login") return top[0]?.result ?? { filled: false };
+  const last = (await fillInFrames(tabId, { frameIds: [0] }, req))[0]?.result;
   if (last?.filled) await closeInlineMenu(tabId);
   return last ?? { filled: false };
 }
@@ -133,7 +127,8 @@ export async function fillTab(tab: chrome.tabs.Tab | undefined, id?: string): Pr
   } else {
     const filled = await coreCall<{ username: string; password: string; totp?: string }>({ op: "fillData", id });
     totp = filled.totp;
-    r = await fillFrames(tab.id, { mode: "login", origin: url.origin, username: filled.username, password: filled.password });
+    const { autosubmit } = await getSettings();
+    r = await fillFrames(tab.id, { mode: "login", origin: url.origin, username: filled.username, password: filled.password, totp, autosubmit });
   }
   if (r.filled) {
     await markUsed(id);
@@ -184,8 +179,8 @@ export async function onContextMenu(info: chrome.contextMenus.OnClickData, tab?:
 export async function readPageLogin(): Promise<PageLogin | null> {
   const tab = await activeTab();
   if (!httpUrl(tab) || tab?.id === undefined) return null;
-  const [res] = await chrome.scripting.executeScript({ target: { tabId: tab.id, frameIds: [0] }, func: fillInPage, args: [{ mode: "read" } satisfies ReadFill] });
-  const login = (res?.result as PageLogin | null | undefined) ?? null;
+  const [res] = await pageCall<PageLogin | null>({ tabId: tab.id, frameIds: [0] }, "readLogin", undefined);
+  const login = res?.result ?? null;
   return login && { ...login, url: tab.url! }; // the browser's URL, not the page's own location.href
 }
 

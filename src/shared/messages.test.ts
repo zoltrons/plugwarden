@@ -5,13 +5,6 @@ import { parseFrameRequest, parsePasskeyCall, parsePageRequest, parseRequest } f
 
 const throws = (fn: () => unknown, what: RegExp) => assert.throws(fn, what);
 
-test("page requests: the inline nonce is required", () => {
-  assert.deepEqual(parsePageRequest({ type: "inlineFocus", kind: "login", nonce: "n", signup: false }), { type: "inlineFocus", kind: "login", nonce: "n", signup: false });
-  throws(() => parsePageRequest({ type: "inlineFocus", kind: "login", signup: false }), /nonce/);
-  throws(() => parsePageRequest({ type: "inlineFocus", kind: "login", nonce: "n" }), /signup/);
-  throws(() => parsePageRequest({ type: "inlineFocus", kind: "password", nonce: "n", signup: false }), /kind/);
-});
-
 test("page requests: a submitted login is size-capped", () => {
   const ok = parsePageRequest({ type: "loginSubmitted", username: "u", password: "p" });
   assert.deepEqual(ok, { type: "loginSubmitted", username: "u", password: "p" });
@@ -63,4 +56,19 @@ test("popup requests: alias generation names a known service and caps its settin
   throws(() => parseRequest({ ...ok, settings: { ...ok.settings, token: "x".repeat(2000) } }), /too long/);
   throws(() => parseRequest({ ...ok, settings: { ...ok.settings, baseUrl: "x".repeat(600) } }), /too long/);
   throws(() => parseRequest({ type: "aliasSettings", vendor: "nope" }), /vendor/);
+});
+
+const details = { origin: "https://a.test", forms: [], fields: [{ fieldId: 1, type: "text", dataAttributes: {}, blockPath: [] }], buttons: [] };
+
+test("inlineFocus carries bounded page details", () => {
+  const parsed = parsePageRequest({ type: "inlineFocus", nonce: "n", details }) as { details: { fields: { fieldId: number }[] } };
+  assert.equal(parsed.details.fields[0]!.fieldId, 1);
+  throws(() => parsePageRequest({ type: "inlineFocus", details }), /nonce/);
+  throws(() => parsePageRequest({ type: "inlineFocus", nonce: "n" }), /details/);
+  const big = (field: object) => ({ type: "inlineFocus", nonce: "n", details: { ...details, fields: [{ ...details.fields[0], ...field }] } });
+  throws(() => parsePageRequest(big({ label: "x".repeat(301) })), /too long/);
+  throws(() => parsePageRequest(big({ blockPath: Array(33).fill(1) })), /too many/);
+  throws(() => parsePageRequest(big({ dataAttributes: Object.fromEntries(Array.from({ length: 17 }, (_, i) => [`k${i}`, "v"])) })), /too many/);
+  throws(() => parsePageRequest(big({ dataAttributes: { a: 1 } })), /string/);
+  throws(() => parsePageRequest({ type: "inlineFocus", nonce: "n", details: { ...details, fields: Array(257).fill(details.fields[0]) } }), /too many/);
 });

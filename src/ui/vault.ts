@@ -1,6 +1,6 @@
 // Vault screens: list (search, filters, sort), item view, Login/Note/Card/Identity editor. The generator is generator.ts.
 // Talks to the service worker only; decrypted data lives here just while the popup is open.
-import type { FillResult, PageLogin } from "../autofill/page.ts";
+import type { FillResult, PageLogin } from "../autofill/types.ts";
 import { URI_MATCH, URI_MATCH_ADVANCED } from "../shared/constants.ts";
 import { cardBrand, groupCardNumber, luhnValid } from "../shared/card.ts";
 import { hasMarkup } from "../shared/markdown.ts";

@@ -14,7 +14,7 @@
   "host_permissions": ["https://*/*", "http://*/*"],
   "optional_permissions": ["privacy"],
   "content_scripts": [
-    { "matches": ["https://*/*", "http://*/*"], "js": ["content.js"], "all_frames": true, "run_at": "document_idle" }
+    { "matches": ["https://*/*", "http://*/*"], "js": ["page.js", "content.js"], "all_frames": true, "run_at": "document_start" }
   ],
   "web_accessible_resources": [
     {

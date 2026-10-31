@@ -564,6 +564,7 @@ function settingsTab(s: State): HTMLElement {
         row("globe", h0, undefined, iconButton("close", t("removeNeverSave", h0), () => void act({ type: "setSettings", removeNeverSave: h0 }))),
       ),
       row("shield", t("defaultManager"), t("defaultManagerHint"), toggle(t("defaultManager"), s.settings.defaultManager, defaultManager)),
+      row("key", t("autosubmit"), t("autosubmitHint"), toggle(t("autosubmit"), s.settings.autosubmit, (b) => void act({ type: "setSettings", autosubmit: b.checked }))),
     ),
     h("h2", { class: "section-title" }, t("autofillOnPageLoad")),
     h(
@@ -912,7 +913,7 @@ void send<State>({ type: "getState" }).then((res) => {
       settings: {
         autoLockMinutes: 15, timeoutAction: "lock", lockOnSystemLock: true, inlineMenu: true, savePrompt: true, neverSave: [],
         defaultManager: false, favicons: true, autoCopyTotp: true, defaultUriMatch: 0, clearClipboardDelay: "fiveMinutes",
-        autofillOnPageLoad: false, autofillOnPageLoadDefault: true, inlineMenuCards: true, inlineMenuIdentities: true, contextMenu: true,
+        autofillOnPageLoad: false, autofillOnPageLoadDefault: true, autosubmit: false, inlineMenuCards: true, inlineMenuIdentities: true, contextMenu: true,
         showCardsOnTab: true, showIdentitiesOnTab: true,
       },
     };

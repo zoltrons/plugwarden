@@ -2,6 +2,7 @@
 //   popup  --Request-->  service worker  --OffscreenRequest-->  offscreen doc  --postMessage-->  worker
 import { ALIAS_VENDORS, type AliasSettings, type AliasVendor } from "./alias.ts";
 import { AUTO_LOCK_CHOICES, CLEAR_CLIPBOARD_CHOICES, type ClearClipboardDelay, URI_MATCH_CHOICES } from "./constants.ts";
+import { MAX_BLOCK_PATH, MAX_BUTTONS, MAX_DATA_ATTRS, MAX_FIELDS, MAX_FORM_TEXT, MAX_FORMS, MAX_PAGE_STRING } from "./page-limits.ts";
 import { arr, bool, literal, num, obj, opt, record, str, unknownValue, type Validator, ValidationError } from "./validate.ts";
 
 // ---------- size caps ----------
@@ -61,6 +62,8 @@ export type Request =
       clearClipboardDelay?: ClearClipboardDelay;
       autofillOnPageLoad?: boolean;
       autofillOnPageLoadDefault?: boolean;
+      /** Submit a login after a fill the user asked for. */
+      autosubmit?: boolean;
       inlineMenuCards?: boolean;
       inlineMenuIdentities?: boolean;
       /** The browser context menu entry ("Fill with Plugwarden"). */
@@ -152,6 +155,7 @@ const requestValidators: { [K in Request["type"]]: Validator<Extract<Request, { 
       clearClipboardDelay: opt(literal(...CLEAR_CLIPBOARD_CHOICES)),
       autofillOnPageLoad: opt(bool),
       autofillOnPageLoadDefault: opt(bool),
+      autosubmit: opt(bool),
       inlineMenuCards: opt(bool),
       inlineMenuIdentities: opt(bool),
       contextMenu: opt(bool),
@@ -259,6 +263,8 @@ export interface Settings {
   autofillOnPageLoad: boolean;
   /** Value of a login's tri-state "Autofill on page load" when it is not set explicitly. */
   autofillOnPageLoadDefault: boolean;
+  /** Submit a login after a fill the user asked for. Never on page load. */
+  autosubmit: boolean;
   inlineMenuCards: boolean;
   inlineMenuIdentities: boolean;
   /** Show the "Fill with Plugwarden" context-menu entry. */
@@ -564,20 +570,96 @@ export function parsePasskeyCall(v: unknown): PasskeyCall {
 
 export type FieldKind = "login" | "card" | "identity";
 
+// What the content script reports about a frame. All of it is page-controlled. See crates/autofill-cpd.
+
+const pageString = opt(capped(MAX_PAGE_STRING));
+
+const bounded =
+  <T>(max: number, inner: Validator<T>): Validator<T[]> =>
+  (v, p) => {
+    if (Array.isArray(v) && v.length > max) throw new ValidationError(`${p}: too many`);
+    return arr(inner)(v, p);
+  };
+
+const blockPathField = bounded(MAX_BLOCK_PATH, num);
+
+const dataAttributesField: Validator<Record<string, string>> = (v, p) => {
+  const rec = record(v, p);
+  const entries = Object.entries(rec);
+  if (entries.length > MAX_DATA_ATTRS) throw new ValidationError(`${p}: too many`);
+  const out: Record<string, string> = {};
+  for (const [k, val] of entries) {
+    if (k.length > MAX_PAGE_STRING) throw new ValidationError(`${p}: key too long`);
+    out[k] = capped(MAX_PAGE_STRING)(val, `${p}.${k}`);
+  }
+  return out;
+};
+
+const fieldDetails = obj({
+  fieldId: num,
+  formId: opt(num),
+  type: capped(32),
+  htmlId: pageString,
+  htmlName: pageString,
+  htmlClass: pageString,
+  autocompleteType: pageString,
+  placeholder: pageString,
+  maxLength: opt(num),
+  minLength: opt(num),
+  tabIndex: opt(num),
+  title: pageString,
+  passwordRules: pageString,
+  dataAttributes: dataAttributesField,
+  isActive: opt(bool),
+  isChecked: opt(bool),
+  isHidden: opt(bool),
+  isReadOnly: opt(bool),
+  isDisabled: opt(bool),
+  isAriaDisabled: opt(bool),
+  isAriaHasPopup: opt(bool),
+  isAriaHidden: opt(bool),
+  label: pageString,
+  labelAria: pageString,
+  labelData: pageString,
+  labelBefore: pageString,
+  labelAfter: pageString,
+  blockPath: blockPathField,
+});
+
+const formDetails = obj({ formId: num, htmlId: pageString, htmlName: pageString, action: pageString, text: opt(capped(MAX_FORM_TEXT)) });
+
+const buttonDetails = obj({ fieldId: num, formId: opt(num), text: pageString, isSubmit: opt(bool), isHidden: opt(bool), blockPath: blockPathField });
+
+const collectedPageDetails = obj({
+  origin: capped(MAX_FIELD),
+  forms: bounded(MAX_FORMS, formDetails),
+  fields: bounded(MAX_FIELDS, fieldDetails),
+  buttons: bounded(MAX_BUTTONS, buttonDetails),
+});
+
+export type FieldDetails = ReturnType<typeof fieldDetails>;
+export type FormDetails = ReturnType<typeof formDetails>;
+export type ButtonDetails = ReturnType<typeof buttonDetails>;
+export type CollectedPageDetails = ReturnType<typeof collectedPageDetails>;
+
+/** Page details also come back from `chrome.scripting`, which crosses the same boundary. */
+export const parsePageDetails = (v: unknown): CollectedPageDetails => collectedPageDetails(v, "details");
+
 /** From the content script. Sender tab, frame and URL come from the browser (sender), never from here. */
 export type PageRequest =
   /**
-   * `nonce` is a per-document secret, echoed by the menu frame it opens (see FrameRequest). `signup` is
-   * the page's own claim: all it can do is add a "Create account" row.
+   * `nonce` is a per-document secret, echoed by the menu frame it opens (see FrameRequest). `details`
+   * describes the frame, with the focused field marked active; the worker decides what that field is.
+   * All a page can claim here is a different menu for its own frame.
    */
-  | { type: "inlineFocus"; kind: FieldKind; nonce: string; signup: boolean }
+  | { type: "inlineFocus"; nonce: string; details: CollectedPageDetails }
   | { type: "loginSubmitted"; username: string; password: string }
-  /** Sent on load only when the frame contains a password field; the worker decides whether to fill. */
+  /** Sent once per document, when the frame has a password field; the worker decides whether to fill. */
   | { type: "pageLoad" };
 
 /** A page-controlled form value: big enough for any real credential, small enough to bound storage. */
 const pageValidators: { [K in PageRequest["type"]]: Validator<Extract<PageRequest, { type: K }>> } = {
-  inlineFocus: obj({ type: literal("inlineFocus"), kind: literal("login", "card", "identity"), nonce: secret, signup: bool }),
+  inlineFocus: obj({ type: literal("inlineFocus"), nonce: secret, details: collectedPageDetails }),
   loginSubmitted: obj({ type: literal("loginSubmitted"), username: field, password: field }),
   pageLoad: obj({ type: literal("pageLoad") }),
 };

@@ -35,6 +35,7 @@ function copyStatic() {
   for (const f of ["menu.html", "bar.html"]) cpSync(join(root, "src/ui", f), join(out, f));
   cpSync(join(root, "src/offscreen/offscreen.html"), join(out, "offscreen.html"));
   cpSync(join(wasmDir, "core_wasm_bg.wasm"), join(out, "core_wasm_bg.wasm"));
+  cpSync(join(wasmDir, "autofill_core_bg.wasm"), join(out, "autofill_core_bg.wasm"));
   if (!existsSync(join(root, "dist/psl.json"))) throw new Error("dist/psl.json missing: run `node tools/fetch-psl.mjs`");
   cpSync(join(root, "dist/psl.json"), join(out, "psl.json"));
   cpSync(join(root, "src/_locales"), join(out, "_locales"), { recursive: true });
@@ -69,6 +70,7 @@ const contentScripts = {
     "passkey-page": "src/autofill/passkey-page.ts",
     "passkey-relay": "src/autofill/passkey-relay.ts",
     "sso-callback": "src/autofill/sso-callback.ts",
+    page: "src/autofill/page.ts",
     content: "src/autofill/content.ts",
   },
   format: "iife",
@@ -80,6 +82,6 @@ if (watch) {
   console.log("watching…");
 } else {
   await Promise.all([esbuild.build(options), esbuild.build(contentScripts)]);
-  for (const f of ["background.js", "offscreen.js", "worker.js", "popup.js", "popup.css", "content.js", "menu.js", "bar.js", "passkey-page.js", "passkey-relay.js", "core_wasm_bg.wasm"])
+  for (const f of ["background.js", "offscreen.js", "worker.js", "popup.js", "popup.css", "page.js", "content.js", "menu.js", "bar.js", "passkey-page.js", "passkey-relay.js", "core_wasm_bg.wasm", "autofill_core_bg.wasm"])
     console.log(f.padEnd(20), String(statSync(join(out, f)).size).padStart(8), "B");
 }

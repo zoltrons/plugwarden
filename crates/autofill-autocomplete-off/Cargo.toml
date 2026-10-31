@@ -1,0 +1,13 @@
+[package]
+name = "autofill-autocomplete-off"
+version = "0.0.0"
+description = "Decides where autocomplete=off is overridden"
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+autofill-cpd.workspace = true
+autofill-designation.workspace = true
+
