@@ -185,6 +185,7 @@ const pages: Record<string, string> = {
   "/late-login": `<div id="app"></div><script>setTimeout(() => { document.getElementById("app").innerHTML = ${JSON.stringify(LOGIN_FORM)}; }, 1200);</script>`,
   "/otp": `<form onsubmit="return false"><label for="code">Verification code</label><input id="code" autocomplete="off"><button>Verify</button></form>`,
   "/autosubmit": `<form onsubmit="window.submitted = true; return false"><input id="u" name="username"><input id="p" type="password" name="password"><button>Sign in</button></form>`,
+  "/custom": `<form onsubmit="return false"><input id="u" name="username"><input id="p" type="password" name="password"><input id="member" name="member_no"><input id="alias" name="alias"><input type="checkbox" id="terms" name="terms"></form>`,
   "/useronly": `<form onsubmit="return false"><input id="u" name="login" placeholder="Email or phone"><button type="submit">Next</button></form>`,
 };
 const site = createServer((req, res) => {
@@ -1322,6 +1323,102 @@ try {
     const r = await page.evaluate((id) => chrome.runtime.sendMessage({ type: "fill", id }), id);
     assert.ok(r.data?.filled, JSON.stringify(r));
     assert.equal(await loginPage.inputValue("#u"), "local-user");
+  });
+
+  await step("custom fields: every type fills by name, a linked one with its login's username", async () => {
+    await loginPage.bringToFront();
+    await loginPage.goto(`${SITE}/custom`);
+    const s = await apiSession(vaultUser);
+    const c = (await s.ciphers()).find((x) => x.name === "Local app");
+    s.done();
+    const { data } = await page.evaluate(() => chrome.runtime.sendMessage({ type: "pageMatches" }));
+    const id = data.items.find((i: { name: string }) => i.name === "Local app").id;
+    const { data: item } = await page.evaluate((id) => chrome.runtime.sendMessage({ type: "getItem", id }), id);
+    const fields = [
+      ...(item.fields ?? []),
+      { name: "member_no", value: "M-77", type: 1, linkedId: null },
+      { name: "terms", value: "true", type: 2, linkedId: null },
+      { name: "alias", value: null, type: 3, linkedId: 100 },
+    ];
+    const saved = await page.evaluate((item) => chrome.runtime.sendMessage({ type: "saveItem", item }), { ...item, fields });
+    assert.ok(saved.ok, JSON.stringify(saved));
+    const r = await page.evaluate((id) => chrome.runtime.sendMessage({ type: "fill", id }), id);
+    assert.ok(r.data?.filled, JSON.stringify(r));
+    assert.deepEqual(await Promise.all(["#u", "#p", "#member", "#alias"].map((f) => loginPage.inputValue(f))), [c.login.username, c.login.password, "M-77", c.login.username]);
+    assert.equal(await loginPage.isChecked("#terms"), true);
+    await page.evaluate((item) => chrome.runtime.sendMessage({ type: "saveItem", item }), item);
+  });
+
+  await step("custom fields: a linked field shows what it stands for, and the editor changes it", async () => {
+    const { data } = await page.evaluate(() => chrome.runtime.sendMessage({ type: "pageMatches" }));
+    const id = data.items.find((i: { name: string }) => i.name === "Local app").id;
+    const item = async () => (await page.evaluate((id) => chrome.runtime.sendMessage({ type: "getItem", id }), id)).data;
+    const original = await item();
+    await page.waitForTimeout(1100); // the server's revision dates have 1 s granularity
+    const saved = await page.evaluate((item) => chrome.runtime.sendMessage({ type: "saveItem", item }), { ...original, fields: [...(original.fields ?? []), { name: "alias", value: null, type: 3, linkedId: 100 }] });
+    assert.ok(saved.ok, JSON.stringify(saved));
+    await reopenPopup();
+    await rows().filter({ hasText: "Local app" }).first().click();
+    await page.getByText("Linked: Username").waitFor();
+    await page.getByRole("button", { name: "Edit" }).click();
+    await page.locator("select:has(option[value='101'])").selectOption("101");
+    await page.getByRole("button", { name: "Save" }).click();
+    await page.getByText("Linked: Password").waitFor();
+    const s = await apiSession(vaultUser);
+    const c = (await s.ciphers()).find((x) => x.name === "Local app");
+    s.done();
+    assert.deepEqual(c.fields.at(-1), { name: "alias", value: null, type: 3, linkedId: 101 });
+    const fresh = await item();
+    await page.waitForTimeout(1100);
+    await page.evaluate((item) => chrome.runtime.sendMessage({ type: "saveItem", item }), { ...fresh, fields: original.fields ?? [] });
+    await reopenPopup();
+  });
+
+  await step("custom fields: Pick from page adds the clicked field to the unsaved editor; Esc adds nothing", async () => {
+    const draft = (name: string) => ({ draft: { base: { type: 1 }, type: 1, name, notes: "", folderId: "", favorite: false, reprompt: false, data: {}, uris: [], autofillOnPageLoad: null, fields: [] }, isNew: true });
+    const start = async (name: string) => {
+      await loginPage.goto(`${SITE}/custom`);
+      await loginPage.bringToFront();
+      const r = await page.evaluate((d) => chrome.runtime.sendMessage({ type: "startFieldPicker", draft: JSON.stringify(d), panel: true }), draft(name));
+      assert.ok(r.ok, JSON.stringify(r));
+      await loginPage.locator("plugwarden-picker").waitFor({ state: "attached" });
+    };
+    await page.waitForTimeout(1000); // the popup opened by the last step takes a pick while it loads
+    await start("Picked item");
+    await loginPage.evaluate(() => document.getElementById("terms")!.addEventListener("click", () => ((window as unknown as { pageSaw: boolean }).pageSaw = true)));
+    await loginPage.click("#terms");
+    await loginPage.locator("plugwarden-picker").waitFor({ state: "detached" });
+    assert.equal(await loginPage.isChecked("#terms"), false, "the pick reached the page");
+    assert.equal(await loginPage.evaluate(() => (window as unknown as { pageSaw?: boolean }).pageSaw ?? false), false);
+    await reopenPopup();
+    await page.getByRole("heading", { name: "New item" }).waitFor();
+    assert.equal(await page.getByLabel("Name", { exact: true }).inputValue(), "Picked item");
+    assert.equal(await page.getByLabel("Field name").inputValue(), "terms");
+    assert.equal(await page.getByRole("button", { name: "Pick from page" }).count(), 1);
+
+    await start("Cancelled item");
+    await loginPage.keyboard.press("Escape");
+    await loginPage.locator("plugwarden-picker").waitFor({ state: "detached" });
+    await reopenPopup();
+    assert.equal(await page.getByLabel("Name", { exact: true }).inputValue(), "Cancelled item");
+    assert.equal(await page.getByLabel("Field name").count(), 0);
+
+    await start("Abandoned item");
+    await reopenPopup();
+    assert.equal(await page.getByLabel("Name", { exact: true }).inputValue(), "Abandoned item");
+    await loginPage.locator("plugwarden-picker").waitFor({ state: "detached" });
+    await page.getByRole("button", { name: "Cancel" }).click();
+  });
+
+  await step("custom fields: the context menu copies a field's name", async () => {
+    await loginPage.goto(`${SITE}/custom`);
+    await loginPage.click("#member", { button: "right" });
+    await loginPage.keyboard.press("Escape");
+    const name = await sw.evaluate(async (site) => {
+      const [tab] = await chrome.tabs.query({ url: `${site}/*`, active: true });
+      return chrome.tabs.sendMessage(tab!.id!, { type: "clickedFieldName" }, { frameId: 0 });
+    }, SITE);
+    assert.equal(name, "member");
   });
 
   await step("save bar: a single-page app's plain Sign in button offers the save", async () => {

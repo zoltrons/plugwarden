@@ -50,6 +50,10 @@ Plugwarden is a Manifest V3 Chrome extension (Chromium 156+) that talks to a sel
   recognised and never filled while hidden. `autocomplete="off"` is overridden in login contexts. Per-site recipes
   are compiled in and the list is still empty. Values are written through the prototype setter with the events
   typing produces, and a filled field carries `data-pw-autofilled="light|dark"` and an outline until it is edited.
+  An item's custom fields go first, matched by name like the official clients (id, name, labels, placeholder; the
+  `id=`, `name=`, `label=`, `placeholder=`, `regex=` and `csv=` forms), linked ones resolved in the offscreen worker;
+  on page load, or in a frame tried for its password form, only together with a login.
+  "Pick from page" in the item editor adds a custom field by pointing at it (`autofill/picker.ts`, `background/picker.ts`).
   `readLogin` is the exception that decides in the page: a submit navigates away too soon to ask anyone.
   For login, card and identity fields `content.js` frames the inline menu (`menu.html`) under the field, for a lone
   one-time-code box too; after a login form is submitted it asks the SW whether to show the save/update bar

@@ -4,9 +4,10 @@
 import type { FillResult } from "../autofill/types.ts";
 import type { BarInfo, FieldKind, FrameRequest, MenuData, MenuItem, PageRequest, VaultItem } from "../shared/messages.ts";
 import { coreCall } from "./core.ts";
-import { analyzeFocus, fillInFrames } from "./engine.ts";
+import { analyzeFocus, customFieldsOf, fillInFrames } from "./engine.ts";
 import { touchAutoLock } from "./lock.ts";
 import { pageLoadFill } from "./autofill.ts";
+import { finishFieldPicker } from "./picker.ts";
 import { conditionalReady, openConditional } from "./passkey.ts";
 import { getLocal, getSettings, getTabState, setLocal, setTabState, updateSession } from "./store.ts";
 import { REPROMPT_MESSAGE, repromptPending } from "./reprompt.ts";
@@ -76,6 +77,7 @@ export async function handlePage(req: PageRequest, sender: chrome.runtime.Messag
   const url = httpUrl(sender.url);
   const tabId = sender.tab?.id;
   if (!url || tabId === undefined || sender.frameId === undefined) return { rows: 0 };
+  if (req.type === "fieldPicked") return finishFieldPicker(tabId, req.name ? { name: req.name, fieldType: req.fieldType } : null).then(() => null);
   if (req.type === "inlineFocus")
     return oncePerTab(
       "focus",
@@ -227,14 +229,14 @@ export async function handleFrame(req: FrameRequest, tabId: number): Promise<unk
   if (ctx.kind === "login") {
     const { username, password, totp } = await coreCall<{ username: string; password: string; totp?: string }>({ op: "fillData", id: req.id });
     const { autosubmit } = await getSettings();
-    res = (await fillInFrames(tabId, { frameIds: [ctx.frameId] }, { mode: "login", origin, username, password, totp, autosubmit }))[0]?.result;
+    res = (await fillInFrames(tabId, { frameIds: [ctx.frameId] }, { mode: "login", origin, username, password, totp, autosubmit, customFields: await customFieldsOf(req.id) }))[0]?.result;
     if (res?.filled) {
       await markUsed(req.id);
       if (totp && (await getSettings()).autoCopyTotp) await copyToClipboard(totp);
     }
   } else {
     const values = await coreCall<Record<string, string>>({ op: "formValues", id: req.id });
-    res = (await fillInFrames(tabId, { frameIds: [ctx.frameId] }, { mode: "form", origin, values }))[0]?.result;
+    res = (await fillInFrames(tabId, { frameIds: [ctx.frameId] }, { mode: "form", origin, values, customFields: await customFieldsOf(req.id) }))[0]?.result;
   }
   await setTabState("inline", tabId, undefined);
   return res ?? { filled: false };

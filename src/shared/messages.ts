@@ -116,6 +116,10 @@ export type Request =
   | { type: "pageMatches" }
   /** One-shot: the origin the inline menu's "Create account" asked a new login for, if any. */
   | { type: "takeNewLogin" }
+  /** "Pick from page" in the item editor. `draft` is the unsaved editor, kept until the popup comes back. */
+  | { type: "startFieldPicker"; draft: string; panel: boolean }
+  /** One-shot: the draft to return to after a pick, with the picked field if there is one. */
+  | { type: "takeFieldPick" }
   | { type: "fill"; id: string }
   | { type: "readPageLogin" };
 
@@ -219,6 +223,8 @@ const requestValidators: { [K in Request["type"]]: Validator<Extract<Request, { 
   passkeyDecision: obj({ type: literal("passkeyDecision"), id: str, action: literal("use", "fallback"), itemId: opt(str), credentialId: opt(str) }),
   pageMatches: obj({ type: literal("pageMatches") }),
   takeNewLogin: obj({ type: literal("takeNewLogin") }),
+  startFieldPicker: obj({ type: literal("startFieldPicker"), draft: str, panel: bool }),
+  takeFieldPick: obj({ type: literal("takeFieldPick") }),
   fill: obj({ type: literal("fill"), id: str }),
   readPageLogin: obj({ type: literal("readPageLogin") }),
 };
@@ -434,6 +440,9 @@ export type CoreRequest =
   | { op: "matchUri"; url: string; defaultMatch: number }
   | { op: "fillData"; id: string }
   | { op: "formValues"; id: string }
+  | { op: "customFieldValues"; id: string }
+  | { op: "stashDraft"; draft: string }
+  | { op: "takeDraft" }
   // attachments (bodies base64)
   | { op: "decryptAttachment"; cipherId: string; attachmentId: string; data: string }
   | { op: "exportJson" }
@@ -510,6 +519,9 @@ const coreValidators: { [K in CoreRequest["op"]]: Validator<Extract<CoreRequest,
   matchUri: obj({ op: literal("matchUri"), url: str, defaultMatch: num }),
   fillData: obj({ op: literal("fillData"), id: str }),
   formValues: obj({ op: literal("formValues"), id: str }),
+  customFieldValues: obj({ op: literal("customFieldValues"), id: str }),
+  stashDraft: obj({ op: literal("stashDraft"), draft: str }),
+  takeDraft: obj({ op: literal("takeDraft") }),
   decryptAttachment: obj({ op: literal("decryptAttachment"), cipherId: str, attachmentId: str, data: str }),
   exportJson: obj({ op: literal("exportJson") }),
   prepareImport: obj({ op: literal("prepareImport"), text: str }),
@@ -655,13 +667,16 @@ export type PageRequest =
   | { type: "inlineFocus"; nonce: string; details: CollectedPageDetails }
   | { type: "loginSubmitted"; username: string; password: string }
   /** Sent once per document, when the frame has a password field; the worker decides whether to fill. */
-  | { type: "pageLoad" };
+  | { type: "pageLoad" }
+  /** The user's pick for a picker the worker started in this tab; an empty name is a cancel. */
+  | { type: "fieldPicked"; name: string; fieldType: string };
 
 /** A page-controlled form value: big enough for any real credential, small enough to bound storage. */
 const pageValidators: { [K in PageRequest["type"]]: Validator<Extract<PageRequest, { type: K }>> } = {
   inlineFocus: obj({ type: literal("inlineFocus"), nonce: secret, details: collectedPageDetails }),
   loginSubmitted: obj({ type: literal("loginSubmitted"), username: field, password: field }),
   pageLoad: obj({ type: literal("pageLoad") }),
+  fieldPicked: obj({ type: literal("fieldPicked"), name: capped(MAX_PAGE_STRING), fieldType: capped(32) }),
 };
 
 /**

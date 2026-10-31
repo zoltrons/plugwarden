@@ -89,6 +89,10 @@ const fixtures = {
   cardShapes: `<form onsubmit="return false"><input id="c" autocomplete="cc-number" maxlength="19"><input id="compact" autocomplete="cc-exp" maxlength="4">
     <input id="long" autocomplete="cc-exp" placeholder="MM/YYYY"><input id="year" autocomplete="cc-exp-year" maxlength="2"></form>`,
   long: `<form>${"x".repeat(3000)}<input name="${"n".repeat(1000)}"></form>`,
+  custom: `<form onsubmit="return false"><input id="u" name="username"><input id="p" type="password" name="password">
+    <label for="pin">Customer PIN</label><input id="pin"><input id="siteSearch" name="pin"><select id="plan"><option></option><option>gold</option></select>
+    <input type="checkbox" id="remember" name="remember"><input type="checkbox" id="news" name="news" checked>
+    <input type="radio" id="r" name="choice"><input type="file" id="doc" name="doc"><input id="trap" name="trap" style="display:none"></form>`,
   // Boxes that must never take a username, right before the password; autocomplete=off changes nothing.
   avoid: `<form onsubmit="return false"><input id="q" name="q"><input id="coupon" name="discount_code"><input id="trap" aria-hidden="true" name="username">
     <input id="p" type="password" autocomplete="off"></form>`,
@@ -182,8 +186,14 @@ async function run(page, intent, valueOf, onlyEmpty, origin) {
   return page.evaluate((req) => plugwarden.execute({ ...req, origin: location.origin }), { ops, onlyEmpty, submit: plan.submit });
 }
 
-const fill = (page, { username = "user@example.com", password = "pa55word", onlyEmpty = false, passwordOnly = false, totp, autosubmit = false, origin } = {}) =>
-  run(page, { kind: "login", onlyEmpty, passwordOnly, hasTotp: !!totp, autosubmit }, (s) => ({ username, password, totp })[s], onlyEmpty, origin);
+const fill = (page, { username = "user@example.com", password = "pa55word", onlyEmpty = false, passwordOnly = false, totp, autosubmit = false, origin, custom = [] } = {}) =>
+  run(
+    page,
+    { kind: "login", onlyEmpty, passwordOnly, hasTotp: !!totp, autosubmit, customFields: custom.map((c) => c.name) },
+    (s) => (s.startsWith("custom:") ? custom[Number(s.slice(7))].value : { username, password, totp }[s]),
+    onlyEmpty,
+    origin,
+  );
 
 const formFill = (page, values) => run(page, { kind: "form", keys: Object.keys(values) }, (s) => values[s]);
 
@@ -483,6 +493,34 @@ await scenario("a page details oversized string is truncated before it leaves th
   const details = await collect(page);
   assert.equal(details.fields[0].htmlName.length, 300);
   assert.equal(details.forms[0].text.length, 2000);
+});
+
+await scenario("custom fields fill by label, name and id, and tick checkboxes", "custom", async (page) => {
+  const custom = [
+    { name: "Customer PIN", value: "9876" },
+    { name: "name=plan", value: "gold" },
+    { name: "id=plan", value: "gold" },
+    { name: "remember", value: "true" },
+    { name: "news", value: "false" },
+    { name: "choice", value: "true" },
+    { name: "doc", value: "x" },
+    { name: "trap", value: "secret" },
+    { name: "regex=^user", value: "custom-user" },
+  ];
+  assert.deepEqual(await fill(page, { custom }), { filled: true });
+  const v = await values(page);
+  assert.deepEqual([v.pin, v.siteSearch, v.plan, v.trap, v.u, v.p], ["9876", "", "gold", "", "custom-user", "pa55word"]);
+  const checked = await page.evaluate(() => ["remember", "news", "r"].map((id) => document.getElementById(id).checked));
+  assert.deepEqual(checked, [true, false, true]);
+  assert.equal(await page.evaluate(() => document.getElementById("remember").value), "on", "a checkbox's value is not the field's");
+});
+
+await scenario("page load keeps what is there, a ticked box too", "custom", async (page) => {
+  await page.evaluate(() => (document.getElementById("pin").value = "typed"));
+  await fill(page, { onlyEmpty: true, custom: [{ name: "Customer PIN", value: "9876" }, { name: "news", value: "false" }, { name: "remember", value: "true" }] });
+  const v = await values(page);
+  assert.equal(v.pin, "typed");
+  assert.deepEqual(await page.evaluate(() => ["news", "remember"].map((id) => document.getElementById(id).checked)), [true, true]);
 });
 
 await scenario("a page's field values are not part of what it reports", "signup", async (page) => {

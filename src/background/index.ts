@@ -38,6 +38,7 @@ import {
 } from "./store.ts";
 import { handleFrame, handlePage, showBar } from "./inline.ts";
 import { ensurePasskeyScripts, onPasskeyPort, onWindowRemoved, passkeyDecision, passkeyPrompt } from "./passkey.ts";
+import { startFieldPicker, takeFieldPick } from "./picker.ts";
 import { AUTOFILL_COMMAND, autofillFromGesture, fillActiveTab, onContextMenu, pageMatches, readPageLogin, updateTabUi } from "./autofill.ts";
 import { generateAlias, getAliasSettings, saveAliasSettings } from "./alias.ts";
 import { addAttachment, addGeneratorHistory, CLIPBOARD_ALARM, downloadAttachment, exportVault, importVault, clearClipboard, clearGeneratorHistory, deleteFolder, generatorHistory, deleteSend, getSend, purge, removeSendPassword, restore, saveFolder, scheduleClipboardClear, list as vaultList, requireUnlocked, save, saveSend, sendList, sync, trash } from "./vault.ts";
@@ -157,6 +158,13 @@ async function handle(req: Request): Promise<unknown> {
       if (newLogin) await updateSession({ newLogin: undefined });
       return newLogin ?? null;
     }
+    case "startFieldPicker":
+      await requireUnlocked();
+      await touchAutoLock();
+      return startFieldPicker(req.draft, req.panel);
+    case "takeFieldPick":
+      await requireUnlocked();
+      return takeFieldPick();
     case "pageMatches":
     case "fill":
     case "readPageLogin":
@@ -357,7 +365,7 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, reply: (r: Response<
   const run = () => handle(req).then((data) => reply({ ok: true, data } as Response<unknown>), (e: unknown) => reply(toError(e)));
   // Reads run immediately; anything that changes state or talks to the server is queued, and may
   // change what the badge and the context menu show (unlock, lock, sync, edits).
-  if (["getState", "vaultList", "getItem", "totp", "generate", "aliasSettings", "generatorHistory", "downloadAttachment", "pageMatches", "takeNewLogin", "readPageLogin", "sendList", "getSend", "passkeyPrompt", "repromptGranted"].includes(req.type)) void run();
+  if (["getState", "vaultList", "getItem", "totp", "generate", "aliasSettings", "generatorHistory", "downloadAttachment", "pageMatches", "takeNewLogin", "takeFieldPick", "readPageLogin", "sendList", "getSend", "passkeyPrompt", "repromptGranted"].includes(req.type)) void run();
   // Locking must not wait behind a slow server call: it ends whatever is running by killing the worker.
   else if (req.type === "lock") void run().then(updateTabUi);
   else queue = queue.then(run, run).then(updateTabUi);

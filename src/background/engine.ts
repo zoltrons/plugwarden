@@ -1,8 +1,9 @@
 // The bridge to the autofill engine (crates/autofill-core) and to the page. The engine decides, from what
-// the frame reports, which field takes which value; it only ever sees names, never the values.
+// the frame reports, which field takes which value; it only ever sees names (custom fields' too), never values.
 import init, { analyze_page, plan } from "../../dist/wasm/autofill_core.js";
 import type { ExecuteFill, FillResult, ValueFormat } from "../autofill/types.ts";
 import type { PageApi } from "../autofill/page.ts";
+import { coreCall } from "./core.ts";
 import { type CollectedPageDetails, type FieldKind, parsePageDetails } from "../shared/messages.ts";
 
 // A global, but one that rebuilds itself: after the service worker restarts this just loads again.
@@ -25,9 +26,12 @@ export async function analyzeFocus(details: CollectedPageDetails): Promise<{ kin
   return { kind: field?.menu, signup: !!field?.signup };
 }
 
-export type FillRequest =
+export type FillRequest = (
   | { mode: "login"; origin: string; username: string; password: string; totp?: string; onlyEmpty?: boolean; passwordOnly?: boolean; autosubmit?: boolean }
-  | { mode: "form"; origin: string; values: Record<string, string> };
+  | { mode: "form"; origin: string; values: Record<string, string> }
+) & { customFields?: { name: string; value: string }[] };
+
+export const customFieldsOf = (id: string) => coreCall<{ name: string; value: string }[]>({ op: "customFieldValues", id });
 
 interface PlanOp {
   fieldId: number;
@@ -64,6 +68,7 @@ export async function pageCall<T>(target: { tabId: number } & Target, name: keyo
 const isResult = (v: unknown): v is FillResult => typeof (v as FillResult | null)?.filled === "boolean";
 
 function valueOf(req: FillRequest, source: string): string {
+  if (source.startsWith("custom:")) return req.customFields?.[Number(source.slice(7))]?.value ?? "";
   if (req.mode === "form") return req.values[source] ?? "";
   if (source === "username") return req.username;
   if (source === "password") return req.password;
@@ -71,9 +76,10 @@ function valueOf(req: FillRequest, source: string): string {
 }
 
 function intentOf(req: FillRequest): unknown {
-  if (req.mode === "form") return { kind: "form", keys: Object.keys(req.values).filter((k) => req.values[k]) };
+  const customFields = (req.customFields ?? []).map((f) => (f.value ? f.name : ""));
+  if (req.mode === "form") return { kind: "form", keys: Object.keys(req.values).filter((k) => req.values[k]), customFields };
   const { onlyEmpty = false, passwordOnly = false, autosubmit = false } = req;
-  return { kind: "login", onlyEmpty, passwordOnly, hasTotp: !!req.totp, autosubmit };
+  return { kind: "login", onlyEmpty, passwordOnly, hasTotp: !!req.totp, autosubmit, customFields };
 }
 
 /**

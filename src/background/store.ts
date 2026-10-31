@@ -47,6 +47,8 @@ export interface Session {
   pin?: { email: string; key: string; attempts: number };
   /** Origin the inline menu's "Create account" wants a new login for; the popup it opens takes it. */
   newLogin?: string;
+  /** "Pick from page" running in a tab (background/picker.ts); `done` once the user picked or cancelled. */
+  picker?: { tabId: number; panel: boolean; done?: boolean; field?: { name: string; fieldType: string } };
 }
 
 /**

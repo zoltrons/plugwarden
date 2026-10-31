@@ -333,6 +333,9 @@
   "includeNumber": {
     "message": "Include number"
   },
+  "copyCustomFieldName": {
+    "message": "Copy custom field name"
+  },
   "ctxAutofill": {
     "message": "Fill with Plugwarden"
   },
@@ -713,11 +716,26 @@
   "fieldHidden": {
     "message": "Hidden"
   },
+  "fieldLinked": {
+    "message": "Linked"
+  },
+  "field_fullName": {
+    "message": "Full name"
+  },
   "fieldBoolean": {
     "message": "Checkbox"
   },
   "removeField": {
     "message": "Remove field"
+  },
+  "pickField": {
+    "message": "Pick from page"
+  },
+  "pickFieldBanner": {
+    "message": "Plugwarden: click the field to add. Esc cancels."
+  },
+  "pickFieldNoPage": {
+    "message": "Open the website first: this tab has no fields to pick from."
   },
   "addField": {
     "message": "Add field"

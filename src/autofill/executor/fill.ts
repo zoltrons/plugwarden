@@ -40,8 +40,17 @@ export function applyAutofillHighlight(el: Field): void {
   );
 }
 
+const isToggle = (el: Field): el is HTMLInputElement => el instanceof HTMLInputElement && (el.type === "checkbox" || el.type === "radio");
+const TRUE_VALUES = ["true", "y", "1", "yes", "✓"];
+
 /** Fills the way typing looks to a page: click, focus, key events, value, input, change. */
 export function fillFieldWithEvents(el: Field, value: string): void {
+  if (isToggle(el)) {
+    // A click, so that the page sees the change as it would a user's. A radio button cannot be cleared.
+    const want = TRUE_VALUES.includes(value.toLowerCase());
+    if (el.checked !== want && (want || el.type === "checkbox")) el.click();
+    return;
+  }
   el.focus();
   if (el instanceof HTMLSelectElement) {
     el.value = value;
@@ -98,7 +107,7 @@ export function executeFill(req: ExecuteFill): FillResult {
   let n = 0;
   for (const op of req.ops) {
     const el = byId.get(op.fieldId);
-    if (!el?.isConnected || !isFillable(el) || (req.onlyEmpty && el.value !== "")) continue;
+    if (!el?.isConnected || !isFillable(el) || (req.onlyEmpty && (isToggle(el) ? el.checked : el.value !== ""))) continue;
     let value: string | undefined = formatted(op.value, op.format);
     if (el instanceof HTMLSelectElement) value = selectOption(el, value);
     if (value === undefined) continue;

@@ -774,6 +774,7 @@ a.row { text-decoration: none; color: var(--text); }
 }
 .field-card.add { border-style: dashed; border-color: var(--outline); }
 .add-field { align-self: flex-start; }
+.add-field-row { display: flex; flex-wrap: wrap; gap: 4px; }
 .check-card { background: var(--surface); border: 1px solid var(--outline-weak); border-radius: var(--r-md); padding: 4px 12px; }
 .check-card > svg.i:first-child { color: var(--muted); }
 .check-card:hover { background-image: none; }

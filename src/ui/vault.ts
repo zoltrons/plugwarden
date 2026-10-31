@@ -3,13 +3,14 @@
 import type { FillResult, PageLogin } from "../autofill/types.ts";
 import { URI_MATCH, URI_MATCH_ADVANCED } from "../shared/constants.ts";
 import { cardBrand, groupCardNumber, luhnValid } from "../shared/card.ts";
+import { LINKED, linkedKey } from "../shared/linked-fields.ts";
 import { hasMarkup } from "../shared/markdown.ts";
 import { MAX_QR_BYTES } from "../shared/qr.ts";
 import { type Clause, matchesQuery, parseQuery, type Searchable } from "../shared/search.ts";
 import { passwordLevel } from "../shared/strength.ts";
 import { isInsecureUri, mainPage, toHttps } from "../shared/uri-tools.ts";
 import type { PageMatches, Settings, VaultItem, VaultList } from "../shared/messages.ts";
-import { type Child, h, send, t, withChevron } from "./dom.ts";
+import { type Child, h, inPanel, send, t, withChevron } from "./dom.ts";
 import { type GeneratorPick, generatorScreen, resetGenerator, startGeneratorPick } from "./generator.ts";
 import { icon, type IconName } from "./icons.ts";
 import { renderMarkdown } from "./markdown.ts";
@@ -361,6 +362,7 @@ async function loadList(ctx: Ctx) {
   // Opened by the inline menu's "Create account": go straight to the form.
   const site = await send<string | null>({ type: "takeNewLogin" });
   if (site.ok && site.data) startEdit(ctx, undefined, sitePrefill(site.data));
+  await returnFromPicker(ctx);
   await syncNow(ctx, false);
 }
 
@@ -1357,7 +1359,13 @@ function itemView(ctx: Ctx, id: string): HTMLElement {
       t("customFields"),
       ...fields.map((f, i) =>
         Number(f.type) === 3
-          ? null
+          ? h(
+              "div",
+              { class: "row" },
+              icon("note"),
+              // Which field it stands for, not its value: that is already on this screen, with its own protection.
+              h("div", { class: "body" }, h("span", { class: "label" }, str(f.name) || t("untitled")), h("span", { class: "value" }, linkedKey(type, f.linkedId) ? `${t("fieldLinked")}: ${label(linkedKey(type, f.linkedId)!)}` : t("fieldLinked"))),
+            )
           : Number(f.type) === 2
             ? h(
                 editable ? "button" : "div",
@@ -1453,6 +1461,36 @@ async function newItem(ctx: Ctx) {
   startEdit(ctx, undefined, sitePrefill(st.page?.origin));
 }
 
+/** Back to the editor after "Pick from page", with the picked field added. */
+async function returnFromPicker(ctx: Ctx) {
+  const r = await send<{ draft: string; field?: { name: string; fieldType: string } } | null>({ type: "takeFieldPick" });
+  if (!r.ok || !r.data) return;
+  const { draft, isNew } = JSON.parse(r.data.draft) as { draft: EditDraft; isNew: boolean };
+  const f = r.data.field;
+  if (f) {
+    const toggle = f.fieldType === "checkbox" || f.fieldType === "radio";
+    draft.fields.push({ name: f.name, value: toggle ? "true" : "", type: toggle ? 2 : f.fieldType === "password" ? 1 : 0 });
+  }
+  st.draft = draft;
+  open(ctx, { kind: "edit", isNew });
+}
+
+async function pickFromPage(ctx: Ctx, isNew: boolean) {
+  const r = await send({ type: "startFieldPicker", draft: JSON.stringify({ draft: st.draft, isNew }), panel: inPanel });
+  if (!r.ok) {
+    st.error = r.error;
+    return ctx.rerender();
+  }
+  // The side panel stays open and hears back; a popup would close at the first click on the page anyway.
+  if (!inPanel) return window.close();
+  const listener = (msg: { type?: string }) => {
+    if (msg.type !== "pickerDone") return;
+    chrome.runtime.onMessage.removeListener(listener);
+    void returnFromPicker(ctx);
+  };
+  chrome.runtime.onMessage.addListener(listener);
+}
+
 export function startEdit(ctx: Ctx, item: Json | undefined, prefill: Prefill = {}, asNew = !item) {
   const base: Json = item ? structuredClone(item) : { type: 1, favorite: false, reprompt: 0, folderId: null, organizationId: null };
   const type = Number(base.type) || 1;
@@ -1494,8 +1532,13 @@ function buildItem(d: EditDraft): Json {
     item[schema.obj] = typed;
   } else item.secureNote = obj(d.base.secureNote) ?? { type: 0 };
   item.fields = d.fields
-    .filter((f) => f.name.trim() || f.value)
-    .map((f) => ({ name: f.name, value: f.type === 2 ? String(f.value === "true") : f.value || null, type: f.type, linkedId: f.linkedId ?? null }));
+    // A new item's type may have changed under a linked field: it is gone with what it pointed at.
+    .filter((f) => (f.type === 3 ? linkedKey(d.type, f.linkedId) : f.name.trim() || f.value))
+    .map((f) =>
+      f.type === 3
+        ? { name: f.name, value: null, type: 3, linkedId: f.linkedId ?? null }
+        : { name: f.name, value: f.type === 2 ? String(f.value === "true") : f.value || null, type: f.type, linkedId: null },
+    );
   return item;
 }
 
@@ -1743,10 +1786,9 @@ function editView(ctx: Ctx, isNew: boolean): HTMLElement {
       ctx.rerender();
     } }, icon(ic), t(TYPE_LABEL[type]!));
   const fav = h("input", { type: "checkbox", checked: d.favorite, "aria-label": t("favorite"), onchange: (e: Event) => (d.favorite = (e.target as HTMLInputElement).checked) });
-  const customRow = (f: EditDraft["fields"][number], i: number) =>
-    f.type === 3
-      ? null // linked fields are kept as they are
-      : h(
+  const customRow = (f: EditDraft["fields"][number], i: number) => {
+    const linkable = LINKED[d.type] ?? [];
+    return h(
           "div",
           { class: "field-card" },
           h(
@@ -1765,26 +1807,37 @@ function editView(ctx: Ctx, isNew: boolean): HTMLElement {
           h(
             "div",
             { class: "field-card-bottom" },
-            f.type === 2
+            f.type === 3
               ? select(
-                  () => (f.value === "true" ? "true" : "false"),
-                  (v) => (f.value = v),
-                  [["false", t("no")], ["true", t("yes")]],
+                  () => String(f.linkedId ?? ""),
+                  (v) => (f.linkedId = Number(v)),
+                  linkable.map((l): [string, string] => [String(l.id), label(l.key)]),
                 )
-              : h("input", {
-                  placeholder: t("fieldValue"),
-                  "aria-label": t("fieldValue"),
-                  value: f.value,
-                  type: f.type === 1 ? "password" : "text",
-                  oninput: (e: Event) => (f.value = (e.target as HTMLInputElement).value),
-                }),
+              : f.type === 2
+                ? select(
+                    () => (f.value === "true" ? "true" : "false"),
+                    (v) => (f.value = v),
+                    [["false", t("no")], ["true", t("yes")]],
+                  )
+                : h("input", {
+                    placeholder: t("fieldValue"),
+                    "aria-label": t("fieldValue"),
+                    value: f.value,
+                    type: f.type === 1 ? "password" : "text",
+                    oninput: (e: Event) => (f.value = (e.target as HTMLInputElement).value),
+                  }),
             select(
               () => String(f.type),
-              (v) => ((f.type = Number(v)), ctx.rerender()),
-              [["0", t("fieldText")], ["1", t("fieldHidden")], ["2", t("fieldBoolean")]],
+              (v) => {
+                f.type = Number(v);
+                if (f.type === 3) f.linkedId = linkable[0]?.id;
+                ctx.rerender();
+              },
+              [["0", t("fieldText")], ["1", t("fieldHidden")], ["2", t("fieldBoolean")], ...(linkable.length ? [["3", t("fieldLinked")] as [string, string]] : [])],
             ),
           ),
         );
+  };
 
   return h(
     "form",
@@ -1809,7 +1862,12 @@ function editView(ctx: Ctx, isNew: boolean): HTMLElement {
       : null,
     sectionTitle(t("customFields")),
     ...d.fields.map(customRow),
-    h("button", { type: "button", class: "btn text small add-field", onclick: () => (d.fields.push({ name: "", value: "", type: 0 }), ctx.rerender()) }, icon("plus"), t("addField")),
+    h(
+      "div",
+      { class: "add-field-row" },
+      h("button", { type: "button", class: "btn text small add-field", onclick: () => (d.fields.push({ name: "", value: "", type: 0 }), ctx.rerender()) }, icon("plus"), t("addField")),
+      h("button", { type: "button", class: "btn text small add-field", onclick: () => void pickFromPage(ctx, isNew) }, icon("globe"), t("pickField")),
+    ),
     field("edit-notes", "note", t("notes"), text(() => d.notes, (v) => (d.notes = v), { area: true, rows: 3 })),
     hasMarkup(d.notes)
       ? h("button", { type: "button", class: "chip small", "aria-pressed": String(st.notesPreview), onclick: () => ((st.notesPreview = !st.notesPreview), ctx.rerender()) }, t("previewNotes"))

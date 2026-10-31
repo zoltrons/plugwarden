@@ -43,10 +43,17 @@ freed rather than zeroed in place.
 
    **The autofill engine is separate from the keys.** `crates/autofill-core` parses page-controlled text, so
    it is its own WebAssembly module in the service worker, never in the offscreen worker. It receives field
-   details and the *names* of the values an item has, and answers with field ids and those names; the worker
-   substitutes the values afterwards. A frame's report contains no field value at all. Page details are
+   details and the *names* of the values an item has (custom field names included, which also makes a
+   `regex=` name a pattern the engine runs: `regex-lite` has no backtracking), and answers with field ids and
+   those names; the worker substitutes the values afterwards. A frame's report contains no field value at all. Page details are
    capped at the boundary (`parsePageDetails`, `shared/page-limits.ts`), also when they come back from
    `chrome.scripting`, and a report the engine cannot use fills nothing.
+
+   **"Pick from page" trusts nothing but a real click.** While it runs, content.js swallows the user's clicks in that
+   tab, and only trusted events count; it ends on a pick, Escape, a lock, the popup opening again or after 2 minutes. The
+   unsaved editor waits in the offscreen worker's memory, never in `storage.*`, and a lock drops it. What
+   comes back from the page is a name and an input type, both capped; only a picker the worker started in
+   that tab can receive one, and it lands in an editor the user still has to save.
 
    **Rules that change what a page can trigger.** A password field a page adds later offers the page-load fill
    as well, once per document: a page's script could already have added it before load. "Submit after

@@ -1,3 +1,4 @@
+use crate::custom_fields::match_custom_fields;
 use crate::transformers::{Format, card};
 use autofill_autosubmit::best_submit_button;
 use autofill_clue::field_clue::FORM_RULES;
@@ -21,10 +22,16 @@ pub enum FillIntent {
         /// The user's setting, for a fill they asked for. Never on page load.
         #[serde(default)]
         autosubmit: bool,
+        /// The names of the item's custom fields; a value's source is `custom:<index>`.
+        #[serde(default)]
+        custom_fields: Vec<String>,
     },
+    #[serde(rename_all = "camelCase")]
     Form {
         /// The value names the item has, empty ones left out.
         keys: Vec<String>,
+        #[serde(default)]
+        custom_fields: Vec<String>,
     },
 }
 
@@ -159,15 +166,41 @@ fn plan_form(page: &CollectedPageDetails, keys: &[String]) -> FillPlan {
 }
 
 pub fn plan_fill(page: &CollectedPageDetails, intent: &FillIntent) -> FillPlan {
-    match intent {
+    let (mut plan, names, only_with_login) = match intent {
         FillIntent::Login {
             only_empty,
             password_only,
             has_totp,
             autosubmit,
-        } => plan_login(page, *only_empty, *password_only, *has_totp, *autosubmit),
-        FillIntent::Form { keys } => plan_form(page, keys),
+            custom_fields,
+        } => (
+            plan_login(page, *only_empty, *password_only, *has_totp, *autosubmit),
+            custom_fields,
+            *only_empty || *password_only,
+        ),
+        FillIntent::Form {
+            keys,
+            custom_fields,
+        } => (plan_form(page, keys), custom_fields, false),
+    };
+    // Page load, and a frame tried for its password form: custom fields come along with a login, never
+    // instead of one. Otherwise a match in the top frame would stop the search for a login in an iframe.
+    if only_with_login && plan.ops.is_empty() {
+        return plan;
     }
+    // The user named these fields, so they go first, and nothing else writes to them.
+    let custom = match_custom_fields(page, names);
+    plan.ops
+        .retain(|o| !custom.iter().any(|(id, _)| *id == o.field_id));
+    plan.ops.splice(
+        0..0,
+        custom.into_iter().map(|(field_id, i)| FillOp {
+            field_id,
+            source: format!("custom:{i}"),
+            format: None,
+        }),
+    );
+    plan
 }
 
 #[cfg(test)]
@@ -204,6 +237,7 @@ mod tests {
             password_only: false,
             has_totp: false,
             autosubmit,
+            custom_fields: vec![],
         }
     }
 
@@ -261,6 +295,7 @@ mod tests {
             password_only: false,
             has_totp: true,
             autosubmit: true,
+            custom_fields: vec![],
         };
         let plan = plan_fill(&page(vec![otp.clone()]), &totp);
         assert_eq!(sources(&plan), [(1, "totp")]);
@@ -318,6 +353,7 @@ mod tests {
         name.label = Some("Name on card".into());
         let keys = FillIntent::Form {
             keys: vec!["cc-number".into(), "cc-name".into()],
+            custom_fields: vec![],
         };
         let plan = plan_fill(&page(vec![number, name, input(3, "text", "other")]), &keys);
         assert_eq!(sources(&plan), [(1, "cc-number"), (2, "cc-name")]);
@@ -337,10 +373,80 @@ mod tests {
                 "email".into(),
                 "name".into(),
             ],
+            custom_fields: vec![],
         };
         assert_eq!(
             sources(&plan_fill(&page(vec![address, note]), &keys)),
             [(1, "street-address")]
+        );
+    }
+
+    fn with_custom(
+        page: &CollectedPageDetails,
+        only_empty: bool,
+        password_only: bool,
+        names: &[&str],
+    ) -> FillPlan {
+        let custom_fields = names.iter().map(|n| n.to_string()).collect();
+        plan_fill(
+            page,
+            &FillIntent::Login {
+                only_empty,
+                password_only,
+                has_totp: false,
+                autosubmit: false,
+                custom_fields,
+            },
+        )
+    }
+
+    #[test]
+    fn custom_fields_come_first_and_replace_what_they_match() {
+        let p = page(vec![
+            input(1, "text", "username"),
+            input(2, "password", "password"),
+            input(3, "text", "pin"),
+        ]);
+        assert_eq!(
+            sources(&with_custom(&p, false, false, &["pin", "username"])),
+            [(1, "custom:1"), (3, "custom:0"), (2, "password")]
+        );
+    }
+
+    #[test]
+    fn custom_fields_alone_only_when_asked_for() {
+        let p = page(vec![input(1, "text", "pin")]);
+        assert_eq!(
+            sources(&with_custom(&p, false, false, &["pin"])),
+            [(1, "custom:0")]
+        );
+        assert!(
+            with_custom(&p, true, false, &["pin"]).ops.is_empty(),
+            "page load needs a login"
+        );
+        assert!(
+            with_custom(&p, false, true, &["pin"]).ops.is_empty(),
+            "the login may be in an iframe"
+        );
+        let login = page(vec![
+            input(1, "text", "pin"),
+            input(2, "password", "password"),
+        ]);
+        assert_eq!(
+            sources(&with_custom(&login, true, false, &["pin"])),
+            [(1, "custom:0"), (2, "password")]
+        );
+    }
+
+    #[test]
+    fn a_form_fill_takes_custom_fields() {
+        let keys = FillIntent::Form {
+            keys: vec![],
+            custom_fields: vec!["member".into()],
+        };
+        assert_eq!(
+            sources(&plan_fill(&page(vec![input(1, "text", "member")]), &keys)),
+            [(1, "custom:0")]
         );
     }
 
@@ -355,7 +461,8 @@ mod tests {
                 ..
             }
         ));
-        let intent: FillIntent = serde_json::from_str(r#"{"kind":"form","keys":["tel"]}"#).unwrap();
-        assert!(matches!(intent, FillIntent::Form { .. }));
+        let intent: FillIntent =
+            serde_json::from_str(r#"{"kind":"form","keys":["tel"],"customFields":["a"]}"#).unwrap();
+        assert!(matches!(intent, FillIntent::Form { custom_fields, .. } if custom_fields == ["a"]));
     }
 }

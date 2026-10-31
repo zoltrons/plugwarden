@@ -1,6 +1,7 @@
 // Decrypted vault held in the crypto worker's memory. Dropped when the worker is terminated (lock).
 import * as core from "../../dist/wasm/core_wasm.js";
 import type { Folder, PasskeyCandidate, SendItem, VaultItem, VaultList } from "../shared/messages.ts";
+import { linkedValue } from "../shared/linked-fields.ts";
 import { passwordLevel } from "../shared/strength.ts";
 import { ci } from "../shared/validate.ts";
 import { Psl, uriMatches } from "../autofill/match.ts";
@@ -240,6 +241,33 @@ export function fillData(id: string): { username: string; password: string; totp
   const login = o(ci(get(id), "login"));
   const secret = s(ci(login, "totp"));
   return { username: s(ci(login, "username")), password: s(ci(login, "password")), ...(secret ? { totp: JSON.parse(core.totp(secret, Date.now())).code as string } : {}) };
+}
+
+/** An unsaved item editor, while the user picks a field on the page (background/picker.ts). */
+let stashedDraft: string | undefined;
+
+export function stashDraft(draft: string): void {
+  stashedDraft = draft;
+}
+
+export function takeDraft(): string | null {
+  const draft = stashedDraft ?? null;
+  stashedDraft = undefined;
+  return draft;
+}
+
+const LINKED_OBJECT: Record<number, string> = { 1: "login", 3: "card", 4: "identity" };
+
+/** The item's custom fields as a fill uses them, in order: an empty name matches nothing and keeps its place. */
+export function customFieldValues(id: string): { name: string; value: string }[] {
+  const c = get(id);
+  const type = Number(ci(c, "type"));
+  const fields = ci(c, "fields");
+  return (Array.isArray(fields) ? (fields as Json[]) : []).map((f) => {
+    const kind = Number(ci(f, "type"));
+    const value = kind === 3 ? linkedValue(type, ci(f, "linkedId"), o(ci(c, LINKED_OBJECT[type] ?? ""))) : s(ci(f, "value")) || (kind === 2 ? "false" : "");
+    return { name: s(ci(f, "name")), value };
+  });
 }
 
 // ---------- Import / export (Bitwarden's unencrypted JSON format) ----------

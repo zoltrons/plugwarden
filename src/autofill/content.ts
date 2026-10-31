@@ -5,6 +5,7 @@
 // them (bar.html, top frame only). Bundled as a classic script and kept small.
 import { watchForPasswordField } from "./collector/field-watcher.ts";
 import type { PageApi } from "./page.ts";
+import { fieldName, fieldOf, picking, startPicker, stopPicker } from "./picker.ts";
 
 const pw = (globalThis as unknown as { plugwarden: PageApi }).plugwarden;
 
@@ -87,7 +88,7 @@ addEventListener(
   "focusin",
   (e) => {
     const el = e.composedPath()[0] as Element; // fields inside open shadow roots too
-    if (el === host) return; // focus moved into our menu
+    if (el === host || picking()) return; // focus moved into our menu, or the user is pointing at fields
     if (askable(el)) void open(el);
     else if (el !== anchor) close();
   },
@@ -106,6 +107,7 @@ addEventListener(
 addEventListener(
   "keydown",
   (e) => {
+    if (picking()) return;
     if (e.key === "Escape" && host) {
       dismissed = anchor;
       close();
@@ -119,6 +121,7 @@ addEventListener(
 addEventListener(
   "click",
   (e) => {
+    if (picking()) return;
     const el = e.composedPath()[0] as Element;
     if (el === dismissed) {
       dismissed = undefined;
@@ -166,12 +169,35 @@ function report() {
   void chrome.runtime.sendMessage({ type: "loginSubmitted", username: login.username, password: login.password }).catch(() => undefined);
 }
 
+// ---------- "Copy custom field name" ----------
+
+/** A menu can only be told about an element while it opens. Only the user's own right click counts. */
+let rightClicked: Element | undefined;
+addEventListener(
+  "contextmenu",
+  (e) => {
+    if (e.isTrusted) rightClicked = e.composedPath()[0] as Element;
+  },
+  true,
+);
+
 // ---------- messages from the service worker ----------
 
 let bar: HTMLElement | undefined;
 
-chrome.runtime.onMessage.addListener((msg: { type?: string }) => {
+chrome.runtime.onMessage.addListener((msg: { type?: string }, _sender, reply: (name: string) => void) => {
+  if (msg.type === "clickedFieldName") {
+    const el = fieldOf(rightClicked);
+    return void reply(el ? fieldName(el, pw) : "");
+  }
+  if (msg.type === "pickerStart") {
+    close();
+    startPicker(pw, (field) => void chrome.runtime.sendMessage({ type: "fieldPicked", name: field?.name ?? "", fieldType: field?.fieldType ?? "" }).catch(() => undefined));
+    return void reply("");
+  }
+  if (msg.type === "pickerStop") stopPicker();
   if (msg.type === "inlineClose") {
+    stopPicker(); // also how a lock reaches every tab
     quietUntil = Date.now() + 1000;
     close();
   }

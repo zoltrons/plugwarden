@@ -4,7 +4,7 @@ import type { PageMatches, VaultItem } from "../shared/messages.ts";
 import { pickPageLoadLogin } from "../shared/pageload.ts";
 import { UserError } from "./account.ts";
 import { coreCall } from "./core.ts";
-import { type FillRequest, fillInFrames, pageCall } from "./engine.ts";
+import { customFieldsOf, type FillRequest, fillInFrames, pageCall } from "./engine.ts";
 import { touchAutoLock } from "./lock.ts";
 import { getLocal, getSettings } from "./store.ts";
 import { REPROMPT_MESSAGE, repromptPending } from "./reprompt.ts";
@@ -12,12 +12,13 @@ import { copyToClipboard, ensureLoaded, isUnlocked, list, markUsed } from "./vau
 
 export const CONTEXT_MENU_ID = "plugwarden-autofill";
 export const AUTOFILL_COMMAND = "autofill-login";
+const COPY_FIELD_NAME_ID = "plugwarden-copy-field-name";
 
-async function activeTab(): Promise<chrome.tabs.Tab | undefined> {
+export async function activeTab(): Promise<chrome.tabs.Tab | undefined> {
   return (await chrome.tabs.query({ active: true, lastFocusedWindow: true }))[0];
 }
 
-function httpUrl(tab: { url?: string } | undefined): URL | undefined {
+export function httpUrl(tab: { url?: string } | undefined): URL | undefined {
   try {
     const u = new URL(tab?.url ?? "");
     return u.protocol === "https:" || u.protocol === "http:" ? u : undefined;
@@ -59,7 +60,8 @@ export async function pageLoadFill(sender: chrome.runtime.MessageSender): Promis
   const pick = pickPageLoadLogin((await matches(url)).filter((i) => !i.reprompt), settings.autofillOnPageLoadDefault, (await getLocal("lastUsed")) ?? {});
   if (!pick) return { filled: false, reason: "noMatch" };
   const { username, password, totp } = await coreCall<{ username: string; password: string; totp?: string }>({ op: "fillData", id: pick.id });
-  const [res] = await fillInFrames(tabId, { frameIds: [frameId] }, { mode: "login", origin: url.origin, username, password, onlyEmpty: true });
+  const customFields = await customFieldsOf(pick.id);
+  const [res] = await fillInFrames(tabId, { frameIds: [frameId] }, { mode: "login", origin: url.origin, username, password, customFields, onlyEmpty: true });
   const r = res?.result ?? { filled: false };
   if (r.filled) await closeInlineMenu(tabId, frameId);
   // The user did not pick this login, but the official client still copies the code.
@@ -123,12 +125,12 @@ export async function fillTab(tab: chrome.tabs.Tab | undefined, id?: string): Pr
   let r: FillResult;
   let totp: string | undefined;
   if (values) {
-    r = await fillFrames(tab.id, { mode: "form", origin: url.origin, values });
+    r = await fillFrames(tab.id, { mode: "form", origin: url.origin, values, customFields: await customFieldsOf(id) });
   } else {
     const filled = await coreCall<{ username: string; password: string; totp?: string }>({ op: "fillData", id });
     totp = filled.totp;
     const { autosubmit } = await getSettings();
-    r = await fillFrames(tab.id, { mode: "login", origin: url.origin, username: filled.username, password: filled.password, totp, autosubmit });
+    r = await fillFrames(tab.id, { mode: "login", origin: url.origin, username: filled.username, password: filled.password, totp, autosubmit, customFields: await customFieldsOf(id) });
   }
   if (r.filled) {
     await markUsed(id);
@@ -159,6 +161,8 @@ export function updateTabUi(): Promise<void> {
       chrome.contextMenus.create({ id: CONTEXT_MENU_ID, title: chrome.i18n.getMessage("ctxAutofill"), contexts }, ignoreError);
       for (const i of items)
         chrome.contextMenus.create({ id: `${CONTEXT_MENU_ID}:${i.id}`, parentId: CONTEXT_MENU_ID, title: i.sub ? `${i.name} (${i.sub})` : i.name, contexts }, ignoreError);
+      // A child turns the parent into a plain submenu, so a locked vault keeps the entry that opens the popup.
+      if (unlocked) chrome.contextMenus.create({ id: COPY_FIELD_NAME_ID, parentId: CONTEXT_MENU_ID, title: chrome.i18n.getMessage("copyCustomFieldName"), contexts }, ignoreError);
     }
     const badge = (tabId: number | undefined, text: string) => (tabId === undefined ? undefined : chrome.action.setBadgeText({ tabId, text }));
     if (unlocked) await badge(tab?.id, items.length ? String(items.length) : "");
@@ -171,9 +175,17 @@ export function updateTabUi(): Promise<void> {
 export async function onContextMenu(info: chrome.contextMenus.OnClickData, tab?: chrome.tabs.Tab) {
   if (!(await getSettings()).contextMenu) return undefined;
   const id = String(info.menuItemId);
+  if (id === COPY_FIELD_NAME_ID) return copyFieldName(tab, info.frameId);
   if (id === CONTEXT_MENU_ID) return autofillFromGesture(tab);
   if (id.startsWith(`${CONTEXT_MENU_ID}:`)) return autofillFromGesture(tab, id.slice(CONTEXT_MENU_ID.length + 1));
   return undefined;
+}
+
+/** What to call a custom field for the field the user right-clicked. The frame says, the user picked it. */
+async function copyFieldName(tab: chrome.tabs.Tab | undefined, frameId: number | undefined) {
+  if (tab?.id === undefined) return;
+  const name: unknown = await chrome.tabs.sendMessage(tab.id, { type: "clickedFieldName" }, { frameId: frameId ?? 0 }).catch(() => undefined);
+  if (typeof name === "string" && name) await copyToClipboard(name.slice(0, 300));
 }
 
 export async function readPageLogin(): Promise<PageLogin | null> {

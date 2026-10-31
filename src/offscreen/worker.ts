@@ -78,6 +78,12 @@ function run(req: CoreRequest): unknown {
       return vault.fillData(req.id);
     case "formValues":
       return vault.formValues(req.id);
+    case "customFieldValues":
+      return vault.customFieldValues(req.id);
+    case "stashDraft":
+      return vault.stashDraft(req.draft);
+    case "takeDraft":
+      return vault.takeDraft();
     case "exportJson":
       return vault.exportJson();
     case "prepareImport":

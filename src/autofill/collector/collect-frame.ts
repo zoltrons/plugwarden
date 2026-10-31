@@ -16,7 +16,9 @@ const cap = (s: string | null | undefined, max = MAX_PAGE_STRING) => (s ? s.slic
 export function isElementVisible(el: Field): boolean {
   if (el.disabled || (el instanceof HTMLInputElement && el.type === "hidden") || el.getAttribute("aria-hidden") === "true") return false;
   const r = el.getBoundingClientRect();
-  if (r.width < 24 || r.height < 8) return false;
+  // Too small to type in: a decoy. A checkbox is meant to be that small.
+  const toggle = el instanceof HTMLInputElement && (el.type === "checkbox" || el.type === "radio");
+  if (toggle ? !r.width || !r.height : r.width < 24 || r.height < 8) return false;
   // Off the page's origin (document coordinates, so scrolled-away fields still count): unreachable decoys.
   if (r.right + scrollX <= 0 || r.bottom + scrollY <= 0) return false;
   // Parked far to the right of the viewport, or clipped away: a trap field, not a form.

@@ -13,6 +13,7 @@ autofill-designation.workspace = true
 autofill-clue.workspace = true
 autofill-resolver.workspace = true
 autofill-autosubmit.workspace = true
+regex-lite.workspace = true
 serde.workspace = true
 
 [dev-dependencies]
